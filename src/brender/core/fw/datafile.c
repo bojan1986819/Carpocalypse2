@@ -284,42 +284,56 @@ int C2_HOOK_STDCALL DfTopType(void) {
     return DatafileStack[DatafileStackTop - 1].type;
 }
 
+// C2PORT-NONMATCHING: best 77.38% | difftest PASS 2000 trials (spec difftest/specs/0052b630_TextReadLine.json) | reason scratch-loop-codegen
 // FUNCTION: CARMA2_HW 0x0052b630
 int C2_HOOK_STDCALL TextReadLine(br_datafile* df, char** ident, char** data) {
-    char* cp;
+    char* ptr;
+    char c;
 
+    BrFileGetLine(BrScratchString(), 256, df->h);
     while (1) {
-        cp = BrScratchString();
-        BrFileGetLine(cp, 256, df->h);
         if (BrFileEof(df->h) != 0) {
             return 0;
         }
-        for (; (*cp == ' ') || (*cp == '\t'); cp++) {
+        for (ptr = BrScratchString(); (*ptr == ' ') || (*ptr == '\t'); ptr++) {
         }
-        if (*cp != '\0')
+        if (*ptr != '\0') {
             break;
+        }
+        BrFileGetLine(BrScratchString(), 256, df->h);
     }
-    *ident = cp;
-    while ((*cp != ' ') && (*cp != '\t') && (*cp != '\0')) {
-        cp++;
+    *ident = ptr;
+    c = *ptr;
+    while ((c != ' ') && (c != '\t') && (c != '\0')) {
+        ptr++;
+        c = *ptr;
     }
-    *cp = '\0';
-    cp++;
-    while ((*cp == ' ') || (*cp == '\t')) {
-        cp++;
-    }
-    *data = cp;
-    if (*cp == '\"') {
-        cp++;
-        while ((*cp != '\0') && (*cp != '\"')) {
-            cp++;
+    *ptr = '\0';
+    do {
+        ptr++;
+    } while ((*ptr == ' ') || (*ptr == '\t'));
+    *data = ptr;
+    c = *ptr;
+    if (c == '\"') {
+        c = ptr[1];
+        ptr++;
+        if (c != '\"') {
+            while (c != '\0') {
+                c = ptr[1];
+                ptr++;
+                if (c == '\"') {
+                    *ptr = '\0';
+                    return 1;
+                }
+            }
         }
     } else {
-        while ((*cp != ' ') && (*cp != '\t') && (*cp != '\0')) {
-            cp++;
+        while ((c != ' ') && (c != '\t') && (c != '\0')) {
+            c = ptr[1];
+            ptr++;
         }
     }
-    *cp = '\0';
+    *ptr = '\0';
     return 1;
 }
 
@@ -364,91 +378,58 @@ br_uint_16 C2_HOOK_STDCALL scalarTypeConvert(br_datafile* df, br_uint_16 t) {
 // FUNCTION: CARMA2_HW 0x0052a140
 br_uint_32 C2_HOOK_STDCALL DfStructWriteBinary(br_datafile* df, br_file_struct* str, void* base) {
     unsigned int m;
-    int i;
     int n;
     unsigned char* mp;
     br_file_struct_member* sm;
     union { // size: 0x8
         unsigned char b[8]; // @0x0
         float f; // @0x0
-        double d; // @0x0
+        br_uint_32 u; // @0x0
     } conv;
 
+    sm = str->members;
     for (m = 0; m < str->nmembers; m++) {
-        sm = &str->members[m];
         mp = ((unsigned char*)base) + sm->offset;
 
         switch (scalarTypeConvert(df, sm->type)) {
-        case DF_TYPE_BR_INT_8:
-        case DF_TYPE_BR_UINT_8:
-        case DF_TYPE_ENUM_8:
-            BrFilePutChar(((br_uint_8*)mp)[0], df->h);
-            break;
-        case DF_TYPE_BR_ANGLE:
-        case DF_TYPE_BR_INT_16:
-        case DF_TYPE_BR_UINT_16:
-        case DF_TYPE_ENUM_16:
-            BrFilePutChar(((br_uint_8*)mp)[1], df->h);
-            BrFilePutChar(((br_uint_8*)mp)[0], df->h);
-            break;
         case DF_TYPE_BR_INT_32:
         case DF_TYPE_BR_UINT_32:
         case DF_TYPE_ENUM_32:
+        case DF_TYPE_FLOAT:
+        case DF_TYPE_BR_FRACTION_F:
+        case DF_TYPE_BR_UFRACTION_F:
             BrFilePutChar(((br_uint_8*)mp)[3], df->h);
             BrFilePutChar(((br_uint_8*)mp)[2], df->h);
             BrFilePutChar(((br_uint_8*)mp)[1], df->h);
             BrFilePutChar(((br_uint_8*)mp)[0], df->h);
             break;
-        case DF_TYPE_FLOAT:
-        case DF_TYPE_BR_FRACTION_F:
-        case DF_TYPE_BR_UFRACTION_F:
-            conv.f = *(float*)mp;
-            BrFilePutChar(conv.b[3], df->h);
-            BrFilePutChar(conv.b[2], df->h);
-            BrFilePutChar(conv.b[1], df->h);
-            BrFilePutChar(conv.b[0], df->h);
-            break;
         case DF_TYPE_DOUBLE:
-            conv.d = *(double*)mp;
-            BrFilePutChar(conv.b[7], df->h);
-            BrFilePutChar(conv.b[6], df->h);
-            BrFilePutChar(conv.b[5], df->h);
-            BrFilePutChar(conv.b[4], df->h);
-            BrFilePutChar(conv.b[3], df->h);
-            BrFilePutChar(conv.b[2], df->h);
-            BrFilePutChar(conv.b[1], df->h);
-            BrFilePutChar(conv.b[0], df->h);
-            break;
-        case DF_TYPE_STRUCT:
-            DfStructWriteBinary(df, sm->extra, mp);
-            break;
-        case DF_TYPE_ASCIZ:
-            if (*(char**)mp != NULL) {
-                BrFileWrite(*(char**)mp, 1, BrStrLen(*(char**)mp), df->h);
-            }
-            BrFilePutChar('\0', df->h);
-            break;
-        case DF_TYPE_BR_COLOUR:
-            BrFilePutChar(((br_uint_8*)mp)[2], df->h);
-            BrFilePutChar(((br_uint_8*)mp)[1], df->h);
-            BrFilePutChar(((br_uint_8*)mp)[0], df->h);
+            BrFilePutChar(mp[7], df->h);
+            BrFilePutChar(mp[6], df->h);
+            BrFilePutChar(mp[5], df->h);
+            BrFilePutChar(mp[4], df->h);
+            BrFilePutChar(mp[3], df->h);
+            BrFilePutChar(mp[2], df->h);
+            BrFilePutChar(mp[1], df->h);
+            BrFilePutChar(mp[0], df->h);
             break;
         case DF_TYPE_BR_FIXED:
-            conv.f = BrFixedToFloat(*(br_fixed_ls*)mp);
+            conv.f = (float)(*(br_fixed_ls*)mp * (1.0 / 65536.0));
             BrFilePutChar(conv.b[3], df->h);
             BrFilePutChar(conv.b[2], df->h);
             BrFilePutChar(conv.b[1], df->h);
             BrFilePutChar(conv.b[0], df->h);
             break;
+        // The binary doubles both 16-bit fractions before scaling.
         case DF_TYPE_BR_FRACTION_X:
-            conv.f = BrFixedFractionToFloat(*(br_fraction_x*)mp);
+            conv.f = (float)((*(br_fraction_x*)mp * 2) * (1.0 / 32768.0));
             BrFilePutChar(conv.b[3], df->h);
             BrFilePutChar(conv.b[2], df->h);
             BrFilePutChar(conv.b[1], df->h);
             BrFilePutChar(conv.b[0], df->h);
             break;
         case DF_TYPE_BR_UFRACTION_X:
-            conv.f = BrFixedUFractionToFloat(*(br_fraction_x*)mp);
+            conv.f = (float)((*(br_ufraction_x*)mp * 2) * (1.0 / 65536.0));
             BrFilePutChar(conv.b[3], df->h);
             BrFilePutChar(conv.b[2], df->h);
             BrFilePutChar(conv.b[1], df->h);
@@ -463,8 +444,8 @@ br_uint_32 C2_HOOK_STDCALL DfStructWriteBinary(br_datafile* df, br_file_struct* 
         case DF_TYPE_BR_VECTOR4_X:
             n = 4;
         copy_fixed_vector:
-            for (i = 0; i < n; i++) {
-                conv.f = BrFixedToFloat(*(br_fixed_ls*)mp);
+            for (; n > 0; n--) {
+                conv.f = (float)(*(br_fixed_ls*)mp * (1.0 / 65536.0));
                 BrFilePutChar(conv.b[3], df->h);
                 BrFilePutChar(conv.b[2], df->h);
                 BrFilePutChar(conv.b[1], df->h);
@@ -481,8 +462,9 @@ br_uint_32 C2_HOOK_STDCALL DfStructWriteBinary(br_datafile* df, br_file_struct* 
         case DF_TYPE_BR_VECTOR4_F:
             n = 4;
         copy_float_vector:
-            for (i = 0; i < n; i++) {
-                conv.f = *(float*)mp;
+            for (; n > 0; n--) {
+                // Preserve the stored IEEE bits, including signaling NaNs.
+                conv.u = *(br_uint_32*)mp;
                 BrFilePutChar(conv.b[3], df->h);
                 BrFilePutChar(conv.b[2], df->h);
                 BrFilePutChar(conv.b[1], df->h);
@@ -490,7 +472,34 @@ br_uint_32 C2_HOOK_STDCALL DfStructWriteBinary(br_datafile* df, br_file_struct* 
                 mp += sizeof(br_fixed_ls);
             }
             break;
+        case DF_TYPE_STRUCT:
+            DfStructWriteBinary(df, sm->extra, mp);
+            break;
+        case DF_TYPE_ASCIZ:
+            if (*(char**)mp != NULL) {
+                BrFileWrite(*(char**)mp, 1, BrStrLen(*(char**)mp), df->h);
+            }
+            BrFilePutChar('\0', df->h);
+            break;
+        case DF_TYPE_BR_COLOUR:
+            BrFilePutChar(((br_uint_8*)mp)[2], df->h);
+            BrFilePutChar(((br_uint_8*)mp)[1], df->h);
+            BrFilePutChar(((br_uint_8*)mp)[0], df->h);
+            break;
+        case DF_TYPE_BR_ANGLE:
+        case DF_TYPE_BR_INT_16:
+        case DF_TYPE_BR_UINT_16:
+        case DF_TYPE_ENUM_16:
+            BrFilePutChar(((br_uint_8*)mp)[1], df->h);
+            BrFilePutChar(((br_uint_8*)mp)[0], df->h);
+            break;
+        case DF_TYPE_BR_INT_8:
+        case DF_TYPE_BR_UINT_8:
+        case DF_TYPE_ENUM_8:
+            BrFilePutChar(((br_uint_8*)mp)[0], df->h);
+            break;
         }
+        sm++;
     }
     return 1;
 }
@@ -499,7 +508,6 @@ br_uint_32 C2_HOOK_STDCALL DfStructWriteBinary(br_datafile* df, br_file_struct* 
 br_uint_32 C2_HOOK_STDCALL DfStructReadBinary(br_datafile* df, br_file_struct* str, void* base) {
     char tmp_string[256];
     unsigned int m;
-    int i;
     int c;
     int n;
     unsigned char* mp;
@@ -507,29 +515,16 @@ br_uint_32 C2_HOOK_STDCALL DfStructReadBinary(br_datafile* df, br_file_struct* s
     union {
         unsigned char b[8];
         float f;
-        double d;
+        br_uint_32 u;
     } conv;
 
 
+    sm = str->members;
     for (m = 0; m < str->nmembers; m++) {
-        sm = &str->members[m];
-
-        c = scalarTypeConvert(df, sm->type);
         mp = ((unsigned char*)base) + sm->offset;
+        c = scalarTypeConvert(df, sm->type);
 
         switch (c) {
-        case DF_TYPE_BR_INT_8:
-        case DF_TYPE_BR_UINT_8:
-        case DF_TYPE_ENUM_8:
-            mp[0] = BrFileGetChar(df->h);
-            break;
-        case DF_TYPE_BR_INT_16:
-        case DF_TYPE_BR_UINT_16:
-        case DF_TYPE_BR_ANGLE:
-        case DF_TYPE_ENUM_16:
-            mp[1] = BrFileGetChar(df->h);
-            mp[0] = BrFileGetChar(df->h);
-            break;
         case DF_TYPE_BR_INT_32:
         case DF_TYPE_BR_UINT_32:
         case DF_TYPE_FLOAT:
@@ -548,16 +543,67 @@ br_uint_32 C2_HOOK_STDCALL DfStructReadBinary(br_datafile* df, br_file_struct* s
             conv.b[0] = BrFileGetChar(df->h);
             *(br_fixed_ls*)mp = BrFloatToFixed(conv.f);
             break;
-        case DF_TYPE_DOUBLE:
-            conv.b[7] = BrFileGetChar(df->h);
-            conv.b[6] = BrFileGetChar(df->h);
-            conv.b[5] = BrFileGetChar(df->h);
-            conv.b[4] = BrFileGetChar(df->h);
+        case DF_TYPE_BR_FRACTION_X:
             conv.b[3] = BrFileGetChar(df->h);
             conv.b[2] = BrFileGetChar(df->h);
             conv.b[1] = BrFileGetChar(df->h);
             conv.b[0] = BrFileGetChar(df->h);
-            *(double*)mp = conv.d;
+            *((br_fraction_x*)mp) = BrFloatToFixedFraction(conv.f);
+            break;
+        case DF_TYPE_BR_UFRACTION_X:
+            conv.b[3] = BrFileGetChar(df->h);
+            conv.b[2] = BrFileGetChar(df->h);
+            conv.b[1] = BrFileGetChar(df->h);
+            conv.b[0] = BrFileGetChar(df->h);
+            *(br_ufraction_x*)mp = BrFloatToFixedUFraction(conv.f);
+            break;
+        case DF_TYPE_DOUBLE:
+            // The original stores each byte immediately, without x87 conversion.
+            mp[7] = BrFileGetChar(df->h);
+            mp[6] = BrFileGetChar(df->h);
+            mp[5] = BrFileGetChar(df->h);
+            mp[4] = BrFileGetChar(df->h);
+            mp[3] = BrFileGetChar(df->h);
+            mp[2] = BrFileGetChar(df->h);
+            mp[1] = BrFileGetChar(df->h);
+            mp[0] = BrFileGetChar(df->h);
+            break;
+        case DF_TYPE_BR_VECTOR2_X:
+            n = 2;
+            goto copy_fixed_vector;
+        case DF_TYPE_BR_VECTOR3_X:
+            n = 3;
+            goto copy_fixed_vector;
+        case DF_TYPE_BR_VECTOR4_X:
+            n = 4;
+        copy_fixed_vector:
+            for (; n > 0; n--) {
+                conv.b[3] = BrFileGetChar(df->h);
+                conv.b[2] = BrFileGetChar(df->h);
+                conv.b[1] = BrFileGetChar(df->h);
+                conv.b[0] = BrFileGetChar(df->h);
+                *(br_fixed_ls*)mp = BrFloatToFixed(conv.f);
+                mp += sizeof(br_fixed_ls);
+            }
+            break;
+        case DF_TYPE_BR_VECTOR2_F:
+            n = 2;
+            goto copy_float_vector;
+        case DF_TYPE_BR_VECTOR3_F:
+            n = 3;
+            goto copy_float_vector;
+        case DF_TYPE_BR_VECTOR4_F:
+            n = 4;
+        copy_float_vector:
+            for (; n > 0; n--) {
+                conv.b[3] = BrFileGetChar(df->h);
+                conv.b[2] = BrFileGetChar(df->h);
+                conv.b[1] = BrFileGetChar(df->h);
+                conv.b[0] = BrFileGetChar(df->h);
+                // Preserve the IEEE bits, including signaling NaNs.
+                *(br_uint_32*)mp = conv.u;
+                mp += sizeof(float);
+            }
             break;
         case DF_TYPE_STRUCT:
             DfStructReadBinary(df, sm->extra, mp);
@@ -577,64 +623,26 @@ br_uint_32 C2_HOOK_STDCALL DfStructReadBinary(br_datafile* df, br_file_struct* s
             mp[1] = BrFileGetChar(df->h);
             mp[0] = BrFileGetChar(df->h);
             break;
-        case DF_TYPE_BR_FRACTION_X:
-            conv.b[3] = BrFileGetChar(df->h);
-            conv.b[2] = BrFileGetChar(df->h);
-            conv.b[1] = BrFileGetChar(df->h);
-            conv.b[0] = BrFileGetChar(df->h);
-            *((br_fraction_x*)mp) = BrFloatToFixedFraction(conv.f);
+        case DF_TYPE_BR_INT_16:
+        case DF_TYPE_BR_UINT_16:
+        case DF_TYPE_BR_ANGLE:
+        case DF_TYPE_ENUM_16:
+            mp[1] = BrFileGetChar(df->h);
+            mp[0] = BrFileGetChar(df->h);
             break;
-        case DF_TYPE_BR_UFRACTION_X:
-            conv.b[3] = BrFileGetChar(df->h);
-            conv.b[2] = BrFileGetChar(df->h);
-            conv.b[1] = BrFileGetChar(df->h);
-            conv.b[0] = BrFileGetChar(df->h);
-            *(br_ufraction_x*)mp = BrFloatToFixedUFraction(conv.f);
-            break;
-        case DF_TYPE_BR_VECTOR2_X:
-            n = 2;
-            goto copy_fixed_vector;
-        case DF_TYPE_BR_VECTOR3_X:
-            n = 3;
-            goto copy_fixed_vector;
-        case DF_TYPE_BR_VECTOR4_X:
-            n = 4;
-        copy_fixed_vector:
-            for (i = 0; i < n; i++) {
-                conv.b[3] = BrFileGetChar(df->h);
-                conv.b[2] = BrFileGetChar(df->h);
-                conv.b[1] = BrFileGetChar(df->h);
-                conv.b[0] = BrFileGetChar(df->h);
-                *(br_fixed_ls*)mp = BrFloatToFixed(conv.f);
-                mp += sizeof(br_fixed_ls);
-            }
-            break;
-        case DF_TYPE_BR_VECTOR2_F:
-            n = 2;
-            goto copy_float_vector;
-            break;
-        case DF_TYPE_BR_VECTOR3_F:
-            n = 3;
-            goto copy_float_vector;
-            break;
-        case DF_TYPE_BR_VECTOR4_F:
-            n = 4;
-        copy_float_vector:
-            for (i = 0; i < n; i++) {
-                conv.b[3] = BrFileGetChar(df->h);
-                conv.b[2] = BrFileGetChar(df->h);
-                conv.b[1] = BrFileGetChar(df->h);
-                conv.b[0] = BrFileGetChar(df->h);
-                *(float*)mp = conv.f;
-                mp += sizeof(float);
-            }
+        case DF_TYPE_BR_INT_8:
+        case DF_TYPE_BR_UINT_8:
+        case DF_TYPE_ENUM_8:
+            mp[0] = BrFileGetChar(df->h);
             break;
         }
+        sm++;
     }
 
     return 1;
 }
 
+// C2PORT-NONMATCHING: best 24.24% | difftest PASS 2000 trials (spec difftest/specs/0052ab30_DfStructSizeBinary.json) | reason scalar-type dispatch compiles to different jump tables
 // FUNCTION: CARMA2_HW 0x0052ab30
 int C2_HOOK_STDCALL DfStructSizeBinary(br_datafile* df, br_file_struct* str, void* base) {
     unsigned char* mp;
@@ -649,6 +657,10 @@ int C2_HOOK_STDCALL DfStructSizeBinary(br_datafile* df, br_file_struct* str, voi
         mp = ((unsigned char*)base) + sm->offset;
 
         switch (scalarTypeConvert(df, sm->type)) {
+        case DF_TYPE_ASCIZ:
+            if (*(char**)mp != NULL) {
+                bytes += BrStrLen(*(char**)mp);
+            }
         case DF_TYPE_BR_INT_8:
         case DF_TYPE_BR_UINT_8:
         case DF_TYPE_ENUM_8:
@@ -680,11 +692,6 @@ int C2_HOOK_STDCALL DfStructSizeBinary(br_datafile* df, br_file_struct* str, voi
         case DF_TYPE_STRUCT:
             bytes += DfStructSizeBinary(df, sm->extra, mp);
             break;
-        case DF_TYPE_ASCIZ:
-            if (*(char**)mp != NULL) {
-                bytes += BrStrLen(*(char**)mp);
-            }
-            break;
         case DF_TYPE_BR_VECTOR2_X:
         case DF_TYPE_BR_VECTOR2_F:
             bytes += 8;
@@ -706,16 +713,13 @@ int C2_HOOK_STDCALL DfStructSizeBinary(br_datafile* df, br_file_struct* str, voi
 int C2_HOOK_STDCALL EnumFromString(br_file_enum* e, char* str) {
     unsigned int m;
 
-    if (e == NULL) {
-        BrFailure("Unknown enum string: %s", str);
-    }
     for (m = 0; m < e->nmembers; m++) {
-        if (BrStrCmp(str, e->members[m].name) == 0) {
+        if (e->members[m].name[0] == str[0] && BrStrCmp(e->members[m].name, str) == 0) {
             return e->members[m].value;
         }
     }
     BrFailure("Unknown enum string: %s", str);
-    return -1;
+    return 0;
 }
 
 char* C2_HOOK_STDCALL EnumToString(br_file_enum* e, int num) {
@@ -742,6 +746,8 @@ br_uint_32 C2_HOOK_STDCALL DfStructWriteText(br_datafile* df, br_file_struct* st
     return 1;
 }
 
+static br_uint_16 C2_HOOK_STDCALL StructTextType(br_datafile* df, br_uint_16 type);
+
 // FUNCTION: CARMA2_HW 0x0052ade0
 br_uint_32 C2_HOOK_STDCALL StructWriteTextSub(br_datafile* df, br_file_struct* str, void* base, int indent) {
     unsigned int m;
@@ -751,20 +757,23 @@ br_uint_32 C2_HOOK_STDCALL StructWriteTextSub(br_datafile* df, br_file_struct* s
     void* mp;
     br_file_struct_member* sm;
 
-    for (m = 0; m < str->nmembers; m++) {
-        sm = &str->members[m];
+    w = 0;
+    for (m = 0, sm = str->members; m < str->nmembers; m++, sm++) {
         mp = ((unsigned char*)base) + sm->offset;
-        w = 0;
-        add_comment = 1;
 
         for (i = 0; i < indent; i++) {
             BrFilePutChar(' ', df->h);
         }
 
-        // Modified from "%-10s", to ensure space after long type names
+#ifdef CARPOCALYPSE2_MATCHING
+        BrFilePrintf(df->h, "%-10s", member_type_names[sm->type]);
+#else
+        // Keep a separator after long type names in port-generated data files.
         BrFilePrintf(df->h, "%-9s ", member_type_names[sm->type]);
+#endif
+        add_comment = 1;
 
-        switch (scalarTypeConvert(df, sm->type)) {
+        switch (StructTextType(df, sm->type)) {
         case DF_TYPE_BR_INT_8:
             w = BrFilePrintf(df->h, "%d", *(br_int_8*)mp);
             break;
@@ -777,6 +786,9 @@ br_uint_32 C2_HOOK_STDCALL StructWriteTextSub(br_datafile* df, br_file_struct* s
         case DF_TYPE_BR_UINT_16:
             w = BrFilePrintf(df->h, "%u", *(br_uint_16*)mp);
             break;
+        case DF_TYPE_BR_COLOUR:
+            w = BrFilePrintf(df->h, "%d,%d,%d", (br_uint_8)((*(br_uint_32*)mp) >> 16), (br_uint_8)((*(br_uint_32*)mp) >> 8), (br_uint_8)((*(br_uint_32*)mp)));
+            break;
         case DF_TYPE_BR_INT_32:
             w = BrFilePrintf(df->h, "%d", *(br_int_32*)mp);
             break;
@@ -784,7 +796,13 @@ br_uint_32 C2_HOOK_STDCALL StructWriteTextSub(br_datafile* df, br_file_struct* s
             w = BrFilePrintf(df->h, "%u", *(br_uint_32*)mp);
             break;
         case DF_TYPE_BR_FIXED:
-            w = BrFilePrintf(df->h, "%g", BrFixedToFloat(*(br_fixed_ls*)mp));
+            w = BrFilePrintf(df->h, "%g", (double)*(br_fixed_ls*)mp * (1.0 / 65536.0));
+            break;
+        case DF_TYPE_BR_FRACTION_X:
+            w = BrFilePrintf(df->h, "%g", (double)*(br_fraction_x*)mp * (1.0 / 32768.0));
+            break;
+        case DF_TYPE_BR_UFRACTION_X:
+            w = BrFilePrintf(df->h, "%g", (double)*(br_ufraction_x*)mp * (1.0 / 65536.0));
             break;
         case DF_TYPE_BR_ANGLE:
             w = BrFilePrintf(df->h, "%g", BrFixedToFloat(BrFixedMul(*(br_angle*)mp, BrIntToFixed(360))));
@@ -806,6 +824,24 @@ br_uint_32 C2_HOOK_STDCALL StructWriteTextSub(br_datafile* df, br_file_struct* s
         case DF_TYPE_ENUM_32:
             w = BrFilePrintf(df->h, "%s", EnumToString(sm->extra, *(br_uint_32*)mp));
             break;
+        case DF_TYPE_BR_VECTOR2_X:
+            w = BrFilePrintf(df->h, "%g,%g", (double)((br_fixed_ls*)mp)[0] * (1.0 / 65536.0), (double)((br_fixed_ls*)mp)[1] * (1.0 / 65536.0));
+            break;
+        case DF_TYPE_BR_VECTOR3_X:
+            w = BrFilePrintf(df->h, "%g,%g,%g", (double)((br_fixed_ls*)mp)[0] * (1.0 / 65536.0), (double)((br_fixed_ls*)mp)[1] * (1.0 / 65536.0), (double)((br_fixed_ls*)mp)[2] * (1.0 / 65536.0));
+            break;
+        case DF_TYPE_BR_VECTOR4_X:
+            w = BrFilePrintf(df->h, "%g,%g,%g,%g", (double)((br_fixed_ls*)mp)[0] * (1.0 / 65536.0), (double)((br_fixed_ls*)mp)[1] * (1.0 / 65536.0), (double)((br_fixed_ls*)mp)[2] * (1.0 / 65536.0), (double)((br_fixed_ls*)mp)[3] * (1.0 / 65536.0));
+            break;
+        case DF_TYPE_BR_VECTOR2_F:
+            w = BrFilePrintf(df->h, "%g,%g", ((float*)mp)[0], ((float*)mp)[1]);
+            break;
+        case DF_TYPE_BR_VECTOR3_F:
+            w = BrFilePrintf(df->h, "%g,%g,%g", ((float*)mp)[0], ((float*)mp)[1], ((float*)mp)[2]);
+            break;
+        case DF_TYPE_BR_VECTOR4_F:
+            w = BrFilePrintf(df->h, "%g,%g,%g,%g", ((float*)mp)[0], ((float*)mp)[1], ((float*)mp)[2], ((float*)mp)[3]);
+            break;
         case DF_TYPE_STRUCT:
             add_comment = 0;
             w = BrFilePrintf(df->h, "%s", ((br_file_struct*)sm->extra)->name);
@@ -826,33 +862,6 @@ br_uint_32 C2_HOOK_STDCALL StructWriteTextSub(br_datafile* df, br_file_struct* s
             } else {
                 w = BrFilePrintf(df->h, "\"%s\"", *(char**)mp);
             }
-            break;
-        case DF_TYPE_BR_COLOUR:
-            w = BrFilePrintf(df->h, "%d,%d,%d", (br_uint_8)((*(br_uint_32*)mp) >> 16), (br_uint_8)((*(br_uint_32*)mp) >> 8), (br_uint_8)((*(br_uint_32*)mp)));
-            break;
-        case DF_TYPE_BR_FRACTION_X:
-            w = BrFilePrintf(df->h, "%g", (double)BrFixedFractionToFloat(*(br_fraction_x*)mp));
-            break;
-        case DF_TYPE_BR_UFRACTION_X:
-            w = BrFilePrintf(df->h, "%g", (double)BrFixedUFractionToFloat(*(br_fraction_x*)mp));
-            break;
-        case DF_TYPE_BR_VECTOR2_X:
-            w = BrFilePrintf(df->h, "%g,%g", BrFixedToFloat(((br_fixed_ls*)mp)[0]), BrFixedToFloat(((br_fixed_ls*)mp)[1]));
-            break;
-        case DF_TYPE_BR_VECTOR3_X:
-            w = BrFilePrintf(df->h, "%g,%g,%g", BrFixedToFloat(((br_fixed_ls*)mp)[0]), BrFixedToFloat(((br_fixed_ls*)mp)[1]), BrFixedToFloat(((br_fixed_ls*)mp)[2]));
-            break;
-        case DF_TYPE_BR_VECTOR4_X:
-            w = BrFilePrintf(df->h, "%g,%g,%g,%g", BrFixedToFloat(((br_fixed_ls*)mp)[0]), BrFixedToFloat(((br_fixed_ls*)mp)[1]), BrFixedToFloat(((br_fixed_ls*)mp)[2]), BrFixedToFloat(((br_fixed_ls*)mp)[3]));
-            break;
-        case DF_TYPE_BR_VECTOR2_F:
-            w = BrFilePrintf(df->h, "%g,%g", ((float*)mp)[0], ((float*)mp)[1]);
-            break;
-        case DF_TYPE_BR_VECTOR3_F:
-            w = BrFilePrintf(df->h, "%g,%g,%g", ((float*)mp)[0], ((float*)mp)[1], ((float*)mp)[2]);
-            break;
-        case DF_TYPE_BR_VECTOR4_F:
-            w = BrFilePrintf(df->h, "%g,%g,%g,%g", ((float*)mp)[0], ((float*)mp)[1], ((float*)mp)[2], ((float*)mp)[3]);
             break;
         }
         if ((add_comment != 0) && (sm->name != NULL)) {
@@ -883,22 +892,53 @@ br_uint_32 C2_HOOK_STDCALL DfStructReadText(br_datafile* df, br_file_struct* str
     return 1;
 }
 
+static br_uint_16 C2_HOOK_STDCALL StructTextType(br_datafile* df, br_uint_16 type) {
+    switch (df->scalar_type) {
+    case BRT_FIXED:
+        switch (type) {
+        case DF_TYPE_BR_SCALAR: return DF_TYPE_BR_FIXED;
+        case DF_TYPE_BR_FRACTION: return DF_TYPE_BR_FRACTION_X;
+        case DF_TYPE_BR_UFRACTION: return DF_TYPE_BR_UFRACTION_X;
+        case DF_TYPE_BR_VECTOR2: return DF_TYPE_BR_VECTOR2_X;
+        case DF_TYPE_BR_VECTOR3: return DF_TYPE_BR_VECTOR3_X;
+        case DF_TYPE_BR_VECTOR4: return DF_TYPE_BR_VECTOR4_X;
+        }
+        break;
+    case BRT_FLOAT:
+        switch (type) {
+        case DF_TYPE_BR_SCALAR: return DF_TYPE_FLOAT;
+        case DF_TYPE_BR_FRACTION: return DF_TYPE_BR_FRACTION_F;
+        case DF_TYPE_BR_UFRACTION: return DF_TYPE_BR_UFRACTION_F;
+        case DF_TYPE_BR_VECTOR2: return DF_TYPE_BR_VECTOR2_F;
+        case DF_TYPE_BR_VECTOR3: return DF_TYPE_BR_VECTOR3_F;
+        case DF_TYPE_BR_VECTOR4: return DF_TYPE_BR_VECTOR4_F;
+        }
+        break;
+    default:
+        if (type == DF_TYPE_BR_SCALAR || ((int)type > DF_TYPE_BR_COLOUR && (int)type <= DF_TYPE_BR_VECTOR4)) {
+            BrFailure("Incorrect scalar type");
+        }
+        break;
+    }
+    return type;
+}
+
 // FUNCTION: CARMA2_HW 0x0052b720
 br_uint_32 C2_HOOK_STDCALL StructReadTextSub(br_datafile* df, br_file_struct* str, void* base) {
     unsigned int m;
     unsigned int r;
     unsigned int g;
     unsigned int b;
-    int i;
     int n;
+    int i;
+    void* vmp;
     void* mp;
     br_file_struct_member* sm;
     char* id;
     char* data;
     char* ep;
 
-    for (m = 0; m < str->nmembers; m++) {
-        sm = &str->members[m];
+    for (m = 0, sm = str->members; m < str->nmembers; m++, sm++) {
         mp = ((unsigned char*)base) + sm->offset;
 
         if (TextReadLine(df, &id, &data) == 0) {
@@ -908,18 +948,30 @@ br_uint_32 C2_HOOK_STDCALL StructReadTextSub(br_datafile* df, br_file_struct* st
             BrFailure("Unknown member identifer \"%s\"", id);
         }
 
-        switch (scalarTypeConvert(df, sm->type)) {
+        switch (StructTextType(df, sm->type)) {
         case DF_TYPE_BR_INT_8:
             *(br_int_8*)mp = (br_int_8)BrStrToL(data, NULL, 0);
             break;
         case DF_TYPE_BR_UINT_8:
-            *(br_uint_8*)mp = (br_uint_8)BrStrToL(data, NULL, 0);
+            *(br_uint_8*)mp = (br_uint_8)BrStrToUL(data, NULL, 0);
             break;
         case DF_TYPE_BR_INT_16:
             *(br_int_16*)mp = (br_int_16)BrStrToL(data, NULL, 0);
             break;
         case DF_TYPE_BR_UINT_16:
-            *(br_uint_16*)mp = (br_uint_16)BrStrToL(data, NULL, 0);
+            *(br_uint_16*)mp = (br_uint_16)BrStrToUL(data, NULL, 0);
+            break;
+        case DF_TYPE_BR_COLOUR:
+            r = BrStrToUL(data, &ep, 0);
+            if (*ep != ',') {
+                BrFailure("Incorrect colour");
+            }
+            g = BrStrToUL(ep + 1, &ep, 0);
+            if (*ep != ',') {
+                BrFailure("Incorrect colour");
+            }
+            b = BrStrToUL(ep + 1, &ep, 0);
+            *(br_colour*)mp = ((r << 8) | g) << 8 | b;
             break;
         case DF_TYPE_BR_INT_32:
             *(br_int_32*)mp = (br_int_32)BrStrToL(data, NULL, 0);
@@ -929,6 +981,12 @@ br_uint_32 C2_HOOK_STDCALL StructReadTextSub(br_datafile* df, br_file_struct* st
             break;
         case DF_TYPE_BR_FIXED:
             *(br_fixed_ls*)mp = BrFloatToFixed(BrStrToD(data, NULL));
+            break;
+        case DF_TYPE_BR_FRACTION_X:
+            *(br_fixed_ss*)mp = BrFloatToFixedFraction(BrStrToD(data, NULL));
+            break;
+        case DF_TYPE_BR_UFRACTION_X:
+            *(br_fixed_su*)mp = BrFloatToFixedUFraction(BrStrToD(data, NULL));
             break;
         case DF_TYPE_BR_ANGLE:
             *(br_angle*)mp = BrFixedMulDiv(BrFloatToFixed(BrStrToF(data, NULL)), BrIntToFixed(1), BrIntToFixed(360));
@@ -950,37 +1008,6 @@ br_uint_32 C2_HOOK_STDCALL StructReadTextSub(br_datafile* df, br_file_struct* st
         case DF_TYPE_ENUM_32:
             *(br_uint_32*)mp = EnumFromString(sm->extra, data);
             break;
-        case DF_TYPE_STRUCT:
-            if (BrStrCmp(data, ((br_file_struct*)sm->extra)->name) != 0) {
-                BrFailure("Incorrect structure name \"%s\"", data);
-            }
-            StructReadTextSub(df, sm->extra, mp);
-            break;
-        case DF_TYPE_ASCIZ:
-            if (BrStrCmp(data, "NULL") == 0) {
-                *(char**)mp = NULL;
-            } else {
-                *(char**)mp = BrResStrDup(df->res == NULL ? fw.res : df->res, data + 1);
-            }
-            break;
-        case DF_TYPE_BR_COLOUR:
-            r = BrStrToUL(data, &ep, 0);
-            if (*ep != ',') {
-                BrFailure("Incorrect colour");
-            }
-            g = BrStrToUL(ep + 1, &ep, 0);
-            if (*ep != ',') {
-                BrFailure("Incorrect colour");
-            }
-            b = BrStrToUL(ep + 1, &ep, 0);
-            *(br_colour*)mp = BR_COLOUR_RGB(r, g, b);
-            break;
-        case DF_TYPE_BR_FRACTION_X:
-            *(br_fixed_ss*)mp = BrFloatToFixedFraction(BrStrToD(data, NULL));
-            break;
-        case DF_TYPE_BR_UFRACTION_X:
-            *(br_fixed_su*)mp = BrFloatToFixedUFraction(BrStrToD(data, NULL));
-            break;
         case DF_TYPE_BR_VECTOR2_X:
             n = 2;
             goto copy_fixed_vector;
@@ -990,21 +1017,25 @@ br_uint_32 C2_HOOK_STDCALL StructReadTextSub(br_datafile* df, br_file_struct* st
         case DF_TYPE_BR_VECTOR4_X:
             n = 4;
         copy_fixed_vector:
-            for (i = 0; i < n; i++) {
-                while (1) {
-                    if ((*data != ',') && (*data != ' ') && (*data != '\t')) {
-                        break;
+            if (n > 0) {
+                vmp = mp;
+                i = n;
+                do {
+                    while (1) {
+                        if ((*data != ',') && (*data != ' ') && (*data != '\t')) {
+                            break;
+                        }
+                        data++;
                     }
-                    data++;
-                }
-                if (*data == '\0') {
-                    BrFailure("Incorrect vector");
-                }
-                *(br_fixed_ls*)mp = BrFloatToFixed(BrStrToF(data, NULL));
-                while ((*data != ' ' && *data != ',' && *data != ' ' && *data != '\t')) {
-                    data++;
-                }
-                mp = (char*)mp + sizeof(br_fixed_ls);
+                    if (*data == '\0') {
+                        BrFailure("Incorrect vector");
+                    }
+                    *(br_fixed_ls*)vmp = BrFloatToFixed(BrStrToF(data, NULL));
+                    while (*data != '\0' && *data != ',' && *data != ' ' && *data != '\t') {
+                        data++;
+                    }
+                    vmp = (char*)vmp + sizeof(br_fixed_ls);
+                } while (--i);
             }
             break;
         case DF_TYPE_BR_VECTOR2_F:
@@ -1016,21 +1047,38 @@ br_uint_32 C2_HOOK_STDCALL StructReadTextSub(br_datafile* df, br_file_struct* st
         case DF_TYPE_BR_VECTOR4_F:
             n = 4;
         copy_float_vector:
-            for (i = 0; i < n; i++) {
-                while (1) {
-                    if ((*data != ',') && (*data != ' ') && (*data != '\t')) {
-                        break;
+            if (n > 0) {
+                vmp = mp;
+                i = n;
+                do {
+                    while (1) {
+                        if ((*data != ',') && (*data != ' ') && (*data != '\t')) {
+                            break;
+                        }
+                        data++;
                     }
-                    data++;
-                }
-                if (*data == '\0') {
-                    BrFailure("Incorrect vector");
-                }
-                *(float*)mp = BrStrToF(data, NULL);
-                while ((*data != ' ' && *data != ',' && *data != ' ' && *data != '\t')) {
-                    data++;
-                }
-                mp = (char*)mp + sizeof(float);
+                    if (*data == '\0') {
+                        BrFailure("Incorrect vector");
+                    }
+                    *(float*)vmp = BrStrToF(data, NULL);
+                    while (*data != '\0' && *data != ',' && *data != ' ' && *data != '\t') {
+                        data++;
+                    }
+                    vmp = (char*)vmp + sizeof(float);
+                } while (--i);
+            }
+            break;
+        case DF_TYPE_STRUCT:
+            if (BrStrCmp(data, ((br_file_struct*)sm->extra)->name) != 0) {
+                BrFailure("Incorrect structure name \"%s\"", data);
+            }
+            StructReadTextSub(df, sm->extra, mp);
+            break;
+        case DF_TYPE_ASCIZ:
+            if (BrStrCmp(data, "NULL") == 0 || data[0] != '"') {
+                *(char**)mp = NULL;
+            } else {
+                *(char**)mp = BrResStrDup(df->res == NULL ? fw.res : df->res, data + 1);
             }
             break;
         }
@@ -1039,6 +1087,7 @@ br_uint_32 C2_HOOK_STDCALL StructReadTextSub(br_datafile* df, br_file_struct* st
     return 1;
 }
 
+// C2PORT-NONMATCHING: best 45.95% | difftest PASS 2000 trials (spec difftest/specs/0052be60_DfStructSizeText.json) | reason VC5 recursion and loop layout
 // FUNCTION: CARMA2_HW 0x0052be60
 int C2_HOOK_STDCALL DfStructSizeText(br_datafile* df, br_file_struct* str, void* base) {
     unsigned int m;
@@ -1213,11 +1262,15 @@ br_uint_8* C2_HOOK_STDCALL BlockWriteSetup(void* base, int block_size, int block
     return NULL;
 }
 
+// C2PORT-NONMATCHING: best 51.59% | difftest PASS 2000 trials (spec difftest/specs/0052c250_DfBlockWriteText.json) | reason VC5 stack-and-loop register layout
 // FUNCTION: CARMA2_HW 0x0052c250
 int C2_HOOK_STDCALL DfBlockWriteText(br_datafile* df, void* base, int block_size, int block_stride, int block_count, int size) {
     int i;
     br_uint_8* block;
     int count;
+    br_uint_8* source;
+    br_uint_8* destination;
+    int block_bytes;
 
     if (block_stride == block_size) {
         block_size = block_count * block_size;
@@ -1225,25 +1278,34 @@ int C2_HOOK_STDCALL DfBlockWriteText(br_datafile* df, void* base, int block_size
     }
     block = base;
     if ((size != 1) || (block_count != 1)) {
-        block = BrScratchAllocate(block_count * block_size * size);
-        for (count = 0; count < block_count; count++) {
-            BrMemCpy(block + count * block_size * size, (br_uint_8*)base + count * block_stride * size, block_size * size);
+        block_bytes = block_size * size;
+        block = BrScratchAllocate(block_count * block_bytes);
+        source = base;
+        destination = block;
+        count = block_count;
+        if (count > 0) {
+            do {
+                BrMemCpy(destination, source, block_bytes);
+                source += block_stride;
+                destination += block_bytes;
+                count--;
+            } while (count != 0);
         }
         BrSwapBlock(block, block_count * block_size, size);
     }
     BrFilePrintf(df->h, "  block %d\n", block_count * block_size);
     BrFilePrintf(df->h, "  size %d\n", size);
     for (i = 0; i < block_count * block_size * size; i++) {
-        if ((i & 0x1f) == 0) {
+        if (i % 32 == 0) {
             BrFilePrintf(df->h, "    %08x: %02x", i, block[i]);
         } else {
             BrFilePrintf(df->h, "%02x", block[i]);
         }
-        if ((i & 0x1f) == 0x1f) {
+        if (i % 32 == 31) {
             BrFilePutChar('\n', df->h);
         }
     }
-    if ((i & 0x1f) != 0x0) {
+    if (i % 32 != 0) {
         BrFilePutChar('\n', df->h);
     }
     if (block != base) {
@@ -1300,6 +1362,7 @@ void* C2_HOOK_STDCALL DfBlockReadText(br_datafile* df, void* base, int* count, i
     return base;
 }
 
+// C2PORT-NONMATCHING: best 47.80% | difftest PASS 2000 trials (spec difftest/specs/0052c570_DfBlockWriteBinary.json) | reason copy loop and stack layout codegen differ
 // FUNCTION: CARMA2_HW 0x0052c570
 int C2_HOOK_STDCALL DfBlockWriteBinary(br_datafile* df, void* base, int block_size, int block_stride, int block_count, int size) {
     int count;
@@ -1317,7 +1380,7 @@ int C2_HOOK_STDCALL DfBlockWriteBinary(br_datafile* df, void* base, int block_si
     if ((size != 1) || (block_count != 1)) {
         block = BrScratchAllocate(block_count * block_size * size);
         for (count = 0; count < block_count; count++) {
-            BrMemCpy((br_uint_8*)block + count * block_size * size, (br_uint_8*)base + count * block_stride * size, block_size * size);
+            BrMemCpy((br_uint_8*)block + count * block_size * size, (br_uint_8*)base + count * block_stride, block_size * size);
         }
         BrSwapBlock(block, block_count * block_size, size);
     }
@@ -1462,20 +1525,18 @@ int C2_HOOK_STDCALL DfChunksInterpret(br_datafile* df, br_chunks_table* table) {
     int r;
     int i;
 
-    while (1) {
+    for (;;) {
         id = df->prims->chunk_read(df, &length);
         // LOG_DEBUG("chunk id=%d, len=%d", id, length);
         if (id == (br_uint_32)-1) {
-            break;
+            return 0;
         }
         for (i = 0; i < table->nentries; i++) {
             if (table->entries[i].id == id) {
                 break;
             }
         }
-        if (i >= table->nentries) {
-            df->prims->skip(df, length);
-        } else {
+        if (i < table->nentries) {
             if (table->entries[i].has_count != 0) {
                 count = df->prims->count_read(df);
             } else {
@@ -1485,9 +1546,10 @@ int C2_HOOK_STDCALL DfChunksInterpret(br_datafile* df, br_chunks_table* table) {
             if (r != 0) {
                 return r;
             }
+        } else {
+            df->prims->skip(df, length);
         }
     }
-    return 0;
 }
 
 // FUNCTION: CARMA2_HW 0x0052ca30
@@ -1550,19 +1612,22 @@ br_datafile* C2_HOOK_STDCALL DfOpen(const char* name, int write, br_token scalar
 
 // FUNCTION: CARMA2_HW 0x0052cb80
 void C2_HOOK_STDCALL DfClose(br_datafile* df) {
-    br_datafile* dfp;
+    int type;
 
     while (1) {
         if (DatafileStackTop > 0) {
-            if (DatafileStack[DatafileStackTop - 1].type == BR_MEMORY_FILE) {
-                break;
-            }
-            DfPop(DatafileStack[DatafileStackTop - 1].type, NULL);
+            type = DatafileStack[DatafileStackTop - 1].type;
+        } else {
+            type = 0;
         }
+        if (type == BR_MEMORY_FILE) {
+            break;
+        }
+        DfPop(type, NULL);
     }
-    dfp = DfPop(BR_MEMORY_FILE, NULL);
-    BrFileClose(dfp->h);
-    BrResFree(dfp);
+    DfPop(BR_MEMORY_FILE, NULL);
+    BrFileClose(df->h);
+    BrResFree(df);
 }
 
 // FUNCTION: CARMA2_HW 0x0052cc50

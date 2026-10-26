@@ -15,6 +15,8 @@
 #include "core/std/brstdlib.h"
 
 #include <assert.h>
+#include <stddef.h>
+#include <string.h>
 
 #define MODU_FACE_COPY_FLAGS ( 0 \
     | BR_MODU_FACE_COLOURS       \
@@ -125,19 +127,78 @@ void C2_HOOK_STDCALL prepareEdges(v11group* group, br_model* model) {
     BrScratchFree(pm_edge_scratch);
 }
 
+static int C2_HOOK_STDCALL addPreparedEdge(br_uint_16 first, br_uint_16 last) {
+    struct pm_temp_edge* tep;
+
+    for (tep = ((struct pm_temp_edge**)pm_edge_scratch)[last]; tep != NULL; tep = tep->next) {
+        if (tep->last == first && tep->other == 0) {
+            tep->other = 1;
+            return tep - pm_edge_table;
+        }
+    }
+
+    tep = &pm_edge_table[num_edges];
+    tep->first = first;
+    tep->last = last;
+    tep->other = 0;
+    tep->next = ((struct pm_temp_edge**)pm_edge_scratch)[first];
+    ((struct pm_temp_edge**)pm_edge_scratch)[first] = tep;
+    return num_edges++;
+}
+
+// C2PORT-NONMATCHING: best 67.20% | difftest PASS 2000 trials (spec difftest/specs/0051f2b0_BrPrepareEdges.json) | reason regalloc-loop
+// FUNCTION: CARMA2_HW 0x0051f2b0
 void C2_HOOK_STDCALL BrPrepareEdges(br_model* model) {
     int g;
-    struct v11model *v11m;
+    int f;
+    br_size_t scratch_size;
+    br_face* mfp;
+    v11face* fp;
+    v11group* group;
+    v11model* v11m;
 
     v11m = model->prepared;
-
-    if (v11m == NULL) {
+    if (v11m == NULL || v11m->ngroups == 0) {
         return;
     }
 
-    for (g = 0; g < v11m->ngroups; g++) {
-        prepareEdges(&v11m->groups[g], model);
-    }
+    g = 0;
+    group = v11m->groups;
+    do {
+        scratch_size = group->nfaces * 3 * sizeof(*pm_edge_table) +
+                group->nvertices * sizeof(*pm_edge_hash);
+        pm_edge_scratch = BrScratchAllocate(scratch_size);
+        pm_edge_hash = (struct pm_temp_edge**)pm_edge_scratch;
+        pm_edge_table = (struct pm_temp_edge*)(pm_edge_scratch + group->nvertices * sizeof(*pm_edge_hash));
+        BrMemSet(pm_edge_hash, 0, group->nvertices * sizeof(*pm_edge_hash));
+        num_edges = 0;
+        fp = group->faces;
+        for (f = 0; f < group->nfaces; f++, fp++) {
+            mfp = &model->faces[group->face_user[f]];
+
+            if (!(mfp->flags & BR_FACEF_COPLANAR_0)) {
+                fp->edges[0] = addPreparedEdge(fp->vertices[0], fp->vertices[1]) + 1;
+            } else {
+                fp->edges[0] = 0;
+            }
+
+            if (!(mfp->flags & BR_FACEF_COPLANAR_1)) {
+                fp->edges[1] = addPreparedEdge(fp->vertices[1], fp->vertices[2]) + 1;
+            } else {
+                fp->edges[1] = 0;
+            }
+
+            if (!(mfp->flags & BR_FACEF_COPLANAR_2)) {
+                fp->edges[2] = addPreparedEdge(fp->vertices[2], fp->vertices[0]) + 1;
+            } else {
+                fp->edges[2] = 0;
+            }
+        }
+
+        group->nedges = num_edges + 1;
+        BrScratchFree((char*)pm_edge_hash);
+        group++;
+    } while (++g < v11m->ngroups);
 }
 
 // FUNCTION: CARMA2_HW 0x00520840
@@ -275,13 +336,14 @@ int C2_HOOK_CDECL TVCompare_MVN(const void* p1, const void* p2) {
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 100% | difftest PASS 2000 trials (spec difftest/specs/0051f5f0_BrScalarToFractionClamp.json) | reason corrected stdcall and inclusive lower clamp
 // FUNCTION: CARMA2_HW 0x0051f5f0
-br_fraction C2_HOOK_CDECL BrScalarToFractionClamp(br_scalar s) {
+br_fraction C2_HOOK_STDCALL BrScalarToFractionClamp(br_scalar s) {
+    if (s <= -1.0f) {
+        return -0.99999988f;
+    }
     if (s >= 1.0f) {
         return 1.0f;
-    }
-    if (s < -1.0f) {
-        return -0.99999988f;
     }
     return s;
 }
@@ -301,6 +363,7 @@ void C2_HOOK_STDCALL PrepareFaceNormals(br_model* model) {
     }
 }
 
+// C2PORT-NONMATCHING: best 23.66% | difftest PASS 2000 trials (spec difftest/specs/00520a90_Smoothing.json) | reason register-allocation-inner-loop
 // FUNCTION: CARMA2_HW 0x00520a90
 void C2_HOOK_STDCALL Smoothing(br_model* model, br_scalar crease_limit, prep_vertex** start, prep_vertex** end) {
     prep_vertex** outer;
@@ -315,6 +378,7 @@ void C2_HOOK_STDCALL Smoothing(br_model* model, br_scalar crease_limit, prep_ver
     }
 }
 
+// C2PORT-NONMATCHING: best 18.8% | difftest PASS 2000 trials (spec difftest/specs/00520b50_SmoothingCreased.json) | reason VC5 inlining and register allocation
 // FUNCTION: CARMA2_HW 0x00520b50
 void C2_HOOK_STDCALL SmoothingCreased(br_model* model, br_scalar crease_limit, prep_vertex** start, prep_vertex** end) {
     br_vector3 o_n;
@@ -333,6 +397,7 @@ void C2_HOOK_STDCALL SmoothingCreased(br_model* model, br_scalar crease_limit, p
     }
 }
 
+// C2PORT-NONMATCHING: best 8.70% | difftest PASS 2000 trials (spec 00520c60_CopyVertex.json) | reason inline x87 normalisation versus helper call codegen; zero-vector fallback also covered
 // FUNCTION: CARMA2_HW 0x00520c60
 void C2_HOOK_STDCALL CopyVertex(v11group* group, int v, prep_vertex* src, br_model* model) {
     br_vertex* srcv;
@@ -623,6 +688,7 @@ void C2_HOOK_STDCALL PrepareBoundingBox(br_model* model) {
     }
 }
 
+// C2PORT-NONMATCHING: best 58.95% | difftest PASS 2000 trials (spec difftest/specs/0051f630_IsMaterialTransparent.json) | reason switch-and-control-flow codegen
 // FUNCTION: CARMA2_HW 0x0051f630
 int C2_HOOK_STDCALL IsMaterialTransparent(const br_material* material) {
     br_token_value* tvp;
@@ -633,19 +699,18 @@ int C2_HOOK_STDCALL IsMaterialTransparent(const br_material* material) {
     if (material->colour_map != NULL) {
         br_uint_8 type = material->colour_map->type;
 
-        switch (type) {
-        case BR_PMT_ALPHA_8:
-        case BR_PMT_INDEXA_88:
-        case BR_PMT_RGBA_4444:
-        case BR_PMT_ALPHA_4:
-        case BR_PMT_INDEXA_44:
-        case BR_PMT_DEPTH_15:
-        case BR_PMT_ARGB_1555:
+        if (type == BR_PMT_ALPHA_8
+            || type == BR_PMT_INDEXA_88
+            || type == BR_PMT_RGBA_4444
+            || type == BR_PMT_ALPHA_4
+            || type == BR_PMT_INDEXA_44
+            || type == BR_PMT_DEPTH_15
+            || type == BR_PMT_ARGB_1555) {
             return 1;
         }
-        if (material->index_blend != NULL) {
-            return 1;
-        }
+    }
+    if (material->index_blend != NULL) {
+        return 1;
     }
 
     tvp = material->extra_prim;
@@ -660,6 +725,7 @@ int C2_HOOK_STDCALL IsMaterialTransparent(const br_material* material) {
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 47.62% | difftest PASS 2000 trials (spec difftest/specs/0051f6a0_RegenerateFaceNormals.json) | reason VC5 loop induction and register allocation differ
 // FUNCTION: CARMA2_HW 0x0051f6a0
 void C2_HOOK_STDCALL RegenerateFaceNormals(v11model* v11m) {
     int g;
@@ -677,6 +743,7 @@ void C2_HOOK_STDCALL RegenerateFaceNormals(v11model* v11m) {
     }
 }
 
+// C2PORT-NONMATCHING: best 40.3% | difftest PASS 2000 trials (spec 0051f730_RegenerateVertexNormals.json) | reason normal accumulation matches; remaining diff is VC5 x87 scheduling and helper calls
 // FUNCTION: CARMA2_HW 0x0051f730
 void C2_HOOK_STDCALL RegenerateVertexNormals(v11model* v11m) {
     int g;
@@ -712,7 +779,39 @@ void C2_HOOK_STDCALL RegenerateVertexNormals(v11model* v11m) {
 }
 
 // FUNCTION: CARMA2_HW 0x0051f950
+#if defined(__vita__) || defined(C2_FAST_GEOMETRY)
+/* bumped on every model update; the Vita geometry cache re-verifies static geometry after it */
+unsigned long C2VitaModelUpdateGeneration;
+/* Per-model update stamp kept in the v11model padding after ngroups (offset 10): non-zero after the
+ * first BrModelUpdate, new on every update. The geometry cache trusts an entry only while it is
+ * unchanged; 0 (never updated, e.g. pre-prepared models edited in place) always compares. */
+static br_uint_16 c2_vita_stamp_counter;
+/* also used by the Vita glyph batcher for its in-place built runs */
+void C2VitaStampPrepared(struct v11model* m) {
+    C2_HOOK_BUG_ON(offsetof(struct v11model, pivot) != 12);
+    if (++c2_vita_stamp_counter == 0) ++c2_vita_stamp_counter;
+    memcpy((char*)m + offsetof(struct v11model, ngroups) + sizeof(m->ngroups), &c2_vita_stamp_counter, sizeof(c2_vita_stamp_counter));
+}
+#endif
+#ifdef __vita__
+unsigned long long C2VitaModelUpdateNS;
+unsigned C2VitaModelUpdateCount;
+extern unsigned long long C2VitaGLTicksNS(void);
+static void C2_HOOK_CDECL BrModelUpdate_inner(br_model* model, br_uint_16 flags);
+/* timing wrapper (physics spike log); the body below is unchanged */
 void C2_HOOK_CDECL BrModelUpdate(br_model* model, br_uint_16 flags) {
+    unsigned long long c2_t0 = C2VitaGLTicksNS();
+    BrModelUpdate_inner(model, flags);
+    C2VitaModelUpdateNS += C2VitaGLTicksNS() - c2_t0;
+    ++C2VitaModelUpdateCount;
+}
+static void C2_HOOK_CDECL BrModelUpdate_inner(br_model* model, br_uint_16 flags) {
+#else
+void C2_HOOK_CDECL BrModelUpdate(br_model* model, br_uint_16 flags) {
+#endif
+#if defined(__vita__) || defined(C2_FAST_GEOMETRY)
+    ++C2VitaModelUpdateGeneration;
+#endif
     int g, f, v;
     struct v11model *v11m;
     struct fmt_vertex *fvp;
@@ -821,6 +920,9 @@ void C2_HOOK_CDECL BrModelUpdate(br_model* model, br_uint_16 flags) {
         PrepareGroups(model);
         BrPrepareEdges(model);
     }
+#if defined(__vita__) || defined(C2_FAST_GEOMETRY)
+    if (model->prepared != NULL) C2VitaStampPrepared(model->prepared);
+#endif
 
     if (!(model->flags & BR_MODF_UPDATEABLE)) {
         if (model->faces != NULL) {

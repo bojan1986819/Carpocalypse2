@@ -12,20 +12,7 @@
 #define BR_POOL_DEBUG 0
 #define BR_POOL_ALIGN 7
 
-typedef struct br_pool_block {
-		struct br_pool_block *next;
-} br_pool_block;
-
-typedef struct br_pool {
-		br_pool_block *free;
-		br_uint_32	block_size;
-		br_uint_32	chunk_size;
-		int			mem_type;
-#if BR_POOL_DEBUG
-		br_uint_32 max_count;
-		br_uint_32 count;
-#endif
-} br_pool;
+/* br_pool_block / br_pool come from our br_types.h */
 
 
 /*

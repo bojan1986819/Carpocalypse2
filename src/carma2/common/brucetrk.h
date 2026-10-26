@@ -10,6 +10,8 @@
 
 extern br_material* gDefault_track_material;
 
+void C2_HOOK_FASTCALL GetGlassFragmentCounts(int* pVisible_count, int* pActive_count);
+
 // AssertNoncars
 
 // AllocateActorMatrix

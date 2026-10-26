@@ -1,7 +1,5 @@
 #include "depth.h"
 
-extern br_scalar gCamera_yon;
-
 #include "displays.h"
 #include "errors.h"
 #include "globvars.h"
@@ -30,8 +28,6 @@ extern br_scalar gCamera_yon;
 
 #define ACTOR_CAMERA(ACTOR) ((br_camera*)((ACTOR)->type_data))
 void C2_HOOK_FASTCALL FrobFog(void);
-// GLOBAL: CARMA2_HW 0x0079ec44
-tSpecial_volume* gDAT_0079ec44;
 
 
 // GLOBAL: CARMA2_HW 0x0059118c
@@ -143,6 +139,18 @@ intptr_t C2_HOOK_CDECL SwitchCarModel(br_actor* pActor, void* pData) {
     pActor->model = NULL;
     pActor->type = BR_ACTOR_NONE;
     return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00446890
+void C2_HOOK_FASTCALL LessDepthFactor(void) {
+    char s[256];
+
+    if (gProgram_state.current_depth_effect.start > 3) {
+        gProgram_state.current_depth_effect.start = gProgram_state.current_depth_effect.start - 1;
+    }
+    sprintf(s, "Depth start reduced to %d", gProgram_state.current_depth_effect.start);
+    NewTextHeadupSlot(4, 0, 500, -1, s);
+    gProgram_state.default_depth_effect.start = gProgram_state.current_depth_effect.start;
 }
 
 // FUNCTION: CARMA2_HW 0x00447110
@@ -276,6 +284,92 @@ br_scalar C2_HOOK_FASTCALL CalculateWrappingMultiplier(br_scalar pValue, br_scal
     return (float)(trunc_k / CARPOCALYPSE2_TAU * pValue);
 }
 
+// C2PORT-NONMATCHING: best 35.44% | difftest PASS 2000 trials (spec difftest/specs/004459e0_DoHorizon.json) | reason x87-order/regalloc
+// FUNCTION: CARMA2_HW 0x004459e0
+void C2_HOOK_FAKE_THISCALL DoHorizon(br_pixelmap* pRender_buffer, undefined4 pEdx, br_actor* pCamera, br_matrix34* pCamera_to_world) {
+    br_pixelmap* sky_map;
+    br_camera* camera_data;
+    double half_fov;
+    double horizontal_scale;
+    float tangent_half_fov;
+    volatile br_angle horizontal_fov;
+    br_angle yaw;
+    int angle_scale;
+    int source_x;
+    int source_y;
+    int screen_y;
+    int copy_width;
+    int copied_width;
+    int remaining_width;
+    int top_height;
+    int bottom_height;
+    float pitch_cosine;
+    float pitch_sine;
+    float angle_fraction;
+    tU8 top_colour;
+    tU8 bottom_colour;
+
+    (void)pEdx;
+    copied_width = 0;
+    sky_map = gHorizon_material->colour_map;
+    camera_data = pCamera->type_data;
+    half_fov = (double)((tU16)camera_data->field_of_view >> 1) * (PI / 32768.0);
+    tangent_half_fov = (float)(sin(half_fov) / cos(half_fov));
+    horizontal_scale = (double)(camera_data->aspect * tangent_half_fov)
+            * sky_map->width / pRender_buffer->width;
+    horizontal_fov = BrRadianToAngle(atan(horizontal_scale));
+    horizontal_fov *= 2;
+    angle_scale = 0xfff0 / (int)(1.0f / ((double)horizontal_fov / 65536.0) + 0.5f);
+
+    yaw = BrRadianToAngle(atan2(pCamera_to_world->m[2][0], pCamera_to_world->m[2][2]));
+    yaw = (tU16)yaw;
+    angle_fraction = (float)((double)angle_scale * (1.0 / 65536.0));
+    source_x = (int)(-(((double)yaw * (1.0 / 65536.0)) / angle_fraction) * sky_map->width);
+    for (; source_x < 0; source_x += sky_map->width) {
+    }
+    for (; sky_map->width < source_x; source_x -= sky_map->width) {
+    }
+
+    pitch_cosine = sqrt(pCamera_to_world->m[2][0] * pCamera_to_world->m[2][0]
+            + pCamera_to_world->m[2][2] * pCamera_to_world->m[2][2]);
+    pitch_sine = pCamera_to_world->m[2][1] / pitch_cosine;
+    pitch_sine = pitch_sine / tangent_half_fov;
+    source_y = ((int)gSky_image_underground * sky_map->height) / (int)gSky_image_height;
+    source_y -= (int)(pitch_sine * pRender_buffer->height * 0.5f);
+    source_y -= sky_map->height;
+    screen_y = source_y;
+
+    if (pRender_buffer->width != 0) {
+        do {
+            remaining_width = sky_map->width - source_x;
+            copy_width = pRender_buffer->width - copied_width;
+            if (remaining_width <= copy_width) {
+                copy_width = remaining_width;
+            }
+            DRPixelmapRectangleCopy(pRender_buffer, copied_width - pRender_buffer->origin_x,
+                    screen_y, sky_map, source_x - sky_map->origin_x, -sky_map->origin_y,
+                    copy_width, sky_map->height);
+            copied_width += copy_width;
+            source_x = 0;
+        } while (copied_width < pRender_buffer->width);
+    }
+
+    top_height = screen_y + pRender_buffer->origin_y;
+    if (top_height > 0) {
+        top_colour = *(tU8*)sky_map->pixels;
+        DRPixelmapRectangleFill(pRender_buffer, -pRender_buffer->origin_x, -pRender_buffer->origin_y,
+                pRender_buffer->width, top_height, top_colour);
+    }
+
+    bottom_height = pRender_buffer->height - screen_y - sky_map->height - pRender_buffer->origin_y;
+    if (bottom_height > 0) {
+        bottom_colour = *((tU8*)sky_map->pixels + sky_map->row_bytes * (sky_map->height - 1));
+        DRPixelmapRectangleFill(pRender_buffer, -pRender_buffer->origin_x,
+                screen_y + sky_map->height, pRender_buffer->width, bottom_height, bottom_colour);
+    }
+}
+
+// C2PORT-NONMATCHING: best 46.7% | difftest PASS 2000 trials (spec difftest/specs/00445e20_MungeSkyModel.json) | reason x87-and-loop-codegen
 // FUNCTION: CARMA2_HW 0x00445e20
 void C2_HOOK_FASTCALL MungeSkyModel(br_actor* pCamera, br_model* pModel) {
     br_camera* camera_data;
@@ -387,6 +481,23 @@ void C2_HOOK_FASTCALL AssertYons(void) {
     }
 }
 
+// FUNCTION: CARMA2_HW 0x00446bc0
+void C2_HOOK_FASTCALL IncreaseAngle(void) {
+    br_camera* camera_ptr;
+    int i;
+    char s[256];
+
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gCamera_list); i++) {
+        camera_ptr = gCamera_list[i]->type_data;
+        camera_ptr->field_of_view += 0x1c7;
+        if (camera_ptr->field_of_view > 0x78e3) {
+            camera_ptr->field_of_view = 0x78e3;
+        }
+        sprintf(s, "Camera angle increased to %d", gProgram_state.current_depth_effect.end);
+        NewTextHeadupSlot(4, 0, 500, -1, s);
+    }
+}
+
 // FUNCTION: CARMA2_HW 0x00447280
 void C2_HOOK_FASTCALL MungeRearviewSky(void) {
 
@@ -402,6 +513,27 @@ void C2_HOOK_FASTCALL SkyTextureChanged(void) {
 void C2_HOOK_FASTCALL SetSkyColour(br_colour c) {
 
     gHorizon_material->colour = c;
+}
+
+// FUNCTION: CARMA2_HW 0x004472c0
+void C2_HOOK_FASTCALL FUN_004472c0(br_model* pModel, tPMFMCB* pCallback) {
+    tU16 f;
+    br_material* possible_mat;
+    br_material* new_mat;
+
+    new_mat = NULL;
+    for (f = 0; f < pModel->nfaces; f++) {
+        if (pModel->faces[f].material != NULL) {
+            possible_mat = pCallback(pModel, f);
+            if (possible_mat != NULL) {
+                pModel->faces[f].material = possible_mat;
+                new_mat = possible_mat;
+            }
+        }
+    }
+    if (new_mat != NULL) {
+        BrModelUpdate(pModel, BR_MODU_ALL);
+    }
 }
 
 // FUNCTION: CARMA2_HW 0x00447220
@@ -670,6 +802,7 @@ void C2_HOOK_FASTCALL FrobFog(void) {
     FogAccordingToGPSCDE(gDefault_track_material);
 }
 
+// C2PORT-NONMATCHING: best 31.79% | difftest PASS 2000 trials (spec difftest/specs/00445500_MungeSkyVs.json) | reason x87 scheduling of the interpolation loop differs
 // FUNCTION: CARMA2_HW 0x00445500
 void C2_HOOK_FASTCALL MungeSkyVs(br_model* pModel, br_material* pMaterial) {
     int i;
@@ -683,7 +816,7 @@ void C2_HOOK_FASTCALL MungeSkyVs(br_model* pModel, br_material* pMaterial) {
     }
     if (pMaterial->flags & BR_MATF_MAP_INTERPOLATION) {
         height = pMaterial->colour_map->height - 2;
-        tex_y = 1.0f / (float)pMaterial->colour_map->height;
+        tex_y = (float)(1.0 / (double)pMaterial->colour_map->height);
     } else {
         height = pMaterial->colour_map->height;
         tex_y = 0.0f;
@@ -706,6 +839,7 @@ void C2_HOOK_FASTCALL MungeSkyVs(br_model* pModel, br_material* pMaterial) {
     }
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x00445340
 void C2_HOOK_FASTCALL InstantDepthChange(tDepth_effect_type pType, br_pixelmap* pSky_texture, int pStart, int pEnd, int pRed, int pGreen, int pBlue, int pParam_8) {
 
@@ -735,9 +869,45 @@ void C2_HOOK_FASTCALL InstantDepthChange(tDepth_effect_type pType, br_pixelmap* 
     gProgram_state.default_depth_effect.start = pStart;
     gProgram_state.default_depth_effect.end = pEnd;
     if (gNo_fog && pParam_8) {
-        FrobFog();
+        int i;
+        br_material* material;
+
+        if (gTrack_actor != NULL) {
+            ProcessMaterials(gTrack_actor, FogAccordingToGPSCDE);
+        }
+        if (gNon_track_actor != NULL) {
+            ProcessMaterials(gNon_track_actor, FogAccordingToGPSCDE);
+        }
+        for (i = 0; i < gCurrent_race.number_of_racers; i++) {
+            int j;
+            tCar_spec* car = gCurrent_race.opponent_list[i].car_spec;
+
+            for (j = 0; j < car->count_detail_levels; j++) {
+                SwitchCarModels(car, j);
+                ProcessMaterials(car->car_model_actor, FogAccordingToGPSCDE);
+            }
+            SwitchCarModels(car, 0);
+        }
+        material = BrMaterialFind("GIBSLICK");
+        if (material != NULL) {
+            FogAccordingToGPSCDE(material);
+        }
+        material = BrMaterialFind("PEDSMEAR");
+        if (material != NULL) {
+            FogAccordingToGPSCDE(material);
+        }
+        for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gMaterial); i++) {
+            FogAccordingToGPSCDE(gMaterial[i]);
+        }
+        for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gCurrent_race.material_modifiers); i++) {
+            if (gCurrent_race.material_modifiers[i].skid_mark_material != NULL) {
+                FogAccordingToGPSCDE(gCurrent_race.material_modifiers[i].skid_mark_material);
+            }
+        }
+        FogAccordingToGPSCDE(gDefault_track_material);
     }
 }
+#pragma auto_inline(on)
 
 // Tan
 
@@ -768,6 +938,7 @@ void C2_HOOK_FASTCALL InitDepthEffects(void) {
 
     horizon_material = BrMaterialAllocate("Horizon");
     horizon_material->flags |= BR_MATF_MAP_INTERPOLATION;
+    horizon_material->flags &= ~BR_MATF_LIGHT; /* port: the sky is drawn unlit (see the matching path below) */
     horizon_material->colour = 0;
     BrMaterialAdd(horizon_material);
     gHorizon_material = horizon_material;
@@ -819,6 +990,11 @@ void C2_HOOK_FASTCALL InitDepthEffects(void) {
     }
 
     gHorizon_material->flags |= BR_MATF_MAP_INTERPOLATION;
+#ifndef CARPOCALYPSE2_MATCHING
+    /* port: the sky is drawn unlit. The 1.2 software renderer never modulates RGB textures by
+     * lighting; the GL renderer does, and a lit sky dome comes out nearly black. */
+    gHorizon_material->flags &= ~BR_MATF_LIGHT;
+#endif
 
     sky_model = BrModelAllocate(NULL, 0x58, 0x7e);
     sky_model->flags |= BR_MODF_KEEP_ORIGINAL;
@@ -885,32 +1061,9 @@ void C2_HOOK_FASTCALL InitDepthEffects(void) {
 
 // AssertYons
 
-// FUNCTION: CARMA2_HW 0x00446a40
-void C2_HOOK_FASTCALL IncreaseYon(void) {
-    char s[256];
-    int yon;
+// IncreaseYon
 
-    gCamera_yon += 5.f;
-    AssertYons();
-    yon = (int)((br_camera*)gCamera_list[1]->type_data)->yon_z;
-    sprintf(s, GetMiscString(eMiscString_yon_increased_to_D), yon);
-    NewTextHeadupSlot(4, 0, 2000, -4, s);
-}
-
-// FUNCTION: CARMA2_HW 0x00446ad0
-void C2_HOOK_FASTCALL DecreaseYon(void) {
-    char s[256];
-    int yon;
-
-    gCamera_yon -= 5.f;
-    if (!(gCamera_yon >= 5.f)) {
-        gCamera_yon = 5.f;
-    }
-    AssertYons();
-    yon = (int)((br_camera*)gCamera_list[1]->type_data)->yon_z;
-    sprintf(s, GetMiscString(eMiscString_yon_decreased_to_D), yon);
-    NewTextHeadupSlot(4, 0, 2000, -4, s);
-}
+// DecreaseYon
 
 // FUNCTION: CARMA2_HW 0x00446b70
 void C2_HOOK_STDCALL SetYon(br_scalar pYon) {
@@ -985,16 +1138,16 @@ void C2_HOOK_FASTCALL SetDepthCueingOn(int pOn) {
 
 // FUNCTION: CARMA2_HW 0x00447070
 void C2_HOOK_FASTCALL ToggleDepthCueingQuietly(void) {
+    tDepth_effect_type temp_type;
+    int temp_start;
+    int temp_end;
     int temp_red;
     int temp_green;
     int temp_blue;
-    int temp_end;
-    int temp_start;
-    tDepth_effect_type temp_type;
 
+    temp_type = gProgram_state.current_depth_effect.type;
     temp_start = gProgram_state.current_depth_effect.start;
     temp_end = gProgram_state.current_depth_effect.end;
-    temp_type = gProgram_state.current_depth_effect.type;
     temp_red = gProgram_state.current_depth_effect.colour.red;
     temp_green = gProgram_state.current_depth_effect.colour.green;
     temp_blue = gProgram_state.current_depth_effect.colour.blue;

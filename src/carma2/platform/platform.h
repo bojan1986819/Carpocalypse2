@@ -53,7 +53,7 @@ extern void C2_HOOK_FASTCALL PDSetPaletteEntries(br_pixelmap* pPalette, int pFir
 
 extern void C2_HOOK_FASTCALL PDSetPalette(br_pixelmap *pixelmap);
 
-extern void C2_HOOK_FASTCALL PDEnumPath(const char* path, tEnumPathCallback pCallback, void* data);
+extern int C2_HOOK_FASTCALL PDEnumPath(const char* path, tEnumPathCallback pCallback, void* data);
 
 extern int C2_HOOK_FASTCALL PDmkdir(const char* path);
 
@@ -95,6 +95,8 @@ extern int C2_HOOK_FASTCALL PDNetGetNextJoinGame(tNet_game_details* pGame, int p
 
 extern int C2_HOOK_FASTCALL PDNetGetHeaderSize(void);
 
+extern int C2_HOOK_STDCALL PDNetHostGame(void** pHost_address);
+
 extern int C2_HOOK_FASTCALL PDNetJoinGame(tNet_game_details* pGame_details, const char* pName);
 
 extern void C2_HOOK_FASTCALL PDNetHostFinishGame(void);
@@ -122,6 +124,10 @@ extern void C2_HOOK_FASTCALL PDSetKeysFromJoystick(int *keys);
 extern void C2_HOOK_FASTCALL PDReadJoysticks(void);
 
 extern void C2_HOOK_FASTCALL PDInitJoysticks(void);
+
+extern const char* C2_HOOK_FASTCALL GetCurrentJoystickName(void);
+
+extern int C2_HOOK_FASTCALL IsJoystickPresent(int pIndex);
 
 extern void C2_HOOK_FASTCALL PDPlayFFBEffectIndex(int index);
 
@@ -155,8 +161,6 @@ extern int C2_HOOK_FASTCALL PDGetJoy2Y(void);
 
 extern tButtonJoystickInfo* C2_HOOK_FASTCALL PDGetCurrentJoystickData(void);
 
-extern int C2_HOOK_FASTCALL PDEnableJoysticks(void);
-
 extern int C2_HOOK_FASTCALL PDS3Init(void);
 
 extern void C2_HOOK_FASTCALL PDExtractFilename(char* pDest, const char* pPath);
@@ -188,6 +192,9 @@ extern int C2_HOOK_FASTCALL PDS3UpdateChannelVolume(tS3_channel* pChannel);
 extern void C2_HOOK_FASTCALL PDS3Stop(void);
 
 extern int C2_HOOK_FASTCALL PDS3IsMIDIStopped(tS3_channel* pChannel);
+extern int C2_HOOK_FASTCALL PDS3ResumeMidiChannel(tS3_channel* pChannel);
+extern int C2_HOOK_FASTCALL PDS3UnmuteMidiChannel(tS3_channel* pChannel);
+extern int C2_HOOK_FASTCALL PDS3ResumeCDA(tS3_channel* pChannel);
 
 extern int C2_HOOK_FASTCALL PDS3IsCDAPlaying(void);
 

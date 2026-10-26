@@ -12,6 +12,7 @@ void C2_HOOK_CDECL BrNewList(br_list* list) {
     list->tail = (br_node*)list;
 }
 
+// C2PORT-NONMATCHING: best 10.53% | difftest PASS 2000 trials (spec difftest/specs/00529980_BrAddHead.json) | reason VC5 schedules list-link stores differently
 // FUNCTION: CARMA2_HW 0x00529980
 void C2_HOOK_CDECL BrAddHead(br_list* list, br_node* node) {
 
@@ -26,6 +27,7 @@ void C2_HOOK_CDECL BrAddHead(br_list* list, br_node* node) {
     list->head = node;
 }
 
+// C2PORT-NONMATCHING: best 9.09% | difftest PASS 2000 trials (spec 005299a0_BrAddTail.json) | reason VC5 register allocation differs
 // FUNCTION: CARMA2_HW 0x005299a0
 void C2_HOOK_CDECL BrAddTail(br_list* list, br_node* node) {
 
@@ -84,13 +86,16 @@ void C2_HOOK_CDECL BrSimpleNewList(br_simple_list* list) {
     list->head = NULL;
 }
 
+// C2PORT-NONMATCHING: best 100% | difftest PASS 2000 trials (spec difftest/specs/00529a50_BrSimpleAddHead.json) | reason alias-safe-head-save
 // FUNCTION: CARMA2_HW 0x00529a50
 void C2_HOOK_CDECL BrSimpleAddHead(br_simple_list* list, br_simple_node* node) {
+    br_simple_node* old_head;
 
-    node->next = list->head;
+    old_head = list->head;
+    node->next = old_head;
     node->prev = (br_simple_node**)&list->head;
-    if (list->head != NULL) {
-        list->head->prev = &node->next;
+    if (old_head != NULL) {
+        old_head->prev = &node->next;
     }
     list->head = node;
 }
@@ -106,6 +111,7 @@ br_simple_node* C2_HOOK_CDECL BrSimpleRemHead(br_simple_list* list) {
     return node;
 }
 
+// C2PORT-NONMATCHING: best 17.39% | difftest PASS 2000 trials (spec 00529aa0_BrSimpleInsert.json) | reason VC5 schedules linked-list stores differently
 // FUNCTION: CARMA2_HW 0x00529aa0
 void C2_HOOK_CDECL BrSimpleInsert(br_simple_list* list, br_simple_node* here, br_simple_node* node) {
 

@@ -142,13 +142,19 @@ extern void C2_HOOK_FASTCALL SetTrafficOn(int pTraffic_on);
 
 // LoadPerRaceDroneStuff
 
-// GetDroneCrushData
+tDrone_crush_data* C2_HOOK_FASTCALL GetDroneCrushData(tPhysics_object* pObject);
 
 // AllocateAndInitDrones
 
 // LoadInDronePaths
 
 void C2_HOOK_FASTCALL DronePreCollisionStuff(void);
+
+void C2_HOOK_FASTCALL SelectNextDrone(void);
+
+void C2_HOOK_FASTCALL SelectNearestDrone(void);
+
+void C2_HOOK_FASTCALL ShowDronePaths(void);
 
 // DoDronePerGameFrameStuff
 
@@ -174,7 +180,8 @@ void C2_HOOK_FASTCALL SetDroneRender(int pIndex, int pRender);
 
 // ApplyDroneCornerPos2
 
-// ReallocModelFacesAndVertices
+// FUNCTION: CARMA2_HW 0x00452f40
+void C2_HOOK_FASTCALL FUN_00452f40(br_model* pModel, int pFace_count, int pVertex_count);
 
 // CalcNFacesAndVerticesInEditModel
 
@@ -204,6 +211,8 @@ extern tPhysics_object* gList_collision_infos;
 extern int gDrones_unmodified;
 
 extern int gCount_rendered_drones;
+
+extern float gDrone_render_zero;
 
 extern int gCurrent_selected_drone;
 
@@ -243,7 +252,11 @@ extern int gSelected_edit_drone_path;
 
 extern tU32 gNext_drone_edit_path_munge;
 
+extern tDrone_crush_data gDrone_crush_data;
+
 extern int gSelected_drone_path_index;
+
+extern int gSelected_drone_form_index;
 
 void C2_HOOK_CDECL DoNotDprintf(const char* message, ...);
 
@@ -293,9 +306,11 @@ int C2_HOOK_FASTCALL DroneOrientationChanged(tDrone_spec* pDrone, float pDot);
 
 void C2_HOOK_FASTCALL ProcessThisDrone(int pIndex);
 
-void C2_HOOK_FASTCALL InitialiseEditModelsEtc(void);
+int C2_HOOK_FASTCALL InitialiseEditModelsEtc(void);
 
 void C2_HOOK_FASTCALL UpdateEditModels(void);
+
+void C2_HOOK_FASTCALL WriteOutDronePaths(void);
 
 void C2_HOOK_FASTCALL DoDronePerGameFrameStuff(void);
 
@@ -348,6 +363,10 @@ void C2_HOOK_FASTCALL StartRenderingThisDrone(tDrone_spec* pDrone);
 br_vector3* C2_HOOK_FASTCALL GetCurrentViewDroneDirection(void);
 
 void C2_HOOK_FASTCALL MoveMyDroneBaby(tPhysics_object* pObject, undefined4 pArg2);
+
+void C2_HOOK_FASTCALL DronePhysicsWarning(tPhysics_object* pObject);
+
+void C2_HOOK_FASTCALL DroneNoOp(void);
 
 int C2_HOOK_FASTCALL MyDroneHathCollideth(tPhysics_object* pObject, tPhysics_object* pOther);
 

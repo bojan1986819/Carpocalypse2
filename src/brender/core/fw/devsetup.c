@@ -58,21 +58,22 @@ br_error C2_HOOK_CDECL BrDevBegin(br_pixelmap** ppm, const char* setup_string) {
     return BrDevBeginTV(ppm, setup_string, NULL);
 }
 
+// C2PORT-NONMATCHING: best 63.17% | difftest PASS 2000 trials (spec difftest/specs/00528e10_BrDevBeginTV.json) | reason trim-loop/register-allocation/stack-layout; spec exercises trimmed lookup failure path with device callbacks stubbed
 // FUNCTION: CARMA2_HW 0x00528e10
 br_error C2_HOOK_CDECL BrDevBeginTV(br_pixelmap** ppm, const char* setup_string, br_token_value* setup_tv) {
-    char str[512];
+    br_token_value* tv;
     char* args;
+    br_device* device;
     char* devname;
     char* devargs;
+    br_output_facility* output_facility;
+    br_pixelmap* screen;
+    br_token_value args_tv[64];
+    char str[512];
     char devices_str[512];
     char* device_name;
     char* device_args;
     char* next_device;
-    br_token_value args_tv[64];
-    br_token_value* tv;
-    br_output_facility* output_facility;
-    br_device* device;
-    br_pixelmap* screen;
     int i;
     int n;
     br_error r;
@@ -93,10 +94,17 @@ br_error C2_HOOK_CDECL BrDevBeginTV(br_pixelmap** ppm, const char* setup_string,
     for (devname = str; BrIsSpace(*devname); devname++) {
     }
     n = BrStrLen(devname);
-    /* Fix to avoid writing to negative indices */
-    while (n != 0 && BrIsSpace(devname[n - 1])) {
-        devname[n - 1] = '\0';
-        n--;
+    if (n != 0) {
+        char* end = devname + n;
+        char* last = end - 1;
+        int is_space = BrIsSpace((int)end[-1]);
+        while (is_space != 0) {
+            n--;
+            *last = '\0';
+            end--;
+            last = end - 1;
+            is_space = BrIsSpace((int)*last);
+        }
     }
     if (n == 0 || (n == 1 && devname[0] == '*')) {
         if (*args != '\0' && BrStringToTokenValue(args_tv, sizeof(args_tv), args) == 0) {
@@ -149,7 +157,6 @@ br_error C2_HOOK_CDECL BrDevBeginTV(br_pixelmap** ppm, const char* setup_string,
                         device_name++;
                     }
                     n = BrStrLen(device_name);
-                    /* Fix to avoid writing to negative indices */
                     while (n != 0 && BrIsSpace(device_name[n - 1])) {
                         device_name[n - 1] = '\0';
                         n--;

@@ -28,6 +28,8 @@ tU32 C2_HOOK_FASTCALL PDNetExtractGameID(tNet_game_details* pDetails);
 
 tPlayer_ID C2_HOOK_FASTCALL PDNetExtractPlayerID(tNet_game_details* pDetails);
 
+void C2_HOOK_FASTCALL PDNetSetPlayerSystemInfo(tPD_net_player_info* pPlayer_info, const void* pSender_address);
+
 // PDNetObtainSystemUserName
 
 // PDNetSendMessageToAddress

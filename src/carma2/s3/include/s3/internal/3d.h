@@ -22,6 +22,9 @@ void C2_HOOK_FASTCALL S3CopyBrVector3(br_vector3* pDest, br_vector3* pSrc);
 
 void C2_HOOK_FASTCALL S3CopyS3Vector3(tS3_vector3* pDest, tS3_vector3* pSrc);
 
+void C2_HOOK_FASTCALL S3BindListenerPosition(tS3_vector3* pos);
+void C2_HOOK_FASTCALL S3SetListenerPositionNow(br_vector3* pPos);
+void C2_HOOK_FASTCALL S3SetListenerLeftNow(br_vector3* pLeft);
 void C2_HOOK_FASTCALL S3BindListenerPositionBRender(br_vector3* pos);
 
 void C2_HOOK_FASTCALL S3BindListenerVelocityBRender(br_vector3* vel);

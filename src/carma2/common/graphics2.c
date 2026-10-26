@@ -13,7 +13,6 @@
 #include "carpocalypse2_types.h"
 #include "carpocalypse2_macros.h"
 extern void C2_HOOK_FASTCALL FadePaletteUp(void);
-extern void C2_HOOK_FASTCALL DeallocateTransientBitmap(int pIndex);
 extern void C2_HOOK_FASTCALL SetTintedPolySize(int pIndex, int pX, int pY, int pW, int pH);
 extern void C2_HOOK_FASTCALL TurnTintedPolyOn(int pIndex);
 extern void C2_HOOK_FASTCALL TurnTintedPolyOff(int pIndex);
@@ -28,6 +27,7 @@ extern tTintedPoly gTintedPolys[10];
 extern tGraf_spec gGraf_specs[2];
 extern int gNoTransients;
 
+// GLOBAL: CARMA2_HW 0x0067c390
 int gMouse_started;
 tMouse_coord gMouse_last_pos;
 int gNext_transient;
@@ -72,6 +72,9 @@ int gCursor_tinted_bottom = -1;
 int gCursor_tinted_right = -1;
 int gCursor_tinted_center = -1;
 
+// GLOBAL: CARMA2_HW 0x0068b920
+tU16 gPixelmap_copy_buffer[640];
+
 // GLOBAL: CARMA2_HW 0x0068be20
 br_pixelmap* gCurrent_splash;
 
@@ -79,7 +82,11 @@ void C2_HOOK_FASTCALL DeallocateAllTransientBitmaps(void) {
     int i;
 
     for (i = 0; i < CARPOCALYPSE2_ASIZE(gTransient_bitmaps); i++) {
-        DeallocateTransientBitmap(i);
+        if (gTransient_bitmaps[i].pixmap != NULL) {
+            BrPixelmapFree(gTransient_bitmaps[i].pixmap);
+            gTransient_bitmaps[i].pixmap = NULL;
+            gTransient_bitmaps[i].in_use = 0;
+        }
     }
 }
 
@@ -147,6 +154,7 @@ void C2_HOOK_FASTCALL SetFadedPalette(unsigned int pDegree) {
     DRSetPalette2(gScratch_palette, 0);
 }
 
+// C2PORT-NONMATCHING: best 49.2% | difftest PASS 2000 trials (spec 004b55f0_Darken.json) | reason equivalent palette logic with VC5 register and instruction scheduling differences
 // FUNCTION: CARMA2_HW 0x004b55f0
 void C2_HOOK_FASTCALL Darken(void) {
     int i;
@@ -179,20 +187,33 @@ void C2_HOOK_FASTCALL Darken(void) {
 // FUNCTION: CARMA2_HW 0x004b5470
 void C2_HOOK_FASTCALL FadePaletteUp(void) {
     int i;
+    int j;
     int start_time;
     int the_time;
     br_pixelmap* pal;
+    br_pixelmap* scratch_pal;
 
     if (gFaded_palette) {
         gFaded_palette = 0;
         start_time = PDGetTotalTime();
-        while (1) {
-            the_time = PDGetTotalTime() - start_time;
-            if (the_time >= 500) {
-                break;
+        the_time = PDGetTotalTime() - start_time;
+        while (the_time < 500) {
+            i = (the_time << 8) / 500;
+            memcpy(gScratch_pixels, gCurrent_palette->pixels, 4 * 256);
+            for (j = 0; j < 4 * 256; j += 4) {
+                ((tU8*)gScratch_pixels)[j] = ((unsigned int)i * ((tU8*)gScratch_pixels)[j]) >> 8;
+                ((tU8*)gScratch_pixels)[j + 1] = ((unsigned int)i * ((tU8*)gScratch_pixels)[j + 1]) >> 8;
+                ((tU8*)gScratch_pixels)[j + 2] = ((unsigned int)i * ((tU8*)gScratch_pixels)[j + 2]) >> 8;
+                ((tU8*)gScratch_pixels)[j + 3] = ((unsigned int)i * ((tU8*)gScratch_pixels)[j + 3]) >> 8;
             }
-            i = (the_time * 256) / 500;
-            SetFadedPalette(i);
+            scratch_pal = gScratch_palette;
+            *((br_int_32*)scratch_pal->pixels) = 0;
+            gPalette_changed = 0;
+            if (!gFaded_palette) {
+                PDSetPalette(scratch_pal);
+            }
+            gPalette_munged |= scratch_pal != gRender_palette;
+            the_time = PDGetTotalTime() - start_time;
         }
         pal = gCurrent_palette;
         *((br_int_32*)pal->pixels) = 0;
@@ -461,73 +482,107 @@ void C2_HOOK_FASTCALL SplashScreenWith(const char* pPixmap_name) {
     }
 }
 
+// C2PORT-NONMATCHING: best 6.35% | difftest PASS 2000 trials (spec 0047ba80_DRPixelmapRectangleMaskedCopy.json) | reason repaired negative and right-edge clipping offsets
 // FUNCTION: CARMA2_HW 0x0047ba80
 void C2_HOOK_FASTCALL DRPixelmapRectangleMaskedCopy(br_pixelmap* pDest, br_int_16 pDest_x, br_int_16 pDest_y, const br_pixelmap* pSource, br_int_16 pSource_x, br_int_16 pSource_y, br_int_16 pWidth, br_int_16 pHeight) {
-    int y_count;
-    int x_count;
+    int y;
+    int x;
     int dest_row_wrap;
     int source_row_wrap;
     tU16 the_byte;
     tU16* source_ptr;
     tU16* dest_ptr;
+    int dest_x;
+    int dest_y;
 
-    source_ptr = (tU16*)((tU8*)pSource->pixels + pSource->row_bytes * pSource_y) + pSource_x;
-    dest_ptr = (tU16*)((tU8*)pDest->pixels + pDest->row_bytes * pDest_y + pDest->base_x) + pDest_x;
+    source_ptr = (tU16*)pSource->pixels + pSource->row_bytes * pSource_y / sizeof(tU16) + pSource_x;
+    dest_x = pDest_x;
+    dest_y = pDest_y;
+    dest_ptr = (tU16*)pDest->pixels + dest_y * pDest->row_bytes / sizeof(tU16) + pDest->base_x / sizeof(tU16) + dest_x;
     source_row_wrap = pSource->row_bytes / sizeof(tU16) - pWidth;
     dest_row_wrap = pDest->row_bytes / sizeof(tU16) - pWidth;
 
-    if (pDest_y < 0) {
-        pHeight += pDest_y;
+    if (dest_y < 0) {
+        pHeight += dest_y;
         if (pHeight <= 0) {
             return;
         }
-        source_ptr = (tU16*)((tU8*)source_ptr - pDest_y * pSource->row_bytes);
-        dest_ptr = (tU16*)((tU8*)dest_ptr - pDest_y * pDest->row_bytes);
-        pDest_y = 0;
+        source_ptr -= dest_y * pSource->row_bytes / sizeof(tU16);
+        dest_ptr -= dest_y * pDest->row_bytes / sizeof(tU16);
+        dest_y = 0;
     }
-    if (pDest_y >= pDest->height) {
-        return;
-    }
-    if (pDest_y + pHeight > pDest->height) {
-        pHeight = pDest->height - pDest_y;
-    }
-    if (pDest_x < 0) {
-        pWidth += pDest_x;
-        if (pWidth <= 0) {
-            return;
+    if (dest_y < pDest->height) {
+        if (pDest->height < dest_y + pHeight) {
+            pHeight = pDest->height - dest_y;
         }
-        source_ptr -= pDest_x;
-        dest_ptr -= pDest_x;
-        source_row_wrap -= pDest_x;
-        dest_row_wrap -= pDest_x;
-        pDest_x = 0;
-    }
-    if (pDest_x >= pDest->width) {
-        return;
-    }
-    if (pDest_x + pWidth > pDest->width) {
-        source_row_wrap += pDest_x + pWidth - pDest->width;
-        dest_row_wrap += pDest_x + pWidth - pDest->width;
-        pWidth = pDest->width - pDest_x;
-    }
-    for (y_count = 0; y_count < pHeight; y_count++) {
-        for (x_count = 0; x_count < pWidth; x_count++) {
-            the_byte = *source_ptr;
-            if (the_byte != 0) {
-                *dest_ptr = the_byte;
+        if (dest_x < 0) {
+            pWidth += dest_x;
+            if (pWidth <= 0) {
+                return;
             }
-            source_ptr++;
-            dest_ptr++;
+            source_ptr -= dest_x;
+            dest_ptr -= dest_x;
+            source_row_wrap -= dest_x;
+            dest_row_wrap -= dest_x;
+            dest_x = 0;
         }
-        source_ptr += source_row_wrap;
-        dest_ptr += dest_row_wrap;
+        if (dest_x < pDest->width) {
+            if (dest_x + pWidth > pDest->width) {
+                source_row_wrap += pWidth + dest_x - pDest->width;
+                dest_row_wrap += pWidth + dest_x - pDest->width;
+                pWidth -= pWidth + dest_x - pDest->width;
+            }
+            for (y = 0; y < pHeight; y++) {
+                for (x = 0; x < pWidth; x++) {
+                    the_byte = *source_ptr;
+                    if (the_byte != 0) {
+                        *dest_ptr = the_byte;
+                    }
+                    source_ptr++;
+                    dest_ptr++;
+                }
+                source_ptr += source_row_wrap;
+                dest_ptr += dest_row_wrap;
+            }
+        }
     }
 }
 
 // FUNCTION: CARMA2_HW 0x0047bc40
-void C2_HOOK_FASTCALL DRPixelmapBlit(br_int_16 pX, br_int_16 pY, const br_pixelmap* pSource) {
+void C2_HOOK_FASTCALL DRMaskedStamp(br_int_16 pDest_x, br_int_16 pDest_y, const br_pixelmap* pSource) {
+    DRPixelmapRectangleMaskedCopy(gBack_screen, pDest_x, pDest_y, pSource, 0, 0, pSource->width, pSource->height);
+}
 
-    DRPixelmapRectangleMaskedCopy(gBack_screen, pX, pY, pSource, 0, 0, pSource->width, pSource->height);
+// C2PORT-NONMATCHING: best 76.19% | difftest PASS 2000 trials (spec difftest/specs/0047bc80_FUN_0047bc80.json) | reason regalloc-loop
+// FUNCTION: CARMA2_HW 0x0047bc80
+void C2_HOOK_FASTCALL FUN_0047bc80(br_pixelmap* pDest, br_int_16 pDest_x, br_int_16 pDest_y, const br_pixelmap* pSource, br_int_16 pSource_x, br_int_16 pSource_y, br_int_16 pWidth, br_int_16 pHeight) {
+    int x;
+    int y;
+    int dest_row_wrap;
+    int source_row_wrap;
+    int row_bytes;
+    tS16 pixel;
+    tS16* source_ptr;
+    tS16* dest_ptr;
+
+    row_bytes = (br_int_16)pSource->row_bytes;
+    source_ptr = (tS16*)pSource->pixels + (pSource_y * row_bytes / 2 + pSource_x);
+    row_bytes = (br_int_16)pDest->row_bytes;
+    dest_ptr = (tS16*)pDest->pixels + (pDest_y * row_bytes / 2 + pDest_x);
+    source_row_wrap = ((br_int_16)pSource->row_bytes) / 2 - pWidth;
+    dest_row_wrap = ((br_int_16)pDest->row_bytes) / 2 - pWidth;
+
+    for (y = 0; y < pHeight; y++) {
+        for (x = 0; x < pWidth; x++) {
+            pixel = *source_ptr++;
+            if (pixel != 0) {
+                *dest_ptr = pixel;
+            }
+            dest_ptr++;
+        }
+        dest_ptr += dest_row_wrap;
+        source_ptr += source_row_wrap;
+    }
 }
 
 // DRMaskedStamp
@@ -569,6 +624,35 @@ void C2_HOOK_FASTCALL EnableLights(void) {
     for (i = 0; i < gNumber_of_lights; i++) {
         BrLightEnable(gLight_array[i]);
     }
+}
+
+// C2PORT-NONMATCHING: best 50.00% | difftest PASS 2000 trials (spec difftest/specs/0047d700_FUN_0047d700.json) | reason regalloc-copy-loop
+// FUNCTION: CARMA2_HW 0x0047d700
+void C2_HOOK_FASTCALL FUN_0047d700(br_pixelmap* pDest, const br_pixelmap* pSource, unsigned int pArg3, unsigned int pDest_y, unsigned int pWidth, unsigned int pHeight) {
+    const tU16* source_ptr;
+    tU16* dest_ptr;
+    unsigned int x;
+    unsigned int y;
+
+    y = 0;
+    if ((pHeight & 0xffff) != 0) {
+        pDest_y &= 0xffff;
+        pWidth &= 0xffff;
+        pHeight &= 0xffff;
+        do {
+            source_ptr = (const tU16*)((const tU8*)pSource->pixels + y * pSource->row_bytes);
+            dest_ptr = (tU16*)((tU8*)pDest->pixels + pDest_y * pDest->row_bytes);
+            if (pWidth != 0) {
+                for (x = 0; x < pWidth; x++) {
+                    gPixelmap_copy_buffer[x] = source_ptr[x];
+                }
+            }
+            memcpy(dest_ptr, gPixelmap_copy_buffer, pWidth * sizeof(tU16));
+            y++;
+            pDest_y++;
+        } while (y < pHeight);
+    }
+    (void)pArg3;
 }
 
 // FUNCTION: CARMA2_HW 0x0047c650
@@ -615,18 +699,37 @@ void C2_HOOK_FASTCALL DRSetPalette(br_pixelmap* pThe_palette) {
     gPalette_munged |= (pThe_palette != gRender_palette);
 }
 
+// FUNCTION: CARMA2_HW 0x004b5230
+void C2_HOOK_FASTCALL DRSetPaletteByName(const char* pPalette_name) {
+    br_pixelmap* palette;
+
+    palette = BrTableFind(pPalette_name);
+    if (palette != NULL) {
+        ((br_int_32*)palette->pixels)[0] = 0;
+        memcpy(gCurrent_palette_pixels, palette->pixels, 256 * sizeof(br_colour));
+        gPalette_changed = 0;
+        if (!gFaded_palette) {
+            PDSetPalette(palette);
+        }
+        gPalette_munged |= (palette != gRender_palette);
+    }
+}
+
 
 // FUNCTION: CARMA2_HW 0x0043dff0
 void C2_HOOK_FASTCALL InitTransientBitmaps(void) {
-    int i;
+    int* pIn_use;
 
     C2_HOOK_BUG_ON(CARPOCALYPSE2_ASIZE(gTransient_bitmaps) != 50);
     C2_HOOK_BUG_ON(sizeof(tTransient_bm) != 0x18);
     C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tTransient_bm, in_use, 4);
 
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gTransient_bitmaps); i++) {
-        gTransient_bitmaps[i].in_use = 0;
-    }
+    pIn_use = &gTransient_bitmaps[0].in_use;
+    do {
+        pIn_use[-1] = 0;
+        *pIn_use = 0;
+        pIn_use += 6;
+    } while ((int)pIn_use < (int)((char*)gTransient_bitmaps + sizeof(gTransient_bitmaps) + sizeof(int)));
 }
 
 // FUNCTION: CARMA2_HW 0x004e9b10
@@ -661,11 +764,16 @@ void C2_HOOK_FASTCALL InitPaletteAnimate(void) {
 }
 
 
-void C2_HOOK_FASTCALL DeallocateTransientBitmap(int pIndex) {
+// C2PORT-NONMATCHING: best 100% | difftest PASS 2000 trials (spec difftest/specs/0043dfd0_DeallocateTransientBitmap.json) | reason replaced misplaced bitmap body with network-shape status loop
+// FUNCTION: CARMA2_HW 0x0043dfd0
+void C2_HOOK_FASTCALL MarkNetworkShapeStatusesDirty(tCar_crush_network_shapes* pShapes) {
+    int i;
 
-    if (gTransient_bitmaps[pIndex].pixmap != NULL) {
-        BrPixelmapFree(gTransient_bitmaps[pIndex].pixmap);
-        gTransient_bitmaps[pIndex].pixmap = NULL;
-        gTransient_bitmaps[pIndex].in_use = 0;
+    if (pShapes != NULL) {
+        for (i = 0; i < 12; i++) {
+            if (pShapes->items[i].network_id != 0) {
+                pShapes->items[i].field_0x4 = 1;
+            }
+        }
     }
 }

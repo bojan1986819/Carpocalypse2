@@ -329,6 +329,7 @@ br_error C2_HOOK_CDECL _M_br_device_pixelmap_gen_line(br_device_pixelmap* self, 
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 89.84% | difftest PASS 2000 trials (spec difftest/specs/0053d660_pixelmap_gen_text.json) | reason signed-char-indexing-loop-codegen
 // FUNCTION: CARMA2_HW 0x0053d660
 br_error C2_HOOK_CDECL _M_br_device_pixelmap_gen_text(br_device_pixelmap* self, br_point* point, br_font* font, const char* text, br_uint_32 colour) {
     br_rectangle r;
@@ -339,48 +340,44 @@ br_error C2_HOOK_CDECL _M_br_device_pixelmap_gen_text(br_device_pixelmap* self, 
 
     x = point->x + self->pm_origin_x;
     y = point->y + self->pm_origin_y;
-
-    if (y <= -font->glyph_y || y >= self->pm_height || x >= self->pm_width) {
-        return 0;
-    }
-
-    p.x = point->x;
-    p.y = point->y;
-
-    r.x = 0;
-    r.y = 0;
-    r.h = font->glyph_y;
-
-    if (font->flags & BR_FONTF_VARIABLE_WIDTH) {
-        for (;*text != '\0'; text++) {
-            r.w = font->width[*(br_uint_8*)text];
+    if (y > -font->glyph_y && y < self->pm_height && x < self->pm_width) {
+        p.x = point->x;
+        p.y = point->y;
+        r.x = 0;
+        r.y = 0;
+        r.h = font->glyph_y;
+        if (font->flags & BR_FONTF_VARIABLE_WIDTH) {
+            for (; *text != '\0'; text++) {
+                r.w = font->width[*text];
+                s_stride = (r.w + 7) / 8;
+                if (x + r.w > 0) {
+                    self->dispatch->_copyBits(self, &p, &font->glyphs[font->encoding[*text]], s_stride, &r, colour);
+                }
+                x += r.w + 1;
+                p.x += r.w + 1;
+                if (x > self->pm_width) {
+                    break;
+                }
+            }
+        } else {
+            r.w = font->glyph_x;
             s_stride = (r.w + 7) / 8;
-            if (x + r.w > 0) {
-                self->dispatch->_copyBits(self, &p, &font->glyphs[font->encoding[*(br_uint_8*)text]], s_stride, &r, colour);
-            }
-            x += r.w + 1;
-            p.x += r.w + 1;
-            if (x > self->pm_width) {
-                break;
-            }
-        }
-    } else {
-        r.w = font->glyph_x;
-        s_stride = (r.w + 7) / 8;
-        for (; *text != '\0'; text++) {
-            if (x + r.w > 0) {
-                self->dispatch->_copyBits(self, &p, &font->glyphs[font->encoding[*(br_uint_8*)text]], s_stride, &r, colour);
-            }
-            x += r.w + 1;
-            p.x += r.w  + 1;
-            if (x > self->pm_width) {
-                break;
+            for (; *text != '\0'; text++) {
+                if (x + r.w > 0) {
+                    self->dispatch->_copyBits(self, &p, &font->glyphs[font->encoding[*text]], s_stride, &r, colour);
+                }
+                x += r.w + 1;
+                p.x += r.w + 1;
+                if (x > self->pm_width) {
+                    break;
+                }
             }
         }
     }
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 44.66% | difftest PASS 2000 trials (spec difftest/specs/0053d810_pixelmap_gen_textBounds.json) | reason signed-byte indexing and loop codegen
 // FUNCTION: CARMA2_HW 0x0053d810
 br_error C2_HOOK_CDECL _M_br_device_pixelmap_gen_textBounds(br_device_pixelmap* self, br_rectangle* rect, br_font* font, const char* text) {
     int i;
@@ -399,7 +396,7 @@ br_error C2_HOOK_CDECL _M_br_device_pixelmap_gen_textBounds(br_device_pixelmap* 
     }
     j = BrStrLen(text);
     for (i = 0; i < j; i++) {
-        rect->w += font->width[(br_uint_8)text[i]] + 1;
+        rect->w += font->width[(br_int_8)text[i]] + 1;
     }
     rect->w -= 1;
     return 0;

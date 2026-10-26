@@ -1,2 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Vita scripts run through WSL/Linux, including Windows checkouts.
+scripts/packaging/*.sh text eol=lf
+scripts/packaging/*.py text eol=lf
+scripts/packaging/vitagl-patches/*.patch text eol=lf

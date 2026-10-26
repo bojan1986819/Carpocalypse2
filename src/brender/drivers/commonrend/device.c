@@ -91,13 +91,7 @@ static const br_token insignificantMatchTokens[] = {
  *
  * makes a copy of token/value list
  */
-struct token_match {
-    br_token_value* original;
-    br_token_value* query;
-    br_int_32 n;
-    void* extra;
-    br_size_t extra_size;
-};
+/* struct token_match comes from our br_types.h */
 
 br_device* BREND_FN(Device, Allocate)(const char* identifier, const char* arguments) {
     br_device* self;

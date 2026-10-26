@@ -1,9 +1,11 @@
 #include "interface-wrecks.h"
 
 #include "interface.h"
+#include "interface-main.h"
+#include "frontend_wrecks.h"
+
 // GLOBAL: CARMA2_HW 0x005f8e68
 tFrontend_spec gFrontend_WRECKS = {
-#if 0 // FIXME: enable this
     "Wrecks",
     0,
     12,
@@ -31,7 +33,4 @@ tFrontend_spec gFrontend_WRECKS = {
         { 0x7,   temp,              NULL, 1, 0, 0, 0, 0, 0, 0, 1, 1, },
         { 0x402, temp,              NULL, 0, 0, 0, 0, 0, 0, 0, 1, 1, },
     }
-#else
-    0
-#endif
 };

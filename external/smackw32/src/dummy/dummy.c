@@ -83,3 +83,7 @@ void SMACK_STDCALL SmackBlitClose(HSMACKBLIT hBlit) {
 void SMACK_STDCALL SmackClose(HSMACK hSmack) {
     (void)hSmack;
 }
+
+void SmackSetAudioSink(const SmackAudioSink* sink) {
+    (void)sink;
+}

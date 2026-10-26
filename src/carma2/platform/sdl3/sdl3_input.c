@@ -1,6 +1,9 @@
 #include "sdl3_input.h"
 
 #include "sdl3.h"
+#ifdef __vita__
+#include "vita_controls.h"
+#endif
 
 #include "globvars.h"
 #include "joystick.h"
@@ -11,6 +14,62 @@ int gASCII_table[151];
 int gASCII_shift_table[151];
 int gScan_code[SDL_SCANCODE_COUNT];
 int gJoystick_deadzone = 8000;
+
+/* Port test harness: C2_TEST_KEYS="7:Return;10:Return;20:Keypad 8:hold" presses keys (SDL scancode
+ * names) at the given seconds after start, for 0.15 s or the given duration ("hold" = until exit).
+ * The input stays inside this process, so tests need neither window focus nor global key events. */
+#define TEST_KEY_EVENTS 64
+static struct { Uint64 start_ms, end_ms; SDL_Scancode code; int logged; } test_keys[TEST_KEY_EVENTS];
+static int test_key_count = -1;
+static Uint64 test_key_origin;
+static void parse_test_keys(void) {
+    const char* spec = SDL_getenv("C2_TEST_KEYS");
+    char buffer[1024];
+    char* item;
+    char* save = NULL;
+    test_key_count = 0;
+    test_key_origin = SDL_GetTicks();
+    if (spec == NULL) return;
+    SDL_strlcpy(buffer, spec, sizeof(buffer));
+    for (item = SDL_strtok_r(buffer, ";", &save); item != NULL && test_key_count < TEST_KEY_EVENTS;
+            item = SDL_strtok_r(NULL, ";", &save)) {
+        char* fields[3] = { NULL, NULL, NULL };
+        char* save2 = NULL;
+        char* f;
+        int n = 0;
+        double at, duration = 0.15;
+        for (f = SDL_strtok_r(item, ":", &save2); f != NULL && n < 3; f = SDL_strtok_r(NULL, ":", &save2)) fields[n++] = f;
+        if (n < 2) continue;
+        at = SDL_atof(fields[0]);
+        if (n == 3) duration = SDL_strcmp(fields[2], "hold") == 0 ? 1e9 : SDL_atof(fields[2]);
+        test_keys[test_key_count].code = SDL_GetScancodeFromName(fields[1]);
+        if (test_keys[test_key_count].code == SDL_SCANCODE_UNKNOWN) {
+            SDL_Log("C2_TEST_KEYS: unknown key '%s'", fields[1]);
+            continue;
+        }
+        test_keys[test_key_count].start_ms = (Uint64)(at * 1000.0);
+        test_keys[test_key_count].end_ms = (Uint64)((at + duration) * 1000.0);
+        ++test_key_count;
+    }
+}
+static const bool* apply_test_keys(const bool* real, int num_keys) {
+    static bool merged[SDL_SCANCODE_COUNT];
+    Uint64 now;
+    int i;
+    if (test_key_count < 0) parse_test_keys();
+    if (test_key_count == 0 || num_keys > SDL_SCANCODE_COUNT) return real;
+    SDL_memcpy(merged, real, (size_t)num_keys * sizeof(bool));
+    now = SDL_GetTicks() - test_key_origin;
+    for (i = 0; i < test_key_count; ++i)
+        if (now >= test_keys[i].start_ms && now < test_keys[i].end_ms) {
+            merged[test_keys[i].code] = true;
+            if (!test_keys[i].logged) {
+                test_keys[i].logged = 1;
+                { extern void C2_HOOK_CDECL dr_dprintf(const char*, ...); dr_dprintf("C2_TEST_KEYS: %s down at %u ms", SDL_GetScancodeName(test_keys[i].code), (unsigned)now); }
+            }
+        }
+    return merged;
+}
 
 void Win32InitInputDevice(void) {
 }
@@ -218,12 +277,16 @@ void C2_HOOK_FASTCALL PDSetKeyArray(int *pKeys, int pMark) {
 
     gKeys_pressed = 0;
     SDL3ServiceMessages();
-    keyboard_state = SDL_GetKeyboardState(&num_keys);
+    keyboard_state = SDL_GetKeyboardState(&num_keys); /* sets num_keys first */
+    keyboard_state = apply_test_keys(keyboard_state, num_keys);
     for (i = 0; i < 151; i++) {
         int scan_code;
 
         scan_code = gScan_code[12 + i];
         if (scan_code == 0) {
+#ifdef __vita__
+            if (pKeys[i] == pMark) pKeys[i] = 0;
+#endif
             continue;
         }
         if (scan_code == 0xff) {
@@ -262,6 +325,9 @@ void C2_HOOK_FASTCALL PDSetKeyArray(int *pKeys, int pMark) {
             }
         }
     }
+#ifdef __vita__
+    C2VitaReadKeys(pKeys,pMark);
+#endif
 }
 
 void C2_HOOK_FASTCALL PDReadJoysticks(void) {
@@ -368,10 +434,6 @@ void C2_HOOK_FASTCALL FUN_0045a0c0(void) {
 void C2_HOOK_FASTCALL PDPlayFFBEffect(const char* effectName) {
 }
 
-int C2_HOOK_FASTCALL PDIsJoystickAvailable(int pIndex) {
-    return pIndex >= 0 && pIndex < g_Count_Joystick_infos;
-}
-
 int C2_HOOK_FASTCALL PDIsJoystickDPadEnabled(void) {
     return 0;
 }
@@ -395,16 +457,11 @@ int C2_HOOK_FASTCALL IncreaseJoystickFFBGain(void) {
     return 0;
 }
 
-int C2_HOOK_FASTCALL PDEnableJoysticks(void) {
-    return 0;
+void C2_HOOK_FASTCALL FUN_0045a070(void) {
 }
 
 tButtonJoystickInfo* C2_HOOK_FASTCALL PDGetCurrentJoystickData(void) {
     return NULL;
-}
-
-const char* C2_HOOK_FASTCALL GetCurrentJoystickName(void) {
-    return "";
 }
 
 tU32 C2_HOOK_FASTCALL PDGetJoystickButtonStates(void) {

@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 
+// C2PORT-NONMATCHING: best 46.63% | difftest PASS 2000 trials (spec difftest/specs/00529860_BrNamePatternMatch.json) | reason jump-table-char-dispatch
 // FUNCTION: CARMA2_HW 0x00529860
 br_boolean C2_HOOK_CDECL BrNamePatternMatch(const char* p, const char* s) {
     const char* cp;

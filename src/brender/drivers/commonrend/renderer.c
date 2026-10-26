@@ -11,6 +11,9 @@
 #include "commonrend.h"
 #include <string.h>
 #include <math.h>
+#if defined(BREND_DRIVER_GL)
+#include "transparency.h"
+#endif
 
 /*
  * Default dispatch table for renderer (defined at end of file)
@@ -59,6 +62,10 @@ br_renderer* BREND_FN(Renderer, Allocate)(br_device* device, br_renderer_facilit
     RendererStateDefault(self, (br_uint_32)BR_STATE_ALL);
 
     self->has_begun = 0;
+#if defined(BREND_DRIVER_GL)
+    self->transparent_head = NULL;
+    self->transparent_vao = self->transparent_vbo = self->transparent_ibo = 0;
+#endif
     dest->renderer = self;
     return (br_renderer*)self;
 }
@@ -114,21 +121,25 @@ static void BREND_CMETHOD_DECL(BREND_CLASS(br_renderer), sceneBegin)(br_renderer
 #if defined(BREND_DRIVER_GL)
     {
         extern int g_wireframe_mode;
-        br_uint_16 base_y = 0;
-        int x, y;
-        float rx, ry;
+
+        /* port: the 2D the game drew before this scene goes in first (this changes the
+         * program and viewport, so it comes before the scene's own GL setup) */
+        GLBackFlushOverlay(colour_target);
+        GLBackBindTarget(colour_target);
 
         glPolygonMode(GL_FRONT_AND_BACK, g_wireframe_mode ? GL_LINE : GL_FILL);
 
         glUseProgram(hVideo->brenderProgram.program);
         glBindBufferBase(GL_UNIFORM_BUFFER, hVideo->brenderProgram.blockBindingScene, hVideo->brenderProgram.uboScene);
-        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(self->state.cache.scene), &self->state.cache.scene);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, GL_SCENE_UNIFORM_BYTES, &self->state.cache.scene);
 
-        /* OpenGL upside downness: mirror sub-area base_y (shared with SDL3). */
-        base_y = RendererFlipBaseY(colour_target, screen->pm_height);
-
-        BREND_FN(DevicePixelmap, GetViewport)(colour_target->screen, &x, &y, &rx, &ry);
-        glViewport(colour_target->pm_base_x * rx + x, base_y * ry + y, colour_target->pm_width * rx, colour_target->pm_height * ry);
+        /* port: render into the back buffer's FBO (backbuf.c) at its render scale.
+         * OpenGL upside downness: mirror base_y. */
+        {
+            int vx,vy,vw,vh;
+            GLBackViewport(colour_target,&vx,&vy,&vw,&vh);
+            glViewport(vx,vy,vw,vh);
+        }
 
         /* Bind the model UBO here, it's faster than doing it for each model group */
         glBindBufferBase(GL_UNIFORM_BUFFER, hVideo->brenderProgram.blockBindingModel, hVideo->brenderProgram.uboModel);
@@ -154,7 +165,7 @@ static void BREND_CMETHOD_DECL(BREND_CLASS(br_renderer), sceneBegin)(br_renderer
          * ONCE PER FRAME (firstScene only): the mid-frame cockpit flush before
          * the pratcam also sets overlayDirty, but re-capturing then would
          * misclassify the racing HUD dims as overlay-primary and dim the yellow
-         * headup text. This capture is PROVISIONAL — a pre-scene flush is either
+         * headup text. This capture is PROVISIONAL â€” a pre-scene flush is either
          * a 2D-primary map image (kept) or a racing sky/fog fill (purged), and
          * they are told apart at the first model draw of this scene. */
         if (firstScene) {
@@ -311,6 +322,7 @@ static void BREND_CMETHOD_DECL(BREND_CLASS(br_renderer), sceneBegin)(br_renderer
 
 static void BREND_CMETHOD_DECL(BREND_CLASS(br_renderer), sceneEnd)(br_renderer* self) {
 #if defined(BREND_DRIVER_GL)
+    GLFlushTransparent(self);
     glDisable(GL_CULL_FACE);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
@@ -375,6 +387,9 @@ static void BREND_CMETHOD_DECL(BREND_CLASS(br_renderer), sceneEnd)(br_renderer* 
 static void BREND_CMETHOD_DECL(BREND_CLASS(br_renderer), free)(br_object* _self) {
     br_renderer* self = (br_renderer*)_self;
 
+#if defined(BREND_DRIVER_GL)
+    GLFreeTransparent(self);
+#endif
     BrPoolFree(self->state_pool);
 
     ObjectContainerRemove(self->renderer_facility, (br_object*)self);
@@ -462,7 +477,7 @@ static br_error BREND_CMETHOD_DECL(BREND_CLASS(br_renderer), bufferStoredAvail)(
     return BRE_FAIL;
 }
 
-static br_error BREND_CMETHOD_DECL(BREND_CLASS(br_renderer), partSet)(br_renderer* self, br_token part, br_int_32 index, br_token t, br_value value) {
+static br_error BREND_CMETHOD_DECL(BREND_CLASS(br_renderer), partSet)(br_renderer* self, br_token part, br_int_32 index, br_token t, uintptr_t value) {
     br_error r;
     br_uint_32 m;
     struct br_tv_template* tp;
@@ -470,6 +485,13 @@ static br_error BREND_CMETHOD_DECL(BREND_CLASS(br_renderer), partSet)(br_rendere
     if ((tp = BREND_FN(State, GetStateTemplate)(&self->state, part, index)) == NULL)
         return BRE_FAIL;
 
+#if defined(__vita__) && defined(BREND_DRIVER_GL)
+    /* Invalidate before token conversion, including partial/failed writes. */
+    if (part == BRT_LIGHT) {
+        extern void StateGLTouchLights(state_stack* state);
+        StateGLTouchLights(self->state.current);
+    }
+#endif
     m = 0;
     r = BrTokenValueSet(self->state.current, &m, t, value, tp);
 #if defined(BREND_DRIVER_GL)
@@ -489,6 +511,13 @@ static br_error BREND_CMETHOD_DECL(BREND_CLASS(br_renderer), partSetMany)(br_ren
     if ((tp = BREND_FN(State, GetStateTemplate)(&self->state, part, index)) == NULL)
         return BRE_FAIL;
 
+#if defined(__vita__) && defined(BREND_DRIVER_GL)
+    /* Invalidate before token conversion, including partial/failed writes. */
+    if (part == BRT_LIGHT) {
+        extern void StateGLTouchLights(state_stack* state);
+        StateGLTouchLights(self->state.current);
+    }
+#endif
     m = 0;
     r = BrTokenValueSetMany(self->state.current, pcount, &m, tv, tp);
 #if defined(BREND_DRIVER_GL)
@@ -776,8 +805,10 @@ static br_error BREND_CMETHOD_DECL(BREND_CLASS(br_renderer), frameBegin)(br_rend
      * uncovered band at the world horizon (black against the cleared framebuffer). Depth
      * clamping disables far-plane clipping and clamps depth instead, so the horizon band
      * always rasterizes (clamped to max depth, staying behind terrain). */
+#ifndef __vita__
     glEnable(GL_DEPTH_CLAMP);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+#endif
+    /* port: the game clears its back/depth buffers itself (rectangleFill on the FBO) */
 #endif
     self->frame_stats.model_count = 0;
     return BRE_OK;

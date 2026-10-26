@@ -17,6 +17,7 @@
 #include "platform.h"
 #include "utility.h"
 #include "packfile.h"
+#include "world.h"
 
 #include "carpocalypse2_macros.h"
 
@@ -175,11 +176,10 @@ int gPDActionReplayBufferSize;
 HPALETTE gPDPalette;
 
 
-// GLOBAL: CARMA2_HW 0x0079ea84
-SYSTEM_INFO gSystem_info;
+extern SYSTEM_INFO gSystem_info;
 
 // GLOBAL: CARMA2_HW 0x0068c830
-DWORD gPage_size;
+DWORD gWin32_page_size;
 
 // GLOBAL: CARMA2_HW 0x00681fa0
 FILE *gActionReplayBufferFile;
@@ -342,6 +342,7 @@ int C2_HOOK_FASTCALL PDIsWindowInactive(void) {
     return gWindowActiveState == 1;
 }
 
+// C2PORT-NONMATCHING: best 47.06% | difftest PASS 2000 trials (spec 0051afe0_PDConvertToASCIILessThan128.json) | reason VC5 uses a different table-base address and logging setup
 // FUNCTION: CARMA2_HW 0x0051afe0
 char C2_HOOK_FASTCALL PDConvertToASCIILessThan128(char pChar) {
     if ((unsigned char) pChar >= 0x80) {
@@ -658,6 +659,13 @@ void C2_HOOK_FASTCALL PDScreenBufferSwap(int pRendering_area_only) {
     BrPixelmapDoubleBuffer(gScreen, gBack_screen);
 }
 
+// FUNCTION: CARMA2_HW 0x0051c540
+void C2_HOOK_FASTCALL PDRectangleCopy(br_pixelmap* dst, br_int_16 dx, br_int_16 dy, br_pixelmap* src, br_int_16 sx, br_int_16 sy, br_uint_16 w, br_uint_16 h) {
+    if (src != dst) {
+        BrPixelmapRectangleCopy(dst, dx, dy, src, sx, sy, w, h);
+    }
+}
+
 // FUNCTION: CARMA2_HW 0x0051d7c0
 void C2_HOOK_FASTCALL PDInitTimer(void) {
     LARGE_INTEGER freq;
@@ -670,34 +678,106 @@ void C2_HOOK_FASTCALL PDInitTimer(void) {
         gPerformanceCounterFrequency_s = freq;
         QueryPerformanceCounter(&current_count);
         gPerformanceCounterStart = current_count;
-        gPerformanceCounterFrequency_ms.QuadPart = gPerformanceCounterFrequency_s.QuadPart / 1000;
-        gPerformanceCounterFrequency_us.QuadPart = gPerformanceCounterFrequency_s.QuadPart / 1000000;
+        gPerformanceCounterFrequency_ms.QuadPart = (unsigned __int64)gPerformanceCounterFrequency_s.QuadPart / 1000;
+        gPerformanceCounterFrequency_us.QuadPart = (unsigned __int64)gPerformanceCounterFrequency_s.QuadPart / 1000000;
     }
 }
 
+#pragma optimize("y", off)
 // FUNCTION: CARMA2_HW 0x0051d410
 tU32 C2_HOOK_FASTCALL PDGetTotalTime(void) {
     LARGE_INTEGER perfCountValue;
-    LARGE_INTEGER delta;
+    unsigned __int64 elapsed;
+    volatile int shift;
 
     if (gPerformanceCounterInitialized) {
         QueryPerformanceCounter(&perfCountValue);
-        delta.QuadPart = perfCountValue.QuadPart - gPerformanceCounterStart.QuadPart;
-        return (tU32) (delta.QuadPart / gPerformanceCounterFrequency_ms.QuadPart);
+        elapsed = perfCountValue.HighPart;
+        shift = 0x10;
+        elapsed <<= shift;
+        elapsed <<= shift;
+        elapsed += perfCountValue.LowPart;
+        elapsed -= (unsigned __int64)gPerformanceCounterStart.QuadPart;
+        return (tU32)(elapsed / (unsigned __int64)gPerformanceCounterFrequency_ms.QuadPart);
+    }
+    return 0;
+}
+#pragma optimize("y", on)
+
+#pragma optimize("y", off)
+// FUNCTION: CARMA2_HW 0x0051d990
+int C2_HOOK_FASTCALL PDGetMicroseconds(void) {
+    LARGE_INTEGER perfCountValue;
+    unsigned __int64 elapsed;
+    volatile int shift;
+
+    if (gPerformanceCounterInitialized) {
+        QueryPerformanceCounter(&perfCountValue);
+        elapsed = perfCountValue.HighPart;
+        shift = 0x10;
+        elapsed <<= shift;
+        shift = 0x10;
+        elapsed <<= shift;
+        elapsed += perfCountValue.LowPart;
+        elapsed -= (unsigned __int64)gPerformanceCounterStart.QuadPart;
+        // The original helper at 0x00578830 divides unsigned 64-bit values.
+        return (int)(elapsed / (unsigned __int64)gPerformanceCounterFrequency_us.QuadPart);
+    }
+    return 0;
+}
+#pragma optimize("y", on)
+
+// C2PORT-NONMATCHING: best 40.00% | difftest PASS 2000 trials (spec difftest/specs/0051d900_PDGetElapsedMilliseconds.json) | reason vc5-64bit-helper-sequence
+// FUNCTION: CARMA2_HW 0x0051d900
+tU32 C2_HOOK_FASTCALL PDGetElapsedMilliseconds(void) {
+    LARGE_INTEGER perfCountValue;
+    unsigned __int64 elapsed;
+    volatile int shift;
+
+    if (gPerformanceCounterInitialized) {
+        QueryPerformanceCounter(&perfCountValue);
+        elapsed = perfCountValue.HighPart;
+        shift = 0x10;
+        elapsed <<= shift;
+        elapsed <<= shift;
+        elapsed += perfCountValue.LowPart;
+        elapsed -= (unsigned __int64)gPerformanceCounterStart.QuadPart;
+        return (tU32)(elapsed / (unsigned __int64)gPerformanceCounterFrequency_ms.QuadPart);
     }
     return 0;
 }
 
-// FUNCTION: CARMA2_HW 0x0051d990
-int C2_HOOK_FASTCALL PDGetMicroseconds(void) {
-    if (gPerformanceCounterInitialized) {
-        LARGE_INTEGER perfCountValue;
-        QueryPerformanceCounter(&perfCountValue);
-        // Is it okay to convert unsigned to int here?
-        return (int) ((perfCountValue.QuadPart - gPerformanceCounterStart.QuadPart) / gPerformanceCounterFrequency_us.
-                      QuadPart);
+// GLOBAL: CARMA2_HW 0x006ad4cc
+int gSignal_handler_entered;
+
+// FUNCTION: CARMA2_HW 0x0051a6b0
+void C2_HOOK_FASTCALL SignalHandler(int pSignal) {
+    char buffer[256];
+
+    if (gSignal_handler_entered == 0) {
+        strcpy(buffer, "*** SIGNAL RECEIVED: ");
+        gSignal_handler_entered = 1;
+        switch (pSignal) {
+        case 0x16:
+            strcat(buffer, "SIGABRT");
+            break;
+        case 8:
+            strcat(buffer, "SIGFPE");
+            break;
+        case 4:
+            strcat(buffer, "SIGILL");
+            break;
+        case 0xb:
+            strcat(buffer, "SIGSEGV");
+            break;
+        case 0xf:
+            strcat(buffer, "SIGTERM");
+            break;
+        }
+        dr_dprintf(buffer);
+        PDShutdownSystem();
     }
-    return 0;
+    ExitProcess(0x2bd);
 }
 
 // FUNCTION: CARMA2_HW 0x0051a7b0
@@ -706,6 +786,18 @@ void C2_HOOK_FASTCALL PDEnterDebugger(const char *pStr) {
     ShowCursor(1);
     __debugbreak();
     ShowCursor(0);
+}
+
+// FUNCTION: CARMA2_HW 0x0051a7d0
+int C2_HOOK_CDECL PDMissingMaterial(const char* pName) {
+
+    dr_dprintf("SOMETHING MISSING WARNING - Can't find material '%s'", pName);
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x0051d4a0
+void C2_HOOK_FASTCALL FUN_0051d4a0(void) {
+
 }
 
 // FUNCTION: CARMA2_HW 0x0051d4b0
@@ -719,48 +811,45 @@ int C2_HOOK_FASTCALL PDFileUnlock(const char *pThe_path) {
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 43.27% | difftest PASS 2000 trials (spec difftest/specs/00486c30_PDEnumPath.json) | reason callback-loop,stack-layout
 // FUNCTION: CARMA2_HW 0x00486c30
-void C2_HOOK_FASTCALL PDEnumPath(const char *path, tEnumPathCallback pCallback, void *data) {
+int C2_HOOK_FASTCALL PDEnumPath(const char *path, tEnumPathCallback pCallback, void *data) {
     char originalCurrentDirectory[MAX_PATH];
     tPath_name filePath;
     BOOL bSucceeded;
     WIN32_FIND_DATAA findFileData;
     HANDLE hFindFile;
-    size_t lenFilename;
-    size_t lenLnk;
+    int lenFilename;
+    int lenLnk;
     int callback_res;
+
+    callback_res = 0;
 
     GetCurrentDirectory(CARPOCALYPSE2_ASIZE(originalCurrentDirectory), originalCurrentDirectory);
     bSucceeded = SetCurrentDirectoryA(path);
     if (!bSucceeded) {
-        return;
+        return 0;
     }
     hFindFile = FindFirstFileA("*.???", &findFileData);
-    if (hFindFile != NULL) {
-        while (1) {
+    if (hFindFile != INVALID_HANDLE_VALUE) {
+        do {
             if ((findFileData.dwFileAttributes & (
                      FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_HIDDEN)) == 0) {
                 lenFilename = strlen(findFileData.cFileName);
                 lenLnk = strlen(".lnk");
-                if (lenFilename > lenLnk && strcasecmp(&findFileData.cFileName[lenFilename - lenLnk], ".lnk") == 0) {
+                if (lenFilename >= lenLnk && DRstrcmpi(&findFileData.cFileName[lenFilename - lenLnk], ".lnk") == 0) {
                     memmove(filePath, findFileData.cFileName, lenFilename - lenLnk);
                     filePath[lenFilename - lenLnk] = '\0';
                 } else {
                     memmove(filePath, findFileData.cFileName, lenFilename + 1);
                 }
                 callback_res = pCallback(filePath, data);
-                if (callback_res != 0) {
-                    break;
-                }
             }
-            bSucceeded = FindNextFileA(hFindFile, &findFileData);
-            if (!bSucceeded) {
-                break;
-            }
-        }
+        } while (callback_res == 0 && (bSucceeded = FindNextFileA(hFindFile, &findFileData)) != 0);
         FindClose(hFindFile);
     }
     SetCurrentDirectoryA(originalCurrentDirectory);
+    return callback_res;
 }
 
 // FUNCTION: CARMA2_HW 0x00486c20
@@ -1016,6 +1105,7 @@ int PDGetRegisterSourceLocation(char *buffer, int *buffer_size) {
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 29.33% | difftest PASS 2000 trials (spec difftest/specs/0051c900_PDGetMousePosition.json) | reason unreachable original scaling block plus VC5 register and stack layout
 // FUNCTION: CARMA2_HW 0x0051c900
 void C2_HOOK_FASTCALL PDGetMousePosition(int *pX, int *pY) {
     POINT pnt;
@@ -1033,6 +1123,20 @@ void C2_HOOK_FASTCALL PDGetMousePosition(int *pX, int *pY) {
     gPD_mouse_position.y = *pY;
 }
 
+// FUNCTION: CARMA2_HW 0x0051c9f0
+void C2_HOOK_FASTCALL PDConvertMousePosition(LPPOINT pPoint, LONG* pX, LONG* pY) {
+    if (gScaleMouse && strcmp(gRenderer, "D3D") != 0) {
+        *pX = (LONG)(pPoint->x / (gScreenWidth / 640.));
+        *pY = (LONG)(pPoint->y / (gScreenHeight / 480.));
+    } else {
+        ScreenToClient(gHWnd, pPoint);
+        *pX = pPoint->x;
+        *pY = pPoint->y;
+    }
+    gPD_mouse_position.x = *pX;
+    gPD_mouse_position.y = *pY;
+}
+
 // FUNCTION: CARMA2_HW 0x0051c280
 void C2_HOOK_FASTCALL PDRevertPalette(void) {
 }
@@ -1045,6 +1149,7 @@ void C2_HOOK_FASTCALL PDMouseButtons(int *pLeftButtonDown, int *pRightButtonDown
     }
 }
 
+// C2PORT-NONMATCHING: best 17.39% | difftest PASS 2000 trials (spec difftest/specs/0056a3a9_PDExtractFilename.json) | reason VC5 stack-buffer layout around splitpath and sprintf calls
 // FUNCTION: CARMA2_HW 0x0056a3a9
 void C2_HOOK_FASTCALL PDExtractFilename(char *pDest, const char *pPath) {
     char dirname[256];
@@ -1056,6 +1161,7 @@ void C2_HOOK_FASTCALL PDExtractFilename(char *pDest, const char *pPath) {
     sprintf(pDest, "%s%s", filename, extension);
 }
 
+// C2PORT-NONMATCHING: best 17.39% | difftest PASS 2000 trials (spec difftest/specs/0056a349_PDExtractDirectory.json) | reason VC5 stack-buffer layout around splitpath and sprintf calls
 // FUNCTION: CARMA2_HW 0x0056a349
 void C2_HOOK_FASTCALL PDExtractDirectory(char *pDest, const char *pPath) {
     char dirname[256];
@@ -1067,9 +1173,14 @@ void C2_HOOK_FASTCALL PDExtractDirectory(char *pDest, const char *pPath) {
     sprintf(pDest, "%s%s", drive, dirname);
 }
 
+// C2PORT-NONMATCHING: best 68.66% | difftest PASS 2000 trials (spec difftest/specs/004928a0_PDPageInMemory.json) | reason regalloc-loop
 // FUNCTION: CARMA2_HW 0x004928a0
 void C2_HOOK_FASTCALL PDPageInMemory(void *pMemory) {
-    tHeap_block_information *heap_block;
+    BYTE* heap_block;
+    volatile BYTE* block;
+    DWORD flags;
+    DWORD size;
+    DWORD current;
 
     C2_HOOK_BUG_ON(offsetof(tHeap_block_information, next) != 0x48);
     C2_HOOK_BUG_ON(offsetof(tHeap_block_information, field_0x72) != 0x72);
@@ -1077,30 +1188,32 @@ void C2_HOOK_FASTCALL PDPageInMemory(void *pMemory) {
 
     heap_block = pMemory;
 
-    if (!IsBadReadPtr(heap_block, sizeof(tHeap_block_information)) && heap_block->field_0x72 == 0x4948) {
-        for (; heap_block != NULL; heap_block = heap_block->next) {
-            tHeap_memory *block;
-
-            block = (tHeap_memory *) (heap_block + 1);
-            for (;;) {
-                DWORD size = block->flags & 0x5ffffffc;
-                DWORD current;
-                if (size == 0) {
-                    break;
-                }
-                if (!(block->flags & 0x1)) {
-                    if (gPage_size == 0) {
-                        GetSystemInfo(&gSystem_info);
-                        gPage_size = gSystem_info.dwPageSize;
-                    }
-                    for (current = 16 * gPage_size; current < size - 4; current += gPage_size) {
-                        block->data[current + 16 - 16 * gPage_size] = block->data[current + 16 - 16 * gPage_size];
-                        block->data[current + 16] = block->data[current + 16];
-                    }
-                }
-                block = (tHeap_memory *) ((BYTE *) block + size);
+    if (!IsBadReadPtr(heap_block, sizeof(tHeap_block_information)) && *(WORD*)(heap_block + 0x72) == 0x4948 && heap_block != NULL) {
+    next_heap:
+        if (heap_block == NULL) {
+            return;
+        }
+        block = heap_block + 0x74;
+    next_block:
+        flags = *(DWORD*)block;
+        size = flags & 0x5ffffffc;
+        if (size == 0) {
+            heap_block = *(BYTE**)(heap_block + 0x48);
+            goto next_heap;
+        }
+        if (!(flags & 0x1)) {
+            volatile BYTE* page = block + 0x10;
+            if (gWin32_page_size == 0) {
+                GetSystemInfo(&gSystem_info);
+                gWin32_page_size = gSystem_info.dwPageSize;
+            }
+            for (current = 16 * gWin32_page_size; current < size - 4; current += gWin32_page_size) {
+                page[current - 16 * gWin32_page_size] = page[current - 16 * gWin32_page_size];
+                page[current] = page[current];
             }
         }
+        block += size;
+        goto next_block;
     }
 }
 

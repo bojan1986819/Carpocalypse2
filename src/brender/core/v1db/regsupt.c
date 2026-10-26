@@ -58,15 +58,22 @@ br_uint_32 C2_HOOK_CDECL BrModelAddMany(br_model** items, int n) {
 
 // FUNCTION: CARMA2_HW 0x0051edc0
 br_uint_32 C2_HOOK_CDECL BrModelRemoveMany(br_model** items, int n) {
-    int i;
     int r;
 
     r = 0;
-    for (i = 0; i < n; i++) {
-        BrModelClear(items[n]);
-        if (BrRegistryRemove(&v1db.reg_models, items[n]) != NULL) {
-            r++;
-        }
+    if (n > 0) {
+        int remaining;
+
+        remaining = n;
+        do {
+            br_model* model;
+
+            model = *items++;
+            BrModelClear(model);
+            if (BrRegistryRemove(&v1db.reg_models, model) != NULL) {
+                r++;
+            }
+        } while (--remaining != 0);
     }
     return r;
 }

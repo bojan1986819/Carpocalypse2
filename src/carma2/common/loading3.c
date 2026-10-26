@@ -11,6 +11,10 @@
 #include "carpocalypse2_macros.h"
 
 #include <string.h>
+#ifdef __vita__
+#include "sdl3/vita_controls.h"
+#include <stdlib.h>
+#endif
 // GLOBAL: CARMA2_HW 0x0065852c
 char* gPedTexturePath = "PIXELMAP";
 
@@ -104,9 +108,31 @@ br_pixelmap* C2_HOOK_FASTCALL RealLoadPixelmap(const char* pPath_name) {
 // FUNCTION: CARMA2_HW 0x0048ec00
 br_pixelmap* C2_HOOK_FASTCALL LoadPixelmap(const char* pPath_name) {
     br_pixelmap *pm;
+#ifdef __vita__
+    static unsigned int loads;
+    int log_load = loads++ < 128;
+    tU32 start;
+    int trace = getenv("C2_VITA_ASSET_TRACE") != NULL;
+    if (log_load && trace) C2VitaLog("IMAGE begin: %s\n", pPath_name);
+    start = PDGetTotalTime();
+#endif
 
     pm = RealLoadPixelmap(pPath_name);
     EnsurePixelmapAllowed(pm, 0);
+#ifdef __vita__
+    if (log_load && (trace || PDGetTotalTime() - start > 100)) C2VitaLog("IMAGE end: %s elapsed=%u ms type=%d size=%dx%d\n",
+        pPath_name, (unsigned)(PDGetTotalTime() - start), pm ? pm->type : -1,
+        pm ? pm->width : 0, pm ? pm->height : 0);
+#endif
+    return pm;
+}
+
+// FUNCTION: CARMA2_HW 0x0048ee00
+br_pixelmap* C2_HOOK_FASTCALL LoadPixelmapArg2(const char* pPath_name) {
+    br_pixelmap* pm;
+
+    pm = RealLoadPixelmap(pPath_name);
+    EnsurePixelmapAllowed(pm, 1);
     return pm;
 }
 
@@ -183,6 +209,21 @@ void C2_HOOK_FASTCALL DRLoadShadeTable(const char* pPath_name) {
         table_array[i]->base_y = 0;
     }
     BrTableAddMany(table_array, number_of_tables);
+}
+
+// FUNCTION: CARMA2_HW 0x0048f170
+void C2_HOOK_FASTCALL DRLoadPixelmaps(const char* pPath_name) {
+    br_pixelmap* pixelmaps[100];
+    int number_of_pixelmaps;
+    int i;
+
+    PossibleService();
+    number_of_pixelmaps = DRPixelmapLoadMany(pPath_name, pixelmaps, CARPOCALYPSE2_ASIZE(pixelmaps));
+    for (i = number_of_pixelmaps - 1; i >= 0; i--) {
+        pixelmaps[i]->origin_x = 0;
+        pixelmaps[i]->origin_y = 0;
+    }
+    BrMapAddMany(pixelmaps, number_of_pixelmaps);
 }
 
 // FUNCTION: CARMA2_HW 0x0048f1d0

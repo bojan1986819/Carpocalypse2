@@ -192,6 +192,14 @@ int C2_HOOK_STDCALL S3Set3DSoundEnvironment(float a1, float a2, float a3) {
     return 0;
 }
 
+// FUNCTION: CARMA2_HW 0x00565ea0
+void C2_HOOK_FASTCALL S3SetVector3(tS3_vector3* pVec, float pX, float pY, float pZ) {
+
+    pVec->x = pX;
+    pVec->y = pY;
+    pVec->z = pZ;
+}
+
 // FUNCTION: CARMA2_HW 0x00565ec7
 void C2_HOOK_FASTCALL S3CopyBrVector3(br_vector3* pDest, br_vector3* pSrc) {
 
@@ -208,6 +216,38 @@ void C2_HOOK_FASTCALL S3CopyS3Vector3(tS3_vector3* pDest, tS3_vector3* pSrc) {
     pDest->z = pSrc->z;
 }
 
+// FUNCTION: CARMA2_HW 0x00565f26
+void C2_HOOK_FASTCALL FUN_00565f26(br_vector3* pVec) {
+
+    gS3_listener_vel_now.v[0] = pVec->v[0];
+    gS3_listener_vel_now.v[1] = pVec->v[1];
+    gS3_listener_vel_now.v[2] = pVec->v[2];
+}
+
+// FUNCTION: CARMA2_HW 0x00565f80
+void C2_HOOK_FASTCALL S3BindListenerPosition(tS3_vector3* pos) {
+
+    gS3_listener_pos_ptr = (br_vector3*)pos;
+    gS3_listener_pos_is_brender = 0;
+    S3CopyS3Vector3((tS3_vector3*)&gS3_listener_position_old, pos);
+}
+
+// FUNCTION: CARMA2_HW 0x00565ef9
+void C2_HOOK_FASTCALL S3SetListenerPositionNow(br_vector3* pPos) {
+
+    gS3_listener_position_now.v[0] = pPos->v[0];
+    gS3_listener_position_now.v[1] = pPos->v[1];
+    gS3_listener_position_now.v[2] = pPos->v[2];
+}
+
+// FUNCTION: CARMA2_HW 0x00565f53
+void C2_HOOK_FASTCALL S3SetListenerLeftNow(br_vector3* pLeft) {
+
+    gS3_listener_left_now.v[0] = pLeft->v[0];
+    gS3_listener_left_now.v[1] = pLeft->v[1];
+    gS3_listener_left_now.v[2] = pLeft->v[2];
+}
+
 // FUNCTION: CARMA2_HW 0x00565faa
 void C2_HOOK_FASTCALL S3BindListenerPositionBRender(br_vector3* pos) {
 
@@ -216,11 +256,25 @@ void C2_HOOK_FASTCALL S3BindListenerPositionBRender(br_vector3* pos) {
     S3CopyBrVector3(&gS3_listener_position_old, pos);
 }
 
+// FUNCTION: CARMA2_HW 0x00565fd4
+void C2_HOOK_FASTCALL S3BindListenerVelocity(br_vector3* vel) {
+
+    gS3_listener_vel_ptr = vel;
+    gS3_listener_vel_is_brender = 0;
+}
+
 // FUNCTION: CARMA2_HW 0x00565ff1
 void C2_HOOK_FASTCALL S3BindListenerVelocityBRender(br_vector3* vel) {
 
     gS3_listener_vel_ptr = vel;
     gS3_listener_vel_is_brender = 1;
+}
+
+// FUNCTION: CARMA2_HW 0x0056600e
+void C2_HOOK_FASTCALL S3BindListenerLeft(br_vector3* left) {
+
+    gS3_listener_left_ptr = left;
+    gS3_listener_left_is_brender = 0;
 }
 
 // FUNCTION: CARMA2_HW 0x0056602b
@@ -312,7 +366,7 @@ int C2_HOOK_FASTCALL S3StartSound3D(tS3_outlet *pOutlet, int pSound, const br_ve
             channel->source_rate = gS3_channel_template.source_rate;
             channel->max_distance_squared = gS3_channel_template.max_distance_squared;
             S3ExecuteSampleFilterFuncs(channel);
-            if (!S3PlaySample(channel)) {
+            if (!S3PlaySample(channel, channel->descriptor)) {
                 channel->needs_service = 1;
                 gS3_last_error = eS3_error_start_sound;
                 return 0;
@@ -482,7 +536,7 @@ int C2_HOOK_FASTCALL S3UpdateSourcePosition(tS3_sound_source *pSource) {
             channel->needs_service = 0;
             channel->termination_reason = 0;
             S3ExecuteSampleFilterFuncs(channel);
-            if (S3PlaySample(channel) == 0) {
+            if (S3PlaySample(channel, channel->descriptor) == 0) {
                 channel->needs_service = 1;
                 gS3_last_error = eS3_error_start_sound;
                 return 0;
@@ -501,42 +555,43 @@ int C2_HOOK_FASTCALL S3UpdateSourcePosition(tS3_sound_source *pSource) {
 int C2_HOOK_FASTCALL S3UpdateSourceVectors(void) {
     tS3_sound_source* source;
 
-    for (source = gS3_state.sources; source != NULL; source = source->next) {
-        if (!source->ambient) {
-            continue;
-        }
-        if (source->period > 0) {
-            source->time_since_last_played += gS3_delta_time;
-        }
-        if (source->channel != NULL && source->tag != source->channel->tag) {
-            S3StopChannel(source->channel);
-            source->channel = NULL;
-            source->tag = 0;
-        }
-        if (source->channel == NULL) {
-            if (source->period < source->time_since_last_played && source->period != 0 && source->tag == 0) {
-                if (source->volume > 0) {
-                    if (S3UpdateSourcePosition(source) == 0) {
-                        source->channel = NULL;
-                        source->tag = 0;
-                    }
-                }
-                source->time_since_last_played = 0;
+    source = gS3_state.sources;
+    while (source != NULL) {
+        if (source->ambient) {
+            if (source->period > 0) {
+                source->time_since_last_played += gS3_delta_time;
             }
-            else if ((!source->ambient_repeats || source->period == 0) && source->tag == 0) {
-                if (source->volume > 0) {
-                    if (S3UpdateSourcePosition(source) == 0) {
-                        source->channel = NULL;
-                        source->tag = 0;
+            if (source->channel != NULL && source->tag != source->channel->tag) {
+                S3StopChannel(source->channel);
+                source->channel = NULL;
+                source->tag = 0;
+            }
+            if (source->channel == NULL) {
+                if (source->time_since_last_played > source->period && source->period != 0 && source->tag == 0) {
+                    if (source->volume > 0) {
+                        if (S3UpdateSourcePosition(source) == 0) {
+                            source->channel = NULL;
+                            source->tag = 0;
+                        }
                     }
+                    source->time_since_last_played = 0;
+                } else if ((!source->ambient_repeats || source->period == 0) && source->tag == 0) {
+                    if (source->volume > 0) {
+                        if (S3UpdateSourcePosition(source) == 0) {
+                            source->channel = NULL;
+                            source->tag = 0;
+                        }
+                    }
+                    source->time_since_last_played = 0;
                 }
-                source->time_since_last_played = 0;
             }
         }
+        source = source->next;
     }
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 22.76% | difftest PASS 2000 trials (spec difftest/specs/0056711c_S3Calculate3D.json) | reason x87 scheduling and stack layout
 // FUNCTION: CARMA2_HW 0x0056711c
 int C2_HOOK_FASTCALL S3Calculate3D(tS3_channel* pChannel, int pAmbient) {
     float dist_squared;

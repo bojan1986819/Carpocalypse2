@@ -151,6 +151,7 @@ br_error C2_HOOK_STDCALL CacheUpdate(br_soft_renderer* self) {
 // FUNCTION: CARMA2_HW 0x00543f10
 void C2_HOOK_STDCALL ActiveLightsFind(br_soft_renderer* self) {
     int l;
+    double attenuation_c;
     soft_state_light* lp;
     active_light* alp;
 
@@ -164,15 +165,14 @@ void C2_HOOK_STDCALL ActiveLightsFind(br_soft_renderer* self) {
 
     alp = &scache.lights[0];
 
-    for (l = 0; l < BR_ASIZE(scache.lights); l++) {
-        lp = &self->state.light[l];
+    for (l = BR_ASIZE(scache.lights), lp = self->state.light; l != 0; l--, lp++) {
 
         if (lp->type == BRT_NONE || lp->lighting_space != BRT_MODEL) {
             continue;
         }
 
         alp->s = lp;
-        alp->intensity = 1.f / lp->attenuation_c;
+        alp->intensity = 1.0 / lp->attenuation_c;
         alp->type = lp->type;
 
         ActiveLightAccumulateIndexSet(alp);
@@ -181,22 +181,24 @@ void C2_HOOK_STDCALL ActiveLightsFind(br_soft_renderer* self) {
         scache.nlights_model += 1;
     }
 
-    for (l = 0; l < BR_ASIZE(self->state.light); l++) {
-        lp = &self->state.light[l];
+    for (l = BR_ASIZE(self->state.light), lp = self->state.light; l != 0; l--, lp++) {
 
         if (lp->type == BRT_NONE || lp->lighting_space != BRT_VIEW) {
             continue;
         }
 
         alp->s = lp;
-        alp->intensity = 1.f / lp->attenuation_c;
+        attenuation_c = lp->attenuation_c;
+        alp->intensity = 1.0 / attenuation_c;
         alp->type = lp->type;
-        BrVector3Copy(&alp->position, &lp->position);
+        alp->position = lp->position;
 
         if (lp->type == BRT_DIRECT) {
-            BrVector3Scale(&alp->direction, &lp->direction, alp->intensity);
+            alp->direction.v[0] = BR_MUL(lp->direction.v[0], alp->intensity);
+            alp->direction.v[1] = BR_MUL(lp->direction.v[1], alp->intensity);
+            alp->direction.v[2] = BR_MUL(lp->direction.v[2], alp->intensity);
         } else {
-            BrVector3Copy(&alp->direction, &lp->direction);
+            alp->direction = lp->direction;
         }
 
         ActiveLightAccumulateIndexSet(alp);
@@ -204,6 +206,11 @@ void C2_HOOK_STDCALL ActiveLightsFind(br_soft_renderer* self) {
 
         alp++;
         scache.nlights_view += 1;
+    }
+    if (scache.nlights_view == 0 && scache.nlights_model == 1 && scache.lights[0].type == BRT_DIRECT) {
+        scache.light_1md = 1;
+    } else {
+        scache.light_1md = 0;
     }
 }
 

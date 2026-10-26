@@ -11,6 +11,7 @@ void C2_HOOK_CDECL SurfaceColourZero(br_soft_renderer* self, br_vector3* p, br_v
     comp[C_B] = self->state.cache.comp_offsets[C_B];
 }
 
+// C2PORT-NONMATCHING: best 37.33% | difftest PASS 2000 trials (spec difftest/specs/00548c40_SurfaceColourUnlit.json) | reason x87-channel-scheduling
 // FUNCTION: CARMA2_HW 0x00548c40
 void C2_HOOK_CDECL SurfaceColourUnlit(br_soft_renderer* self, br_vector3* p, br_vector2* map, br_vector3* n, br_colour colour, br_scalar* comp) {
 
@@ -66,9 +67,11 @@ void C2_HOOK_STDCALL lightingColourNull(br_soft_renderer* self, br_vector3* p, b
 
 }
 
+// C2PORT-NONMATCHING: best 85.05% | difftest PASS 2000 trials (spec difftest/specs/005491b0_lightingColourDirectSpecular.json) | reason x87-channel-and-specular-order
 // FUNCTION: CARMA2_HW 0x005491b0
 void C2_HOOK_STDCALL lightingColourDirectSpecular(br_soft_renderer* self, br_vector3* p, br_vector3* n, br_colour colour, active_light* alp, br_scalar* comp) {
     br_scalar dot;
+    br_scalar l;
     br_scalar red, grn, blu;
 
     dot = BrVector3Dot(&alp->direction, n);
@@ -76,16 +79,18 @@ void C2_HOOK_STDCALL lightingColourDirectSpecular(br_soft_renderer* self, br_vec
         return;
     }
 
-    red = BrFixedToFloat(BR_RED(colour) << 8) * dot;
-    grn = BrFixedToFloat(BR_GRN(colour) << 8) * dot;
-    blu = BrFixedToFloat(BR_BLU(colour) << 8) * dot;
+    l = self->state.surface.kd * dot;
+    red = BR_MUL(BrFixedToScalar(BR_RED(colour) << 8), l);
+    grn = BR_MUL(BrFixedToScalar(BR_GRN(colour) << 8), l);
+    blu = BR_MUL(BrFixedToScalar(BR_BLU(colour) << 8), l);
 
     if (self->state.surface.ks != 0.f) {
         dot = BrVector3Dot(&alp->half, n);
         if (dot > SPECULARPOW_CUTOFF) {
             br_scalar specular;
 
-            specular = alp->intensity * SPECULAR_POWER(self->state.surface.ks);
+            specular = alp->intensity * dot * self->state.surface.ks
+                    / ((self->state.surface.power - self->state.surface.power * dot) + dot);
             red += specular;
             grn += specular;
             blu += specular;
@@ -97,6 +102,7 @@ void C2_HOOK_STDCALL lightingColourDirectSpecular(br_soft_renderer* self, br_vec
     comp[C_B] += blu * BrFixedToFloat(BR_BLU(alp->s->colour) << 8);
 }
 
+// C2PORT-NONMATCHING: best 25.44% | difftest PASS 2000 trials (spec 00549380_lightingColourLocal2.json) | reason equivalent lighting math with VC5 float scheduling and register layout differences
 // FUNCTION: CARMA2_HW 0x00549380
 void C2_HOOK_STDCALL lightingColourLocal2(br_soft_renderer* self, br_vector3* p, br_vector3* n, br_colour colour, active_light* alp, br_scalar* comp) {
     br_scalar dot;
@@ -120,18 +126,20 @@ void C2_HOOK_STDCALL lightingColourLocal2(br_soft_renderer* self, br_vector3* p,
 
 // FUNCTION: CARMA2_HW 0x00549510
 void C2_HOOK_STDCALL lightingColourLocal1(br_soft_renderer* self, br_vector3* p, br_vector3* n, br_colour colour, active_light* alp, br_scalar* comp) {
-    br_scalar dist2;
-	br_vector3 dirn;
+    br_scalar dist2, attn;
+    br_vector3 dirn;
+    br_int_64 product;
 
     BrVector3Sub(&dirn, &alp->position, p);
     dist2 = BrVector3LengthSquared(&dirn);
     if (dist2 <= alp->s->attenuation_q && dist2 >= BR_SCALAR_EPSILON) {
-        br_scalar attn;
-
-        attn = self->state.surface.kd * (alp->s->attenuation_q - dist2) / alp->s->attenuation_q ;
-        comp[C_R] += attn * BrFixedToFloat(BR_RED(colour)) * BR_RED(alp->s->colour);
-        comp[C_G] += attn * BrFixedToFloat(BR_GRN(colour)) * BR_GRN(alp->s->colour);
-        comp[C_B] += attn * BrFixedToFloat(BR_BLU(colour)) * BR_BLU(alp->s->colour);
+        attn = (alp->s->attenuation_q - dist2) * self->state.surface.kd / alp->s->attenuation_q;
+        product = BR_RED(colour) * BR_RED(alp->s->colour);
+        comp[C_R] -= product * attn * -BrFixedToFloat(1);
+        product = BR_GRN(colour) * BR_GRN(alp->s->colour);
+        comp[C_G] -= product * attn * -BrFixedToFloat(1);
+        product = BR_BLU(colour) * BR_BLU(alp->s->colour);
+        comp[C_B] -= product * attn * -BrFixedToFloat(1);
     }
 }
 
@@ -173,6 +181,7 @@ void C2_HOOK_STDCALL lightingColourPointSpecular(br_soft_renderer* self, br_vect
     comp[C_B] += blu * alp->intensity * BrFixedToFloat(BR_BLU(alp->s->colour) << 8);
 }
 
+// C2PORT-NONMATCHING: best 23.37% | difftest PASS 2000 trials (spec difftest/specs/005498f0_lightingColourPointAttnSpecular.json) | reason VC5 x87 scheduling
 // FUNCTION: CARMA2_HW 0x005498f0
 void C2_HOOK_STDCALL lightingColourPointAttnSpecular(br_soft_renderer* self, br_vector3* p, br_vector3* n, br_colour colour, active_light* alp, br_scalar* comp) {
     br_scalar dot;
@@ -183,7 +192,7 @@ void C2_HOOK_STDCALL lightingColourPointAttnSpecular(br_soft_renderer* self, br_
 
     BrVector3Sub(&dirn, &alp->position, p);
     dist = BrVector3Length(&dirn);
-    if (dist <= BR_SCALAR_EPSILON) {
+    if (dist <= 2.f * BR_SCALAR_EPSILON) {
         return;
     }
     dist2 = (dist < 180.f) ? dist * dist : 32767.f;
@@ -264,6 +273,7 @@ void C2_HOOK_STDCALL lightingColourSpotSpecular(br_soft_renderer* self, br_vecto
     comp[C_B] += blu * spot * BrFixedToFloat(BR_BLU(alp->s->colour) << 8);
 }
 
+// C2PORT-NONMATCHING: best 38.85% | difftest PASS 2000 trials (spec difftest/specs/00549ef0_lightingColourSpotAttnSpecular.json) | reason x87-order
 // FUNCTION: CARMA2_HW 0x00549ef0
 void C2_HOOK_STDCALL lightingColourSpotAttnSpecular(br_soft_renderer* self, br_vector3* p, br_vector3* n, br_colour colour, active_light* alp, br_scalar* comp) {
     br_scalar dot;
@@ -276,11 +286,11 @@ void C2_HOOK_STDCALL lightingColourSpotAttnSpecular(br_soft_renderer* self, br_v
 
     BrVector3Sub(&dirn, &alp->position, p);
     dist = BrVector3Length(&dirn);
-    if (dist <= BR_SCALAR_EPSILON) {
+    if (dist <= 2.f * BR_SCALAR_EPSILON) {
         return;
     }
     BrVector3InvScale(&dirn, &dirn, dist);
-    dot_spot = BrVector3Dot(&dirn, &alp->position);
+    dot_spot = BrVector3Dot(&dirn, &alp->direction);
     if (dot_spot < alp->s->spot_outer) {
         return;
     }

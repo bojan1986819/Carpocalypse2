@@ -5,7 +5,7 @@
 
 #include "brender/br_types.h"
 
-br_error C2_HOOK_CDECL BrLastErrorGet(void** valuep);
+br_error C2_HOOK_CDECL BrLastErrorGet(void);
 
 void C2_HOOK_CDECL BrLastErrorSet(br_error type, void* value);
 

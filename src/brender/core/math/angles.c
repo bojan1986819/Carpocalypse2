@@ -4,6 +4,7 @@
 #include "matrix4.h"
 #include "quat.h"
 
+// GLOBAL: CARMA2_HW 0x0066cba0
 order_info OrderAxes[32] = {
     { 0, 1, 2, },
     { 1, 2, 0, },
@@ -62,12 +63,12 @@ br_matrix34* C2_HOOK_CDECL BrEulerToMatrix34(br_matrix34* mat, const br_euler* e
     o = euler->order;
     if (o & 0x10) {
         ti = euler->c;
-        tj = euler->b;;
-        th = euler->a;
-    } else {
-        ti = euler->c;
         tj = euler->b;
         th = euler->a;
+    } else {
+        ti = euler->a;
+        tj = euler->b;
+        th = euler->c;
     }
     if (o & 0x4) {
         ti = -ti;
@@ -136,7 +137,7 @@ br_euler* C2_HOOK_CDECL BrMatrix34ToEuler(br_euler* euler, const br_matrix34* ma
     if (o & 0x8) {
         br_scalar sy;
 
-        sy = (br_scalar)sqrt(mat->m[a1][a0] * mat->m[a1][a0] + mat->m[a2][a0] * mat->m[a2][a0]);
+        sy = (br_scalar)sqrt(BR_SQR(mat->m[a1][a0]) + BR_SQR(mat->m[a2][a0]));
 
         if (sy > 16 * BR_SCALAR_EPSILON) {
             euler->a = BR_ATAN2( mat->m[a1][a0],  mat->m[a2][a0]);
@@ -150,7 +151,7 @@ br_euler* C2_HOOK_CDECL BrMatrix34ToEuler(br_euler* euler, const br_matrix34* ma
     } else {
         br_scalar cy;
 
-        cy = (br_scalar)sqrt(mat->m[a0][a0] * mat->m[a0][a0] + mat->m[a0][a1] * mat->m[a0][a1]);
+        cy = (br_scalar)sqrt(BR_SQR(mat->m[a0][a0]) + BR_SQR(mat->m[a0][a1]));
 
         if (cy > 16 * BR_SCALAR_EPSILON) {
             euler->a = BR_ATAN2( mat->m[a1][a2], mat->m[a2][a2]);

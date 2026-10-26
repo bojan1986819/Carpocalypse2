@@ -188,7 +188,7 @@ void C2_HOOK_CDECL BrPointToScreenXYZOMany(br_vector3* screens, br_uint_32* outc
 // FUNCTION: CARMA2_HW 0x00527240
 br_scalar C2_HOOK_CDECL BrZbDepthToScreenZ(br_uint_32 depth_z, br_camera* camera) {
 
-    return BrFixedToScalar(BrFixedNeg(depth_z));
+    return BrFixedToScalar((br_int_32)BrFixedNeg(depth_z));
 }
 
 // FUNCTION: CARMA2_HW 0x00527260
@@ -239,6 +239,7 @@ br_scalar C2_HOOK_CDECL BrZsScreenZToDepth(br_scalar sz, br_camera* camera) {
     return depth;
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x005273a0
 br_scalar C2_HOOK_CDECL BrScreenZToCamera(br_actor* camera, br_scalar sz) {
     br_camera* data;
@@ -263,12 +264,16 @@ br_scalar C2_HOOK_CDECL BrScreenZToCamera(br_actor* camera, br_scalar sz) {
         return 0.f;
     }
 }
+#pragma auto_inline(on)
 
+// C2PORT-NONMATCHING: best 74.65% | difftest PASS 2000 trials (spec difftest/specs/00527480_BrScreenXYZToCamera.json) | reason VC5 x87 scheduling
 // FUNCTION: CARMA2_HW 0x00527480
 void C2_HOOK_CDECL BrScreenXYZToCamera(br_vector3* point, br_actor* camera, br_pixelmap* screen_buffer, br_int_16 x, br_int_16 y, br_scalar sz) {
     br_scalar hx;
     br_scalar hy;
-    br_scalar vz;
+    volatile br_scalar vz;
+    br_scalar width;
+    br_scalar height;
     br_camera* data;
     br_angle fov;
     br_scalar scale;
@@ -278,20 +283,22 @@ void C2_HOOK_CDECL BrScreenXYZToCamera(br_vector3* point, br_actor* camera, br_p
 
     vz = BrScreenZToCamera(camera, sz);
 
-    hx = (float)(screen_buffer->width - 2 * (x + screen_buffer->origin_x)) / (float)screen_buffer->width;
-    hy = (float)(2 * (y + screen_buffer->origin_y) - screen_buffer->height) / (float)screen_buffer->height;
+    width = (br_scalar)screen_buffer->width;
+    height = (br_scalar)screen_buffer->height;
+    hx = (float)(screen_buffer->width - 2 * (x + screen_buffer->origin_x)) / width;
+    hy = (float)(2 * (y + screen_buffer->origin_y) - screen_buffer->height) / height;
 
     switch (data->type) {
     case BR_CAMERA_PARALLEL:
-        point->v[0] = -0.5f * hx * data->width * data->aspect;
-        point->v[1] = -0.5f * hy * data->height / 2;
+        point->v[0] = BR_MUL(-hx, BR_MUL(data->aspect, BR_MUL(data->width, 0.5f)));
+        point->v[1] = BR_MUL(-hy, BR_MUL(data->height, 0.5f));
         point->v[2] = vz;
         break;
     case BR_CAMERA_PERSPECTIVE_FOV:
-        fov=(br_angle)(data->field_of_view / 2);
+        fov = data->field_of_view >> 1;
         scale = BR_COS(fov) / BR_SIN(fov);
-        point->v[0] = hx * data->aspect * vz / scale;
-        point->v[1] = hy * vz / scale;
+        point->v[0] = BR_MUL(BR_MUL(hx, data->aspect), vz) / scale;
+        point->v[1] = BR_MUL(hy, vz) / scale;
         point->v[2] = vz;
         break;
     default:

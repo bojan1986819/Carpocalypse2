@@ -11,9 +11,32 @@
 #include "../core/math/transfrm.h"
 
 #include "core/fw/diag.h"
+#if defined(__vita__)
+#include "../../../carma2/platform/sdl3/vita_perf.h"
+#define VPB(x) do { if (C2VitaPerfDetail) C2VitaPerfBegin(x); } while (0)
+#define VPE(x) do { if (C2VitaPerfDetail) C2VitaPerfEnd(x); } while (0)
+#else
+#define VPB(x) ((void)0)
+#define VPE(x) ((void)0)
+#endif
+
+#ifndef CARPOCALYPSE2_MATCHING
+const char* gDebug_render_model_name;
+const char* gDebug_render_material_name;
+#endif
 
 // FUNCTION: CARMA2_HW 0x00521890
+#if defined(__vita__)
+static void BrDbModelRender_timed(br_actor* actor, br_model* model, br_material* material, void* render_data, br_uint_8 style, int on_screen, int use_custom);
 void C2_HOOK_CDECL BrDbModelRender(br_actor* actor, br_model* model, br_material* material, void* render_data, br_uint_8 style, int on_screen, int use_custom) {
+    VPB(C2VP_G_MODEL);
+    BrDbModelRender_timed(actor, model, material, render_data, style, on_screen, use_custom);
+    VPE(C2VP_G_MODEL);
+}
+static void BrDbModelRender_timed(br_actor* actor, br_model* model, br_material* material, void* render_data, br_uint_8 style, int on_screen, int use_custom) {
+#else
+void C2_HOOK_CDECL BrDbModelRender(br_actor* actor, br_model* model, br_material* material, void* render_data, br_uint_8 style, int on_screen, int use_custom) {
+#endif
     br_token_value tv[5] = {
         { BRT_V1INSERT_FUNCTION_P },
         { BRT_V1INSERT_ARG1_P },
@@ -22,12 +45,45 @@ void C2_HOOK_CDECL BrDbModelRender(br_actor* actor, br_model* model, br_material
         { BR_NULL_TOKEN },
     };
 
+#ifndef CARPOCALYPSE2_MATCHING
+    { /* port debug: names of the model being drawn, for renderer diagnostics */
+        extern const char* gDebug_render_model_name;
+        extern const char* gDebug_render_material_name;
+        gDebug_render_model_name = model != NULL ? model->identifier : NULL;
+        gDebug_render_material_name = material != NULL ? material->identifier : NULL;
+    }
+#endif
     v1db.model_to_screen_valid = 0;
     if (use_custom && (model->flags & BR_MODF_CUSTOM)) {
         model->custom(actor, model, material, render_data, style, on_screen);
         return;
     }
     if (model->prepared == NULL && model->stored == NULL) {
+#ifndef CARPOCALYPSE2_MATCHING
+        { /* Capture the object that failed before BrFailure shuts the renderer down. */
+            br_actor* parent;
+            int depth;
+            /* BrWarning uses a 128-byte scratch buffer: keep every line bounded. */
+            BrWarning("Unprepared model=%p flags=0x%04x nv=%u nf=%u verts=%p faces=%p",
+                model, (unsigned int)model->flags, (unsigned int)model->nvertices,
+                (unsigned int)model->nfaces, model->vertices, model->faces);
+            BrWarning("Unprepared model name=%.64s", model->identifier != NULL ? model->identifier : "<NULL>");
+            BrWarning("Unprepared actor=%p own_model=%p material=%p",
+                actor, actor != NULL ? actor->model : NULL, material);
+            BrWarning("Unprepared style=%u screen=%d use_custom=%d callback=%p",
+                (unsigned int)style, on_screen, use_custom, model->custom);
+            BrWarning("Unprepared material=%.64s",
+                material != NULL && material->identifier != NULL ? material->identifier : "<NULL>");
+            parent = actor;
+            for (depth = 0; parent != NULL && depth < 8; depth++, parent = parent->parent) {
+                BrWarning("Unprepared actor[%d]=%p type=%u style=%u parent=%p",
+                    depth, parent, (unsigned int)parent->type, (unsigned int)parent->render_style, parent->parent);
+                BrWarning("Unprepared actor[%d] name=%.64s",
+                    depth, parent->identifier != NULL ? parent->identifier : "<NULL>");
+                BrWarning("Unprepared actor[%d] model=%p material=%p", depth, parent->model, parent->material);
+            }
+        }
+#endif
         BrFailure("Tried to render un-prepared model %s", model->identifier != NULL ? model->identifier : "<NULL>");
         return;
     }
@@ -127,7 +183,17 @@ br_uint_16 C2_HOOK_STDCALL prependActorTransform(br_actor* ap, br_uint_16 t) {
 }
 
 // FUNCTION: CARMA2_HW 0x005221e0
+#if defined(__vita__)
+static void actorRender_timed(br_actor* ap, br_model* model, br_material* material, void* render_data, br_uint_8 style, br_uint_16 t);
 void C2_HOOK_STDCALL actorRender(br_actor* ap, br_model* model, br_material* material, void* render_data, br_uint_8 style, br_uint_16 t) {
+    VPB(C2VP_G_ACTORS);
+    actorRender_timed(ap, model, material, render_data, style, t);
+    VPE(C2VP_G_ACTORS);
+}
+static void actorRender_timed(br_actor* ap, br_model* model, br_material* material, void* render_data, br_uint_8 style, br_uint_16 t) {
+#else
+void C2_HOOK_STDCALL actorRender(br_actor* ap, br_model* model, br_material* material, void* render_data, br_uint_8 style, br_uint_16 t) {
+#endif
     br_material* this_material;
     br_model* this_model;
     void* this_render_data;
@@ -366,6 +432,12 @@ void C2_HOOK_CDECL BrDbSceneRenderBegin(br_actor* world, br_actor* camera) {
     BrSetupClipPlanes(world, &tfm, v1db.ttype, &vtos);
     BrSetupEnvironment(world, &tfm, v1db.ttype);
     BrSetupHorizons(world,&tfm, v1db.ttype);
+#ifndef CARPOCALYPSE2_MATCHING
+    /* port: every scene render path (Zb/Zs/Zbs, Begin and full) comes through here after its output partSets */
+    if (v1db.renderer->dispatch->_sceneBegin != NULL) {
+        v1db.renderer->dispatch->_sceneBegin(v1db.renderer);
+    }
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00521e10
@@ -419,6 +491,11 @@ void C2_HOOK_CDECL BrZbSceneRenderAdd(br_actor* tree) {
 void C2_HOOK_CDECL BrZbSceneRenderEnd(void) {
 
     v1db.renderer->dispatch->_flush(v1db.renderer, 0);
+#ifndef CARPOCALYPSE2_MATCHING
+    if (v1db.renderer->dispatch->_sceneEnd != NULL) {
+        v1db.renderer->dispatch->_sceneEnd(v1db.renderer);
+    }
+#endif
     v1db.rendering = 0;
     v1db.render_root = NULL;
 }
@@ -479,6 +556,11 @@ void C2_HOOK_CDECL BrZbSceneRender(br_actor* world, br_actor* camera, br_pixelma
     }
 
     v1db.renderer->dispatch->_flush(v1db.renderer, 0);
+#ifndef CARPOCALYPSE2_MATCHING
+    if (v1db.renderer->dispatch->_sceneEnd != NULL) {
+        v1db.renderer->dispatch->_sceneEnd(v1db.renderer);
+    }
+#endif
 
     v1db.rendering = 0;
     v1db.render_root = NULL;
@@ -529,6 +611,11 @@ void C2_HOOK_CDECL BrZsSceneRenderEnd(void) {
         RenderOrderTableList();
     }
     v1db.renderer->dispatch->_flush(v1db.renderer, 0);
+#ifndef CARPOCALYPSE2_MATCHING
+    if (v1db.renderer->dispatch->_sceneEnd != NULL) {
+        v1db.renderer->dispatch->_sceneEnd(v1db.renderer);
+    }
+#endif
     v1db.rendering = 0;
     v1db.render_root = NULL;
 }
@@ -581,6 +668,11 @@ void C2_HOOK_CDECL BrZsSceneRender(br_actor* world, br_actor* camera, br_pixelma
         RenderOrderTableList();
     }
     v1db.renderer->dispatch->_flush(v1db.renderer, 0);
+#ifndef CARPOCALYPSE2_MATCHING
+    if (v1db.renderer->dispatch->_sceneEnd != NULL) {
+        v1db.renderer->dispatch->_sceneEnd(v1db.renderer);
+    }
+#endif
     v1db.rendering = 0;
     v1db.render_root = NULL;
 }
@@ -607,6 +699,7 @@ void C2_HOOK_CDECL BrZbsSceneRenderBegin(br_actor* world, br_actor* camera, br_p
 
     v1db.renderer->dispatch->_partSet(v1db.renderer, BRT_OUTPUT, 0, BRT_COLOUR_BUFFER_O, (uintptr_t)colour_buffer);
     v1db.renderer->dispatch->_partSet(v1db.renderer, BRT_OUTPUT, 0, BRT_DEPTH_BUFFER_O, (uintptr_t)NULL);
+    v1db.renderer->dispatch->_partSet(v1db.renderer, BRT_OUTPUT, 0, BRT_DEPTH_BUFFER_O, (uintptr_t)depth_buffer);
     v1db.heap.current = v1db.heap.base;
     camera_data = camera->type_data;
     v1db.default_order_table->max_z = camera_data->yon_z;
@@ -639,6 +732,11 @@ void C2_HOOK_CDECL BrZbsSceneRenderEnd(void) {
         RenderOrderTableList();
     }
     v1db.renderer->dispatch->_flush(v1db.renderer, 0);
+#ifndef CARPOCALYPSE2_MATCHING
+    if (v1db.renderer->dispatch->_sceneEnd != NULL) {
+        v1db.renderer->dispatch->_sceneEnd(v1db.renderer);
+    }
+#endif
     v1db.rendering = 0;
     v1db.render_root = NULL;
 }
@@ -691,6 +789,11 @@ void C2_HOOK_CDECL BrZbsSceneRender(br_actor* world, br_actor* camera, br_pixelm
         RenderOrderTableList();
     }
     v1db.renderer->dispatch->_flush(v1db.renderer, 0);
+#ifndef CARPOCALYPSE2_MATCHING
+    if (v1db.renderer->dispatch->_sceneEnd != NULL) {
+        v1db.renderer->dispatch->_sceneEnd(v1db.renderer);
+    }
+#endif
     v1db.rendering = 0;
     v1db.render_root = NULL;
 }

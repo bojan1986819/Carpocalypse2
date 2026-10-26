@@ -42,6 +42,7 @@ extern float gMass_mine;
 // GotPowerupXX
 
 // GotPowerupEarwig
+void C2_HOOK_FASTCALL GotPowerupEarwig(tCar_spec* pCar, int pIndex, int pMessage, int pSelect_inventory);
 
 // AutoGoody
 
@@ -392,6 +393,7 @@ extern void C2_HOOK_FASTCALL RemoveTail(void);
 extern void C2_HOOK_FASTCALL PrintPowerupIconIn3D(int pX, int pY, tHeadup_icon* pIcon, tPowerup* pPowerup, int pScale, tU32 pTime);
 
 extern br_actor* C2_HOOK_FASTCALL CreateBillBoard(br_pixelmap* pTexture);
+extern void C2_HOOK_FASTCALL DisposeBillBoard(br_actor* pActor);
 
 extern void C2_HOOK_FASTCALL SetDefaultPowerupFilename(void);
 

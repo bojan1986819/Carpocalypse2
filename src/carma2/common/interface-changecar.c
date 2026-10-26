@@ -5,9 +5,11 @@
 
 #include "interface.h"
 #include "interface-main.h"
+#include "frontend.h"
 #include "globvars.h"
 #include "globvrpb.h"
 #include "utility.h"
+#include "input.h"
 
 #include "c2_string.h"
 
@@ -85,18 +87,32 @@ int gFrontend_change_car_selected_car;
 
 // FUNCTION: CARMA2_HW 0x0046b4e0
 int C2_HOOK_FASTCALL ChangeCarMenuInfunc(tFrontend_spec* pFrontend) {
+    int available_count;
+    int racer_count;
     int i;
+    tOpponent* opponent;
+    int* available_car;
 
     gFrontend_change_car_selected_car = 0;
-    if (gProgram_state.number_of_cars >= 2 || gProgram_state.game_completed) {
-        pFrontend->items[0].enabled = kFrontendItemEnabled_enabled;
-        pFrontend->items[1].enabled = kFrontendItemEnabled_enabled;
-    } else {
+    if (gProgram_state.number_of_cars < 2 && !gProgram_state.game_completed) {
         pFrontend->items[0].enabled = kFrontendItemEnabled_default;
         pFrontend->items[1].enabled = kFrontendItemEnabled_default;
+    } else {
+        pFrontend->items[0].enabled = kFrontendItemEnabled_enabled;
+        pFrontend->items[1].enabled = kFrontendItemEnabled_enabled;
     }
-    DefaultInfunc(pFrontend);
-    ResetInterfaceTimeout();
+    if (!pFrontend->loaded) {
+        LoadMenuSettings(pFrontend);
+        FuckWithWidths(pFrontend);
+        if (pFrontend->previous != NULL) {
+            pFrontend->previous->isPreviousSomeOtherMenu = 1;
+        }
+    }
+    gFrontend_scrollbars_updated = 0;
+    EdgeTriggerModeOff();
+    WaitForNoKeys();
+    EdgeTriggerModeOn();
+    gFrontend_time_last_input = PDGetTotalTime();
     gFrontend_car_image_outdated = 1;
     gFrontend_opponent_profile_pic_needs_update = 1;
     FuckWithWidths(pFrontend);
@@ -109,14 +125,18 @@ int C2_HOOK_FASTCALL ChangeCarMenuInfunc(tFrontend_spec* pFrontend) {
     }
 
     if (gProgram_state.game_completed) {
-        gProgram_state.number_of_cars = 0;
-        for (i = 0; i < gNumber_of_racers; i++) {
-
-            if (gOpponents[i].network_availability != eNet_avail_never) {
-                gProgram_state.cars_available[gProgram_state.number_of_cars] = i;
-                gProgram_state.number_of_cars += 1;
+        racer_count = gNumber_of_racers;
+        available_count = 0;
+        opponent = gOpponents;
+        available_car = gProgram_state.cars_available;
+        for (i = 0; i < racer_count; i++) {
+            if (opponent->network_availability != eNet_avail_never) {
+                *available_car++ = i;
+                available_count += 1;
             }
+            opponent++;
         }
+        gProgram_state.number_of_cars = available_count;
     }
     gFrontend_scroll_time_increment = 50;
     gFrontend_scroll_last_update = PDGetTotalTime();

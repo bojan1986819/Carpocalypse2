@@ -143,6 +143,7 @@ br_uint_32* C2_HOOK_STDCALL ConvertLongCopy(br_uint_32** pextra, br_uint_32* src
     return ret;
 }
 
+// C2PORT-NONMATCHING: best 46.63% | difftest PASS 2000 trials (spec 0052d8e0_ValueQuery.json) | reason complete conversion dispatch with bounded pointer fixtures
 // FUNCTION: CARMA2_HW 0x0052d8e0
 br_error C2_HOOK_STDCALL ValueQuery(br_token_value* tv, void** pextra, br_size_t* pextra_size, void* block, br_tv_template_entry* tep) {
     void* mem;
@@ -517,6 +518,7 @@ copy_integers:
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 39.13% | difftest PASS 2000 trials (spec 0052e300_ValueExtraSize.json, FLAG8, CALLBACK) | reason equivalent type sizing with dispatch-table and stack codegen differences
 // FUNCTION: CARMA2_HW 0x0052e300
 br_size_t C2_HOOK_STDCALL ValueExtraSize(void* block, br_tv_template_entry* tep) {
     void* mem;
@@ -525,7 +527,7 @@ br_size_t C2_HOOK_STDCALL ValueExtraSize(void* block, br_tv_template_entry* tep)
     br_tv_custom* custp;
 
     if (tep->flags & 0x8) {
-        mem = (void*)&tep->offset;
+        mem = (void*)tep->offset;
     } else {
         mem = (br_uint_8*)block + tep->offset;
     }
@@ -573,7 +575,7 @@ br_size_t C2_HOOK_STDCALL ValueExtraSize(void* block, br_tv_template_entry* tep)
     case 27:
         return 16 * sizeof(br_fixed_ls);
     case 28:
-        return (BrStrLen(*(char**)mem) + 1 + sizeof(int) - 1) / sizeof(int);
+        return ((BrStrLen(*(char**)mem) + 1 + sizeof(int) - 1) / sizeof(int)) * sizeof(int);
     case 29:
         t = 1;
         lp = *(br_uint_32**)mem;
@@ -663,6 +665,7 @@ br_error C2_HOOK_CDECL BrTokenValueQueryManySize(br_size_t* psize, br_token_valu
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 48.1% | difftest PASS 2000 trials (spec 0052e430_BrTokenValueQueryAll.json) | reason resolved all entries; VC5 loop and register allocation differ
 // FUNCTION: CARMA2_HW 0x0052e430
 br_error C2_HOOK_CDECL BrTokenValueQueryAll(br_token_value* buffer, br_size_t buffer_size, void* block, br_tv_template* template) {
     br_tv_template_entry* tp;
@@ -674,7 +677,12 @@ br_error C2_HOOK_CDECL BrTokenValueQueryAll(br_token_value* buffer, br_size_t bu
     br_error r;
 
     if (!template->names_resolved) {
-        templateResolveNames(template);
+        for (e = 0; e < template->n_entries; e++) {
+            tp = &template->entries[e];
+            if (tp->name != NULL) {
+                tp->token = BrTokenCreate(tp->name, BR_NULL_TOKEN);
+            }
+        }
     }
 
     n = 1;
@@ -709,6 +717,7 @@ br_error C2_HOOK_CDECL BrTokenValueQueryAll(br_token_value* buffer, br_size_t bu
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 27.35% | difftest PASS 2000 trials (spec difftest/specs/0052e510_BrTokenValueQueryAllSize.json) | reason token template resolution and VC5 size accumulation layout
 // FUNCTION: CARMA2_HW 0x0052e510
 br_error C2_HOOK_CDECL BrTokenValueQueryAllSize(br_size_t* psize, void* block, br_tv_template* template) {
     br_tv_template_entry* tp;
@@ -1373,8 +1382,11 @@ static br_error parseTokenValue(br_lexer* l, br_token_value* tv, br_size_t size)
     return r;
 }
 
+// C2PORT-NONMATCHING: best 39.39% | difftest PASS 2000 trials (spec difftest/specs/0052ee40_BrTokenValueCompare.json) | reason switch-dispatch
 // FUNCTION: CARMA2_HW 0x0052ee40
 br_boolean C2_HOOK_CDECL BrTokenValueCompare(br_token_value* tv1, br_token_value* tv2) {
+    br_token type;
+    br_size_t size;
     int i;
 
     if (tv1 == NULL && tv2 == NULL) {
@@ -1383,169 +1395,88 @@ br_boolean C2_HOOK_CDECL BrTokenValueCompare(br_token_value* tv1, br_token_value
     if (tv1 == NULL || tv2 == NULL) {
         return 0;
     }
-    for (; tv1->t == tv2->t; tv1++, tv2++) {
+    for (;;) {
+        if (tv1->t != tv2->t) {
+            return 0;
+        }
         if (tv1->t == BR_NULL_TOKEN) {
             return 1;
         }
-        switch (BrTokenType(tv1->t)) {
+        type = BrTokenType(tv1->t);
+        switch (type) {
         case BRT_BOOLEAN:
-            if (!tv1->v.b != !tv2->v.b) {
+            if ((tv1->v.u32 == 0) != (tv2->v.u32 == 0)) {
                 return 0;
             }
-            break;
+            /* fall through */
         case BRT_INT_8:
         case BRT_UINT_8:
-            if (tv1->v.u8 != tv2->v.u8) {
+            if (((br_int_8)tv1->v.u32 == 0) != ((br_int_8)tv2->v.u32 == 0)) {
                 return 0;
             }
-            break;
+            /* fall through */
         case BRT_INT_16:
         case BRT_UINT_16:
-            if (tv1->v.u16 != tv2->v.u16) {
+            if (((br_int_16)tv1->v.u32 == 0) != ((br_int_16)tv2->v.u32 == 0)) {
                 return 0;
             }
-            break;
-        case BRT_INT_32:
-        case BRT_UINT_32:
-        case BRT_COLOUR_RGB:
+            /* fall through */
+        default:
             if (tv1->v.u32 != tv2->v.u32) {
                 return 0;
             }
-            break;
-        case BRT_FIXED:
-            if (tv1->v.x != tv2->v.x) {
-                return 0;
-            }
-            break;
-        case BRT_FLOAT:
-        case BRT_ANGLE:
-            if (tv1->v.f != tv2->v.f) {
-                return 0;
-            }
-            break;
-        case BRT_OBJECT:
-            if (tv1->v.o != tv2->v.o) {
-                return 0;
-            }
-            break;
+            goto compare_next;
         case BRT_VECTOR2_INTEGER:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 2 * sizeof(int)) != 0) {
-                return 0;
-            }
-            break;
-        case BRT_VECTOR3_INTEGER:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 3 * sizeof(int)) != 0) {
-                return 0;
-            }
-            break;
-        case BRT_VECTOR4_INTEGER:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 3 * sizeof(int)) != 0) {
-                return 0;
-            }
-            break;
         case BRT_VECTOR2_FIXED:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 2 * sizeof(br_fixed_ls)) != 0) {
-                return 0;
-            }
-            break;
-        case BRT_VECTOR3_FIXED:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 3 * sizeof(br_fixed_ls)) != 0) {
-                return 0;
-            }
-            break;
-        case BRT_VECTOR4_FIXED:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 3 * sizeof(br_fixed_ls)) != 0) {
-                return 0;
-            }
-            break;
         case BRT_VECTOR2_FLOAT:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 2 * sizeof(float)) != 0) {
-                return 0;
-            }
-            break;
+            size = 2 * sizeof(br_uint_32);
+            goto compare_memory;
+        case BRT_VECTOR3_INTEGER:
+        case BRT_VECTOR3_FIXED:
         case BRT_VECTOR3_FLOAT:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 3 * sizeof(float)) != 0) {
-                return 0;
-            }
-            break;
+            size = 3 * sizeof(br_uint_32);
+            goto compare_memory;
+        case BRT_VECTOR4_INTEGER:
+        case BRT_VECTOR4_FIXED:
         case BRT_VECTOR4_FLOAT:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 3 * sizeof(float)) != 0) {
-                return 0;
-            }
-            break;
+            size = 4 * sizeof(br_uint_32);
+            goto compare_memory;
         case BRT_MATRIX23_FIXED:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 6 * sizeof(br_fixed_ls)) != 0) {
-                return 0;
-            }
-            break;
-        case BRT_MATRIX34_FIXED:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 12 * sizeof(br_fixed_ls)) != 0) {
-                return 0;
-            }
-            break;
-        case BRT_MATRIX4_FIXED:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 16 * sizeof(br_fixed_ls)) != 0) {
-                return 0;
-            }
-            break;
         case BRT_MATRIX23_FLOAT:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 6 * sizeof(float)) != 0) {
-                return 0;
-            }
-            break;
+            size = 6 * sizeof(br_uint_32);
+            goto compare_memory;
+        case BRT_MATRIX34_FIXED:
         case BRT_MATRIX34_FLOAT:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 12 * sizeof(float)) != 0) {
-                return 0;
-            }
-            break;
+            size = 12 * sizeof(br_uint_32);
+            goto compare_memory;
+        case BRT_MATRIX4_FIXED:
         case BRT_MATRIX4_FLOAT:
-            if (BrMemCpy(tv1->v.p, tv2->v.p, 16 * sizeof(float)) != 0) {
+            size = 16 * sizeof(br_uint_32);
+compare_memory:
+            if (BrMemCmp(tv1->v.p, tv2->v.p, size) != 0) {
                 return 0;
             }
             break;
         case BRT_STRING:
         case BRT_CONSTANT_STRING:
-            if (BrStrCmp(tv1->v.cstr, tv1->v.cstr) != 0) {
+            if (BrStrCmp(tv1->v.cstr, tv2->v.cstr) != 0) {
                 return 0;
             }
-            break;
+            goto compare_next;
         case BRT_OBJECT_LIST:
         case BRT_POINTER_LIST:
-            for (i = 0;; i++) {
-#if 1
-                if (tv1->v.pl[i] != tv2->v.pl[i]) {
-#else
-                if (tv1->v.pl[i] != tv1->v.pl[i]) {
-#endif
-                    return 0;
-                }
-                if (tv1->v.pl[i] == NULL) {
-                    break;
-                }
+            for (i = 0; tv1->v.pl[i] != NULL; i++) {
             }
-            break;
+            goto compare_next;
         case BRT_TOKEN_LIST:
-            for (i = 0;; i++) {
-#if 1
-                if (tv1->v.tl[i] != tv2->v.tl[i]) {
-#else
-                if (tv1->v.tl[i] != tv1->v.tl[i]) {
-#endif
-                    return 0;
-                }
-                if (tv1->v.tl[i] == BR_NULL_TOKEN) {
-                    break;
-                }
+            for (i = 0; tv1->v.tl[i] != BR_NULL_TOKEN; i++) {
             }
-            break;
-        default:
-            if (tv1->v.p != tv2->v.p) {
-                return 0;
-            }
-            break;
+            goto compare_next;
         }
+compare_next:
+        tv1++;
+        tv2++;
     }
-    return 0;
 }
 
 br_error C2_HOOK_CDECL BrTokenValueDup(br_token_value** dstp, br_token_value* src) {

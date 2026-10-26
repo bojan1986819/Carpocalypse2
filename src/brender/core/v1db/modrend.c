@@ -84,11 +84,22 @@ void C2_HOOK_STDCALL renderFaces(br_actor* actor, br_model* model, br_material* 
 
     if (model->stored != NULL) {
         // stored_geometry = (br_geometry_stored*)model->stored;
+#ifndef CARPOCALYPSE2_MATCHING
+        /* port: also pass the material state, as BRender 1.4 does (glrend reads it as the
+         * default state of groups without their own; softrend ignores the extra cdecl argument) */
+        {
+            typedef br_error C2_HOOK_CDECL stored_render_fn(br_geometry_stored*, br_renderer*, void*);
+            br_geometry_stored* gs = (br_geometry_stored*)model->stored;
+            stored_render_fn* fn = (stored_render_fn*)(on_screen == BRT_ACCEPT ? (void*)gs->dispatch->_renderOnScreen : (void*)gs->dispatch->_render);
+            fn(gs, v1db.renderer, material != NULL ? material->stored : NULL);
+        }
+#else
         if (on_screen == BRT_ACCEPT) {
             ((br_geometry_stored*)model->stored)->dispatch->_renderOnScreen((br_geometry_stored*)model->stored, v1db.renderer);
         } else {
             ((br_geometry_stored*)model->stored)->dispatch->_render((br_geometry_stored*)model->stored, v1db.renderer);
         }
+#endif
     } else if (model->prepared != NULL) {
         // v1_model = (br_geometry_v1_model*)v1db.format_model;
         if (on_screen == BRT_ACCEPT) {
@@ -123,6 +134,7 @@ void C2_HOOK_STDCALL nullRender(br_actor* actor, br_model* model, br_material* m
 
 }
 
+// C2PORT-NONMATCHING: best 20.98% | difftest PASS 2000 trials (spec difftest/specs/00526150_makeMeshFromBounds.json) | reason global-store-codegen
 // FUNCTION: CARMA2_HW 0x00526150
 br_model* C2_HOOK_STDCALL makeMeshFromBounds(br_bounds* b) {
     int i;
@@ -162,10 +174,10 @@ br_model* C2_HOOK_STDCALL makeMeshFromBounds(br_bounds* b) {
 
     // 2. Modify d in the face equation (a*x+b*y+c*y+d=0)
     for (i = 0; i < BR_ASIZE(bounds_faces) / 4; i++) {
-        bounds_faces[2 * i + 0].eqn.v[3] = b->min.v[i];
-        bounds_faces[2 * i + 1].eqn.v[3] = b->min.v[i];
-        bounds_faces[2 * i + 6].eqn.v[3] = b->max.v[i];
-        bounds_faces[2 * i + 7].eqn.v[3] = b->max.v[i];
+        bounds_faces[2 * i + 0].eqn.v[3] = b->max.v[i];
+        bounds_faces[2 * i + 1].eqn.v[3] = b->max.v[i];
+        bounds_faces[2 * i + 6].eqn.v[3] = -b->min.v[i];
+        bounds_faces[2 * i + 7].eqn.v[3] = -b->min.v[i];
     }
 
     // 3. Copy bounds

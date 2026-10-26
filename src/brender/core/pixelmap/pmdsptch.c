@@ -625,7 +625,8 @@ br_uint_16 C2_HOOK_CDECL BrPixelmapTextWidth(br_pixelmap* dst, br_font* font, ch
     }
 }
 
-br_uint_16 C2_HOOK_CDECL  BrPixelmapTextHeight(br_pixelmap* dst, br_font* font) {
+// FUNCTION: CARMA2_HW 0x00538b50
+br_uint_16 C2_HOOK_CDECL BrPixelmapTextHeight(br_pixelmap* dst, br_font* font) {
 
     CheckDispatch((br_device_pixelmap*)dst);
     return font->glyph_y;

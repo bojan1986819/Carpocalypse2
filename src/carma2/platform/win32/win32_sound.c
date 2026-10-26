@@ -2,7 +2,17 @@
 
 #include "platform.h"
 #include "s3/internal/audio.h"
+#include "s3/internal/resource.h"
 #include "carpocalypse2_macros.h"
+
+// GLOBAL: CARMA2_HW 0x0058d528
+const volatile double gDOUBLE_0058d528 = 255.0;
+
+// GLOBAL: CARMA2_HW 0x0058d530
+const volatile double gDOUBLE_0058d530 = 11.764705882352942;
+
+// GLOBAL: CARMA2_HW 0x0058d538
+const volatile double gDOUBLE_0058d538 = 9999.0;
 
 // GLOBAL: CARMA2_HW 0x006aaa1c
 LPDIRECTSOUND gDirectSound;
@@ -22,6 +32,12 @@ MCI_OPEN_PARMS gPDS3_mci_open_parms;
 // GLOBAL: CARMA2_HW 0x0079fec0
 MCI_SET_PARMS gPDS3_mci_set_parms;
 
+// GLOBAL: CARMA2_HW 0x007a00a0
+MCI_SET_PARMS gPDS3_mci_audio_parms;
+
+// GLOBAL: CARMA2_HW 0x007a00c0
+MCI_SEQ_SET_PARMS gPDS3_mci_seq_set_parms;
+
 // GLOBAL: CARMA2_HW 0x006b2d98
 int gPDS3_cda_initialized;
 
@@ -33,6 +49,9 @@ char gS3_working_directory[260];
 
 // GLOBAL: CARMA2_HW 0x006b2da4
 int gPDS3_midi_playing;
+
+// GLOBAL: CARMA2_HW 0x006b2da8
+int gPDS3_midi_restart_required;
 
 // GLOBAL: CARMA2_HW 0x006b2dac
 int gPDS3_cda_media_present;
@@ -99,6 +118,11 @@ int C2_HOOK_FASTCALL PDS3DDXInit(void) {
 #endif
 }
 
+// FUNCTION: CARMA2_HW 0x005699a3
+int C2_HOOK_FASTCALL PDS3Return0(void) {
+    return 0;
+}
+
 // FUNCTION: CARMA2_HW 0x005699aa
 int C2_HOOK_FASTCALL PDS3InitCDA(void) {
 
@@ -148,36 +172,42 @@ void C2_HOOK_FASTCALL PDS3ReleaseSound(tS3_descriptor* pSound_descriptor) {
     }
 }
 
+// C2PORT-NONMATCHING: best 60.47% | difftest PASS 2000 trials (spec difftest/specs/00569401_PDReverseAudio.json) | reason stack-layout,loop-shape
 // FUNCTION: CARMA2_HW 0x00569401
 int C2_HOOK_FASTCALL PDReverseAudio(tS3_channel* pChannel) {
     tU8* buffer_data;
-    DWORD buffer_data_size;
-    DWORD i;
+    int buffer_data_size;
+    int i;
     tU8* tmp_buffer;
     DWORD sample_size;
+    LPDIRECTSOUNDBUFFER buffer;
 
-    LPDIRECTSOUNDBUFFER buffer = pChannel->descriptor->pd_handle;
+    buffer = pChannel->descriptor->pd_handle;
     if (buffer == NULL) {
         return 1;
     }
     sample_size = pChannel->descriptor->buffer_description->sample_size;
+    if (FAILED(IDirectSoundBuffer_Lock(buffer, 0, sample_size, (void**)&buffer_data, (DWORD*)&buffer_data_size, NULL, NULL, 0))) {
+        return 0;
+    }
     if (sample_size > 2000000) {
         return 0;
     }
-    if (FAILED(IDirectSoundBuffer_Lock(buffer, 0, sample_size, (void**)&buffer_data, &buffer_data_size, NULL, NULL, 0))) {
-        return 0;
-    }
-    tmp_buffer = BrMemAllocate(sample_size, kMem_S3_Windows_95_create_temp_buffer_space_to_reverse_sample);
+    tmp_buffer = S3MemAllocate(sample_size, kMem_S3_Windows_95_create_temp_buffer_space_to_reverse_sample);
     if (tmp_buffer == NULL) {
-        IDirectSoundBuffer_Unlock(buffer, buffer_data, buffer_data_size, NULL, 0);
         return 1;
     }
     memmove(tmp_buffer, buffer_data, buffer_data_size);
     for (i = 0; i < buffer_data_size; i++) {
-        buffer_data[i] = tmp_buffer[sample_size - 1 - i];
+        buffer_data[i] = tmp_buffer[sample_size - i - 1];
     }
-    BrMemFree(tmp_buffer);
+    S3MemFree(tmp_buffer);
     IDirectSoundBuffer_Unlock(buffer, buffer_data, buffer_data_size, NULL, 0);
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00569b29
+int C2_HOOK_FASTCALL PDS3Return0_B(void) {
     return 0;
 }
 
@@ -201,6 +231,7 @@ const char* C2_HOOK_FASTCALL PDS3GetWorkingDirectory(void) {
     return gS3_working_directory;
 }
 
+// C2PORT-NONMATCHING: best 46.51% | difftest PASS 2000 trials (spec difftest/specs/00569cb1_PDS3StopMidiChannel.json) | reason VC5 stack-local layout and conditional scheduling
 // FUNCTION: CARMA2_HW 0x00569cb1
 int C2_HOOK_FASTCALL PDS3StopMidiChannel(tS3_channel* pChannel) {
 
@@ -210,6 +241,30 @@ int C2_HOOK_FASTCALL PDS3StopMidiChannel(tS3_channel* pChannel) {
     }
     if (pChannel->active) {
         pChannel->needs_service = 1;
+    }
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00569d01
+int C2_HOOK_FASTCALL FUN_00569d01(tS3_channel* pChannel) {
+    MCIDEVICEID mci_device;
+
+    mci_device = (MCIDEVICEID)pChannel->mciDevice;
+    if (gPDS3_midi_playing != 0) {
+        gPDS3_midi_playing = 0;
+        mciSendCommandA(mci_device, MCI_CLOSE, 0, 0);
+    }
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00569de5
+int C2_HOOK_FASTCALL PDS3MuteMidiChannel(tS3_channel* pChannel) {
+    MCIDEVICEID mci_device;
+
+    mci_device = (MCIDEVICEID)pChannel->mciDevice;
+    if (gPDS3_midi_playing != 0) {
+        gPDS3_mci_audio_parms.dwAudio = MCI_SET_AUDIO_ALL;
+        mciSendCommandA(mci_device, MCI_SET, MCI_SET_AUDIO | MCI_SET_OFF, (DWORD_PTR)&gPDS3_mci_audio_parms);
     }
     return 0;
 }
@@ -261,27 +316,40 @@ int C2_HOOK_FASTCALL PDS3StopSampleChannel(tS3_channel* pChannel) {
     return 1;
 }
 
+// C2PORT-NONMATCHING: best 61.03% | difftest PASS 2000 trials (spec difftest/specs/00569507_PDS3UpdateChannelVolume.json) | reason vc5-frame-layout-platform-vtable
 // FUNCTION: CARMA2_HW 0x00569507
 int C2_HOOK_FASTCALL PDS3UpdateChannelVolume(tS3_channel* pChannel) {
-
     if (pChannel->type == 0) {
+        float volume_multiplier;
+        float outlet_volume;
+
+        volume_multiplier = (float)pChannel->volume_multiplier;
+        outlet_volume = (float)pChannel->owner_outlet->volume;
         if (pChannel->descriptor != NULL && pChannel->descriptor->type == pChannel->type) {
             LPDIRECTSOUNDBUFFER buffer = pChannel->descriptor->pd_handle;
 
             if (buffer != NULL) {
-                int volume = (int)(pChannel->owner_outlet->volume / 255.f * pChannel->volume_multiplier * 11.76470588235294f);
+                int volume = (int)(volume_multiplier * (outlet_volume / gDOUBLE_0058d528) * gDOUBLE_0058d530);
                 int ds_volume = volume - 3000;
-                ds_volume = MAX(ds_volume, -9999);
-                ds_volume = MIN(ds_volume, 0);
+                if (ds_volume < -9999) {
+                    ds_volume = -9999;
+                }
+                if (ds_volume > 0) {
+                    ds_volume = 0;
+                }
 
                 if (SUCCEEDED(IDirectSoundBuffer_SetVolume(buffer, ds_volume))) {
                     if (gS3_callbacks.on_sample_channel_set_volume != NULL) {
-                        gS3_callbacks.on_sample_channel_set_volume(pChannel, volume);
+                        gS3_callbacks.on_sample_channel_set_volume(pChannel, (int)volume_multiplier);
                     }
-                    if (ds_volume != 0 && pChannel->spatial_sound) {
-                        int pan = (int)(pChannel->field_0x28 * 9999.f);
-                        pan = MAX(pan, -9999);
-                        pan = MIN(pan,  9999);
+                    if (ds_volume != 0 && pChannel->spatial_sound != 0) {
+                        int pan = (int)(pChannel->field_0x28 * gDOUBLE_0058d538);
+                        if (pan < -9999) {
+                            pan = -9999;
+                        }
+                        if (pan > 9999) {
+                            pan = 9999;
+                        }
                         if (gS3_callbacks.on_sample_channel_set_pan != NULL) {
                             gS3_callbacks.on_sample_channel_set_pan(pChannel, pChannel->field_0x28);
                         }
@@ -290,9 +358,7 @@ int C2_HOOK_FASTCALL PDS3UpdateChannelVolume(tS3_channel* pChannel) {
                 }
             }
         }
-    } else if (pChannel->type == 1) {
-
-    } else if (pChannel->type == 2) {
+    } else if (pChannel->type != 1 && pChannel->type == 2) {
         PDS3UpdateCDAVolume(pChannel, pChannel->owner_outlet->volume);
     }
     return 1;
@@ -316,6 +382,58 @@ void C2_HOOK_FASTCALL PDS3Stop(void) {
     }
 }
 
+// FUNCTION: CARMA2_HW 0x00569d67
+int C2_HOOK_FASTCALL PDS3UpdateMidiChannelPitch(tS3_channel* pChannel, int pPitch) {
+    MCIDEVICEID device;
+
+    device = pChannel->mciDevice;
+    gPDS3_mci_midi_status_parms.dwItem = MCI_SEQ_STATUS_TEMPO;
+    mciSendCommandA(device, MCI_STATUS, MCI_STATUS_ITEM | MCI_WAIT, (DWORD_PTR)&gPDS3_mci_midi_status_parms);
+    gPDS3_mci_seq_set_parms.dwTempo = gPDS3_mci_midi_status_parms.dwReturn * (int)ldexp((double)pPitch, -16);
+    mciSendCommandA(device, MCI_SET, MCI_SEQ_SET_TEMPO, (DWORD_PTR)&gPDS3_mci_seq_set_parms);
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00569e6d
+int C2_HOOK_FASTCALL PDS3PauseMidiChannel(tS3_channel* pChannel) {
+    MCIDEVICEID device;
+
+    device = pChannel->mciDevice;
+    if (gPDS3_midi_restart_required == 0) {
+        gPDS3_mci_midi_status_parms.dwItem = MCI_STATUS_MODE;
+        mciSendCommandA(device, MCI_STATUS, MCI_STATUS_ITEM | MCI_WAIT, (DWORD_PTR)&gPDS3_mci_midi_status_parms);
+        if (gPDS3_mci_midi_status_parms.dwReturn == MCI_MODE_PLAY) {
+            gPDS3_midi_restart_required = 1;
+            mciSendCommandA(device, MCI_PAUSE, 0, 0);
+        }
+    }
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00569eda
+int C2_HOOK_FASTCALL PDS3ResumeMidiChannel(tS3_channel* pChannel) {
+    MCIDEVICEID device;
+
+    device = pChannel->mciDevice;
+    if (gPDS3_midi_restart_required != 0) {
+        gPDS3_midi_restart_required = 0;
+        mciSendCommandA(device, MCI_PLAY, 0, (DWORD_PTR)&mci_play_parms);
+    }
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00569e29
+int C2_HOOK_FASTCALL PDS3UnmuteMidiChannel(tS3_channel* pChannel) {
+    MCIDEVICEID device;
+
+    device = pChannel->mciDevice;
+    if (gPDS3_midi_playing != 0) {
+        gPDS3_mci_audio_parms.dwAudio = 0;
+        mciSendCommandA(device, MCI_SET, MCI_SET_AUDIO | MCI_SET_ON, (DWORD_PTR)&gPDS3_mci_audio_parms);
+    }
+    return 0;
+}
+
 // FUNCTION: CARMA2_HW 0x00569f1b
 int C2_HOOK_FASTCALL PDS3IsMIDIStopped(tS3_channel *pChannel) {
 
@@ -324,10 +442,40 @@ int C2_HOOK_FASTCALL PDS3IsMIDIStopped(tS3_channel *pChannel) {
     return gPDS3_mci_midi_status_parms.dwReturn != MCI_MODE_PLAY;
 }
 
+// FUNCTION: CARMA2_HW 0x0056a1af
+int C2_HOOK_FASTCALL PDS3PauseCDA(volatile undefined4 pUnused_arg) {
+
+    if (gPDS3_cda_media_present != 0 && gPDS3_cda_paused == 0) {
+        gPDS3_cda_status_parms.dwItem = MCI_STATUS_MODE;
+        mciSendCommandA(gPDS3_mci_open_parms.wDeviceID, MCI_STATUS, MCI_STATUS_ITEM | MCI_WAIT, (DWORD_PTR)&gPDS3_cda_status_parms);
+        if (gPDS3_cda_status_parms.dwReturn == MCI_MODE_PLAY) {
+            gPDS3_cda_paused = 1;
+            mciSendCommandA(gPDS3_mci_open_parms.wDeviceID, MCI_PAUSE, 0, 0);
+        }
+    }
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x0056a21f
+int C2_HOOK_FASTCALL PDS3ResumeCDA(tS3_channel* pChannel) {
+
+    if (gPDS3_cda_media_present != 0 && gPDS3_cda_paused != 0) {
+        gPDS3_cda_paused = 0;
+        mciSendCommandA(gPDS3_mci_open_parms.wDeviceID, MCI_PLAY, 0, (DWORD_PTR)&gPDS3_cda_play_parms);
+    }
+    return 0;
+}
+
+// C2PORT-NONMATCHING: best 100% | difftest PASS 2000 trials (spec difftest/specs/0056a260_PDS3IsCDAPlaying.json) | reason raw-return-preservation
 // FUNCTION: CARMA2_HW 0x0056a260
 int C2_HOOK_FASTCALL PDS3IsCDAPlaying(void) {
 
-    return gS3_CDA_enabled && gPDS3_cda_is_playing && gPDS3_cda_media_present;
+    if (gS3_CDA_enabled != 0) {
+        if (gPDS3_cda_media_present != 0) {
+            return gPDS3_cda_is_playing;
+        }
+    }
+    return 0;
 }
 
 int C2_HOOK_FASTCALL PDS3IsSamplePlaying(tS3_channel* pChannel) {
@@ -349,6 +497,7 @@ int C2_HOOK_FASTCALL PDS3IsSamplePlaying(tS3_channel* pChannel) {
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 37.5% | difftest PASS 2000 trials (spec difftest/specs/0056967e_PDS3UpdateChannelFrequency.json) | reason stack-layout and vtable-call codegen
 // FUNCTION: CARMA2_HW 0x0056967e
 int C2_HOOK_FASTCALL PDS3UpdateChannelFrequency(tS3_channel* pChannel) {
 
@@ -408,6 +557,18 @@ tS3_error_codes C2_HOOK_FASTCALL PDS3StartMidiChannel(tS3_channel* pChannel) {
     pChannel->mciDevice = device;
     gPDS3_midi_playing = 1;
     return eS3_error_none;
+}
+
+// FUNCTION: CARMA2_HW 0x00569f69
+int C2_HOOK_FASTCALL PDS3StopMidiChannelWrapper(tS3_channel* pChannel, int pArg2, int pArg3, int pArg4, int pArg5, int pArg6) {
+
+    PDS3StopMidiChannel(pChannel);
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00569f85
+int C2_HOOK_FASTCALL PDS3Return0_C(tS3_channel* pChannel) {
+    return 0;
 }
 
 // FUNCTION: CARMA2_HW 0x00569f92

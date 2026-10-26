@@ -1,0 +1,41 @@
+--- a/source/utils/mem_utils.c
++++ b/source/utils/mem_utils.c
+@@ -81,10 +81,11 @@
+  * Here we use malloc-ed pointers rather than appending the actual header on the block itself
+  * so that these headers are fast to access by the CPU (since vitaGL uses uncached memory by default.
+  */
+-static tm_block_t *heap_blk_new(void) {
++static tm_block_t *heap_blk_new(vglMemType type, uint32_t size, uint32_t alignment) {
++	static unsigned int chunks;
+ 	tm_lock_mutex(&header_mutex)
+ 	if (!tm_free_headers) {
+-		vgl_log("Extending heap headers list with an extra chunk.\n");
++		vgl_log("Extending heap headers list: chunk=%u type=%d block_bytes=%u alignment=%u\n", ++chunks, type, size, alignment);
+ #ifdef HAVE_WRAPPED_ALLOCATORS
+ 		tm_block_t *chunk = __real_malloc(sizeof(tm_block_t) * HEADERS_PER_CHUNK);
+ #else
+@@ -193,13 +194,13 @@
+ 			GLboolean has_extra_block = remaining >= MIN_FREE_BLOCK_SIZE;
+ 
+ 			if (skip != 0) {
+-				skipblk = heap_blk_new();
++				skipblk = heap_blk_new(type, size, alignment);
+ 				if (!skipblk)
+ 					return NULL;
+ 			}
+ 
+ 			if (has_extra_block) {
+-				unusedblk = heap_blk_new();
++				unusedblk = heap_blk_new(type, size, alignment);
+ 				if (!unusedblk) {
+ 					if (skipblk)
+ 						heap_blk_release(skipblk);
+@@ -298,7 +299,7 @@
+ // Extends the heap setup with a new heap type
+ static void heap_extend(int32_t type, void *base, uint32_t size) {
+ 	tm_max_failed_alloc[type] = size + 1;
+-	tm_block_t *block = heap_blk_new();
++	tm_block_t *block = heap_blk_new(type, size, 0);
+ 	block->next = NULL;
+ 	block->type = type;
+ 	block->base = (uintptr_t)base;

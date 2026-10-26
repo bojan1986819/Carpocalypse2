@@ -54,7 +54,6 @@ extern void C2_HOOK_FASTCALL FlicPaletteAllocate(void);
 // DoUncompressedTrans
 
 // DoMini
-void C2_HOOK_FASTCALL DoMini(tFlic_descriptor* pFlic_info, tU32 chunk_length);
 
 // DrawTranslations
 
@@ -140,6 +139,8 @@ void C2_HOOK_FASTCALL FreeFlic(int pIndex);
 void C2_HOOK_FASTCALL RunFlicAt(int pIndex, int pX, int pY);
 
 void C2_HOOK_FASTCALL RunFlic(int pIndex);
+
+void C2_HOOK_FASTCALL FUN_00461980(int pSound_ID, tU32 pSound_time);
 
 void C2_HOOK_FASTCALL PreloadBunchOfFlics(int pBunch_index);
 

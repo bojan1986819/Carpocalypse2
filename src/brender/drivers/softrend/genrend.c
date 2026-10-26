@@ -77,6 +77,7 @@ void C2_HOOK_CDECL Vertex_OS_TransformProjectBounds(br_geometry* self, br_soft_r
     }
 }
 
+// C2PORT-NONMATCHING: best 49.76% | difftest PASS 2000 trials (spec difftest/specs/00547f20_Vertex_OS_TransformProject.json) | reason vc5-x87-register-schedule
 // FUNCTION: CARMA2_HW 0x00547f20
 void C2_HOOK_CDECL Vertex_OS_TransformProject(br_geometry* self, br_soft_renderer* renderer) {
     int v;
@@ -89,34 +90,36 @@ void C2_HOOK_CDECL Vertex_OS_TransformProject(br_geometry* self, br_soft_rendere
             continue;
         }
 
-        tvp->comp[C_W] = BR_SCALAR(1.0);
         TRANSFORM_VERTEX((br_vector4*)(tvp->comp + C_X), &rend.vertices[v].p, &scache.model_to_screen);
-        PROJECT_VERTEX(tvp, tvp->comp[C_X], tvp->comp[C_Y], tvp->comp[C_Z], tvp->comp[C_W]);
+        tvp->comp[C_SX] = (tvp->comp[C_X] * renderer->state.cache.comp_scales[C_SX]) / tvp->comp[C_W] + renderer->state.cache.comp_offsets[C_SX];
+        tvp->comp[C_SY] = (tvp->comp[C_Y] * renderer->state.cache.comp_scales[C_SY]) / tvp->comp[C_W] + renderer->state.cache.comp_offsets[C_SY];
+        tvp->comp[C_SZ] = (tvp->comp[C_Z] * renderer->state.cache.comp_scales[C_SZ]) / tvp->comp[C_W] + renderer->state.cache.comp_offsets[C_SZ] + gScreenZOffset;
     }
 }
 
+// C2PORT-NONMATCHING: best 59.21% | difftest PASS 2000 trials (spec difftest/specs/005480a0_Vertex_OS_TransformProjectBoundsSurf.json) | reason vc5-register-x87-loop-codegen
 // FUNCTION: CARMA2_HW 0x005480a0
 void C2_HOOK_CDECL Vertex_OS_TransformProjectBoundsSurf(br_geometry* self, br_soft_renderer* renderer) {
-    int v;
+    int v = 0;
     int i;
-    brp_vertex* tvp;
-    fmt_vertex* vp;
+    brp_vertex* tvp = rend.temp_vertices;
+    fmt_vertex* vp = rend.vertices;
 
-    for (v = 0; v < rend.nvertices; v++) {
-        tvp = &rend.temp_vertices[v];
-        vp = &rend.vertices[v];
+    if (rend.nvertices > 0) {
+        do {
+            if (rend.vertex_counts[v] != 0) {
+                TRANSFORM_VERTEX((br_vector4*)(tvp->comp + C_X), &vp->p, &scache.model_to_screen);
+                PROJECT_VERTEX(tvp, tvp->comp[C_X], tvp->comp[C_Y], tvp->comp[C_Z], tvp->comp[C_W]);
+                UPDATE_BOUNDS(tvp);
 
-        if (rend.vertex_counts[v] == 0) {
-            continue;
-        }
-
-        TRANSFORM_VERTEX((br_vector4*)(tvp->comp + C_X), &vp->p, &scache.model_to_screen);
-        PROJECT_VERTEX(tvp,tvp->comp[C_X], tvp->comp[C_Y], tvp->comp[C_Z], tvp->comp[C_W]);
-        UPDATE_BOUNDS(tvp);
-
-        for (i = 0; i < renderer->state.cache.nvertex_fns; i++) {
-            renderer->state.cache.vertex_fns[i]((br_renderer*)renderer, &vp->p, &vp->map, &vp->n, scache.colour, tvp->comp);
-        }
+                for (i = 0; i < renderer->state.cache.nvertex_fns; i++) {
+                    renderer->state.cache.vertex_fns[i]((br_renderer*)renderer, &vp->p, &vp->map, &vp->n, scache.colour, tvp->comp);
+                }
+            }
+            v++;
+            tvp++;
+            vp++;
+        } while (v < rend.nvertices);
     }
 }
 
@@ -203,19 +206,13 @@ void C2_HOOK_CDECL Vertex_SurfaceComponentsSurf(br_geometry* self, br_soft_rende
     brp_vertex* tvp;
     fmt_vertex* vp;
 
-    for (v = 0; v < rend.nvertices; v++) {
-        tvp = &rend.temp_vertices[v];
-        vp = &rend.vertices[v];
-
-        if (rend.vertex_counts[v] == 0) {
-            continue;
-        }
-
-        tvp->comp[C_W] = BR_SCALAR(1.0);
-        TRANSFORM_VERTEX((br_vector4*)(tvp->comp + C_X), &vp->p, &scache.model_to_screen);
-
-        for (i = 0; i < renderer->state.cache.nvertex_fns; i++) {
-            renderer->state.cache.vertex_fns[i]((br_renderer*)renderer, &vp->p, &vp->map, &vp->n, scache.colour, tvp->comp);
+    tvp = rend.temp_vertices;
+    vp = rend.vertices;
+    for (v = 0; v < rend.nvertices; v++, tvp++, vp++) {
+        if (rend.vertex_counts[v] != 0) {
+            for (i = 0; i < renderer->state.cache.nvertex_fns; i++) {
+                renderer->state.cache.vertex_fns[i]((br_renderer*)renderer, &vp->p, &vp->map, &vp->n, scache.colour, tvp->comp);
+            }
         }
     }
 }
@@ -228,30 +225,27 @@ void C2_HOOK_CDECL Vertex_SurfaceComponentsTwoSidedSurf(br_geometry* self, br_so
     fmt_vertex* vp;
     br_vector3 rev_normal;
 
-    for (v = 0; v < rend.nvertices; v++) {
-        tvp = &rend.temp_vertices[v];
-        vp = &rend.vertices[v];
+    tvp = rend.temp_vertices;
+    v = 0;
+    vp = rend.vertices;
+    for (; v < rend.nvertices; vp++, v++, tvp = (brp_vertex*)((char*)tvp + sizeof(*tvp))) {
+        if (rend.vertex_counts[v] != 0) {
+            if (tvp->flags & TVDIR_FRONT) {
+                for (i = 0; i < renderer->state.cache.nvertex_fns; i++) {
+                    renderer->state.cache.vertex_fns[i]((br_renderer*)renderer, &vp->p, &vp->map, &vp->n, scache.colour, tvp->comp);
+                }
+            } else {
+                BrVector3Negate(&rev_normal, &vp->n);
 
-        if (rend.vertex_counts[v] == 0) {
-            continue;
-        }
-
-        C2_HOOK_BUG_ON(TVDIR_FRONT != 0x80000000);
-
-        if (tvp->flags & TVDIR_FRONT) {
-            for (i = 0; i < renderer->state.cache.nvertex_fns; i++) {
-                renderer->state.cache.vertex_fns[i]((br_renderer*)renderer, &vp->p, &vp->map, &vp->n, scache.colour, tvp->comp);
-            }
-        } else {
-            BrVector3Negate(&rev_normal, &vp->n);
-
-            for (i = 0; i < renderer->state.cache.nvertex_fns; i++) {
-                renderer->state.cache.vertex_fns[i]((br_renderer*)renderer, &vp->p, &vp->map, &rev_normal, scache.colour, tvp->comp);
+                for (i = 0; i < renderer->state.cache.nvertex_fns; i++) {
+                    renderer->state.cache.vertex_fns[i]((br_renderer*)renderer, &vp->p, &vp->map, &rev_normal, scache.colour, tvp->comp);
+                }
             }
         }
     }
 }
 
+// C2PORT-NONMATCHING: best 47.15% | difftest PASS 2000 trials (spec difftest/specs/00548a00_Vertex_SurfaceComponentsGeom.json) | reason regalloc-loop
 // FUNCTION: CARMA2_HW 0x00548a00
 void C2_HOOK_CDECL Vertex_SurfaceComponentsGeom(br_geometry* self, br_soft_renderer* renderer) {
     brp_vertex* tvp;
@@ -267,15 +261,13 @@ void C2_HOOK_CDECL Vertex_SurfaceComponentsGeom(br_geometry* self, br_soft_rende
             continue;
         }
 
-        tvp->comp[C_W] = BR_SCALAR(1.0);
-        TRANSFORM_VERTEX((br_vector4*)(tvp->comp + C_X), &vp->p, &scache.model_to_screen);
-
         for (i = 0; i < renderer->state.cache.nvertex_fns; i++) {
             renderer->state.cache.vertex_fns[i]((br_renderer*)renderer, &vp->p, &vp->map, &vp->n, rend.vertex_colours[v], tvp->comp);
         }
     }
 }
 
+// C2PORT-NONMATCHING: best 38.10% | difftest PASS 2000 trials (spec difftest/specs/00548aa0_Vertex_SurfaceComponentsTwoSidedGeom.json) | reason loop codegen and rend operand order, logic checked (negated normal path bites)
 // FUNCTION: CARMA2_HW 0x00548aa0
 void C2_HOOK_CDECL Vertex_SurfaceComponentsTwoSidedGeom(br_geometry* self, br_soft_renderer* renderer) {
     brp_vertex* tvp;
@@ -306,6 +298,7 @@ void C2_HOOK_CDECL Vertex_SurfaceComponentsTwoSidedGeom(br_geometry* self, br_so
     }
 }
 
+// C2PORT-NONMATCHING: best 25.53% | difftest PASS 2000 trials (spec 00548bd0_Vertex_ForceFront.json) | reason BRender pointer loop and operand layout
 // FUNCTION: CARMA2_HW 0x00548bd0
 void C2_HOOK_CDECL Vertex_ForceFront(br_geometry* self, br_soft_renderer* renderer) {
     brp_vertex* tvp;

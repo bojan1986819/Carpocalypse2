@@ -314,3 +314,12 @@ if(CARPOCALYPSE2_MATCHING)
     set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /DNDEBUG")
     set(CMAKE_CXX_FLAGS_MINSIZEREL "/Os /DNDEBUG")
 endif()
+
+# OpenGL renderer (port only): BRender 1.4-style glrend driver
+if(NOT CARPOCALYPSE2_MATCHING)
+    set(BRender_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(NOT TARGET BRender::DDI)
+        add_library(BRender::DDI ALIAS brender_ddi)
+    endif()
+    add_subdirectory(drivers/glrend)
+endif()

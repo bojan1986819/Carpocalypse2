@@ -9,28 +9,20 @@
 
 #include <windows.h>
 
+// C2PORT-NONMATCHING: best 45.03% | difftest PASS 2000 trials (spec difftest/specs/0051cad0_SDL3ServiceMessages.json) | reason vc5-frame-register-allocation
 // FUNCTION: CARMA2_HW 0x0051cad0
 void C2_HOOK_CDECL SDL3ServiceMessages(void) {
     MSG msg;
 
     dr_dprintf("Win32ServiceMessages() - START");
-    while (1) {
-        if (gWindowActiveState == 1) {
-            SetForegroundWindow(gHWnd);
+    for (;;) {
+        if (gWindowActiveState == 1) SetForegroundWindow(gHWnd);
+        if (gWindowActiveState != 0) {
+            if (PeekMessageA(&msg, NULL, 0, 0, 1) == 0) goto peek_message_empty;
+            if (gWindowActiveState != 0) goto dispatch;
         }
-
-        if (gWindowActiveState) {
-            if (PeekMessageA(&msg, NULL, 0, 0, 1) == 0) {
-                dr_dprintf("Win32ServiceMessages() - breaking cos PeekMessage() returned 0");
-                break;
-            }
-        }
-        if (!gWindowActiveState) {
-            if (GetMessageA(&msg, NULL, 0, 0) == -1) {
-                dr_dprintf("Win32ServiceMessages() - breaking cos GetMessage() returned -1");
-                break;
-            }
-        }
+        if (GetMessageA(&msg, NULL, 0, 0) == -1) goto get_message_error;
+dispatch:
         if (msg.message == WM_QUIT) {
             dr_dprintf("WM_QUIT received.");
             if (gWindowActiveState == 2) {
@@ -44,6 +36,12 @@ void C2_HOOK_CDECL SDL3ServiceMessages(void) {
         dr_dprintf("Win32ServiceMessages() - dispatching message...");
         DispatchMessageA(&msg);
     }
+peek_message_empty:
+    dr_dprintf("Win32ServiceMessages() - breaking cos PeekMessage() returned 0");
+    goto finish;
+get_message_error:
+    dr_dprintf("Win32ServiceMessages() - breaking cos GetMessage() returned -1");
+finish:
     dr_dprintf("Win32ServiceMessages() - END");
 }
 

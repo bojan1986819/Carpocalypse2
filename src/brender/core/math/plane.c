@@ -4,6 +4,7 @@
 
 #include "c2_math.h"
 
+// C2PORT-NONMATCHING: best 51.85% | difftest PASS 2000 trials (spec 00536fb0_BrPlaneEquation.json; degenerate 00536fb0_BrPlaneEquation_DEGENERATE.json PASS 2000) | reason VC5 x87 scheduling
 // FUNCTION: CARMA2_HW 0x00536fb0
 br_int_32 C2_HOOK_CDECL BrPlaneEquation(br_vector4* eqn, const br_vector3* v0, const br_vector3* v1, const br_vector3* v2) {
     float ax;
@@ -29,7 +30,7 @@ br_int_32 C2_HOOK_CDECL BrPlaneEquation(br_vector4* eqn, const br_vector3* v0, c
     nz = ax * by - ay * bx;
     l = nx * nx + ny * ny + nz * nz;
     l = BrFloatSqrt(l);
-    if (isnan(l)) {
+    if (isnan(l) || l == 0.f) {
         nx = 0.f;
         ny = 0.f;
         nz = 1.f;
@@ -43,5 +44,5 @@ br_int_32 C2_HOOK_CDECL BrPlaneEquation(br_vector4* eqn, const br_vector3* v0, c
     eqn->v[1] = ny;
     eqn->v[2] = nz;
     eqn->v[3] = d;
-    return !isnan(l);
+    return l == 0.f;
 }

@@ -265,7 +265,8 @@ Win32WarningHandler(const char* module, const char* fmt, va_list ap)
 	LocalFree(szTitle);
 	return;
 }
-TIFFErrorHandler _TIFFwarningHandler = Win32WarningHandler;
+/* C2PORT: the original game's libtiff showed no warning pop-ups (its exe has no "%s Warning" text); keep them silent */
+TIFFErrorHandler _TIFFwarningHandler = NULL;
 
 static void
 Win32ErrorHandler(const char* module, const char* fmt, va_list ap)

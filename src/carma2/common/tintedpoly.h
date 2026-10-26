@@ -5,6 +5,8 @@
 
 extern void C2_HOOK_FASTCALL InitTintedPolyStuff(void);
 
+void C2_HOOK_FASTCALL ApplyTintedPolyPalette(int pTintedIndex);
+
 // BuildTintedPolyModel
 
 // BuildTintedPolyMaterial
@@ -15,7 +17,7 @@ extern int C2_HOOK_FASTCALL CreateTintedPoly(int x0, int y0, int width, int heig
 
 // UpdateTintedPolyByMaterial
 
-extern void C2_HOOK_FASTCALL UpdatePolyVertexColours(int pTintedIndex);
+// UpdatePolyVertexColours
 
 // TurnTintedPolyOn
 
@@ -34,10 +36,8 @@ extern void C2_HOOK_FASTCALL UpdatePolyVertexColours(int pTintedIndex);
 // GetUniqueFileName
 
 // UpdateFirePoly
-void C2_HOOK_FASTCALL UpdateFirePoly(int pIndex);
 
 // UpdatePulsePoly
-void C2_HOOK_FASTCALL UpdatePulsePoly(int pIndex);
 
 // ProcessTintedPoly
 
@@ -46,7 +46,5 @@ void C2_HOOK_FASTCALL UpdatePulsePoly(int pIndex);
 // SetTintedPolySize
 
 // TintedPolyIsOn
-
-void C2_HOOK_FASTCALL UpdateTintedPolyByMaterial(int pTintedIndex);
 
 #endif // GUARD_TINTEDPOLY_H

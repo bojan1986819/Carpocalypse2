@@ -29,50 +29,58 @@ void C2_HOOK_STDCALL SetSightDistance(br_scalar pYon) {
 
 // AddNewFunkotronic
 
+// C2PORT-NONMATCHING: best 55.61% | difftest PASS 2000 trials (spec difftest/specs/00474950_DisposeFunkotronics.json) | reason regalloc-loop
 // FUNCTION: CARMA2_HW 0x00474950
 void C2_HOOK_FASTCALL DisposeFunkotronics(int pOwner) {
     int i;
+    int j;
+    tFunk_proximity** proximity_array;
     tFunkotronic_spec* the_funk;
 
     if (gFunkotronics_array == NULL || gFunkotronics_array_size <= 0) {
         return;
     }
-    the_funk = gFunkotronics_array;
-    for (i = 0; i < gFunkotronics_array_size; i++, the_funk++) {
+    i = 0;
+    proximity_array = &gFunkotronics_array[0].proximity_array;
+    do {
         PossibleService();
-        if (the_funk->owner != pOwner) {
-            continue;
-        }
-        the_funk->owner = -999;
-        if (the_funk->proximity_array != NULL) {
-            BrMemFree(the_funk->proximity_array);
-        }
-        if (the_funk->texture_animation_type == eTexture_animation_frames) {
-            if (the_funk->texture_animation_data.frames_info.mode == eMove_texturebits) {
+        the_funk = (tFunkotronic_spec*)((char*)proximity_array - offsetof(tFunkotronic_spec, proximity_array));
+        if (the_funk->owner == pOwner) {
+            the_funk->owner = -999;
+            if (*proximity_array != NULL) {
+                BrMemFree(*proximity_array);
+            }
+            if (the_funk->texture_animation_type == eTexture_animation_frames
+                    && the_funk->texture_animation_data.frames_info.mode == eMove_texturebits) {
                 BrMemFree(the_funk->texture_animation_data.frames_info.texture_info.data);
             }
-        }
-        if (the_funk->texture_animation_type == eTexture_animation_flic) {
-            BrMemFree(the_funk->texture_animation_data.flic_info.flic_data);
-            EndFlic(&the_funk->texture_animation_data.flic_info.flic_descriptor);
-            BrMemFree(the_funk->material->colour_map->pixels);
-            the_funk->material->colour_map->pixels = NULL;
-            BrPixelmapFree(the_funk->material->colour_map);
-            the_funk->material->colour_map = NULL;
-        } else if (the_funk->texture_animation_type == eTexture_animation_camera) {
-            int j;
+            if (the_funk->texture_animation_type == eTexture_animation_flic) {
+                BrMemFree(the_funk->texture_animation_data.flic_info.flic_data);
+                EndFlic(&the_funk->texture_animation_data.flic_info.flic_descriptor);
+                BrMemFree(the_funk->material->colour_map->pixels);
+                the_funk->material->colour_map->pixels = NULL;
+                BrPixelmapFree(the_funk->material->colour_map);
+                the_funk->material->colour_map = NULL;
+            } else if (the_funk->texture_animation_type == eTexture_animation_camera) {
+                br_actor** actor;
 
-            for (j = 0; j < the_funk->texture_animation_data.camera_info.count; j++) {
-                BrActorRemove(the_funk->texture_animation_data.camera_info.actors[j]);
-                BrActorFree(the_funk->texture_animation_data.camera_info.actors[j]);
-            }
-        } else if (the_funk->texture_animation_type == eTexture_animation_mirror) {
-            if (the_funk->texture_animation_data.mirror_info.actor != NULL) {
+                j = 0;
+                actor = &the_funk->texture_animation_data.camera_info.actors[0];
+                while (j < the_funk->texture_animation_data.camera_info.count) {
+                    BrActorRemove(*actor);
+                    BrActorFree(*actor);
+                    j++;
+                    actor++;
+                }
+            } else if (the_funk->texture_animation_type == eTexture_animation_mirror
+                    && the_funk->texture_animation_data.mirror_info.actor != NULL) {
                 BrActorRemove(the_funk->texture_animation_data.mirror_info.actor);
                 BrActorFree(the_funk->texture_animation_data.mirror_info.actor);
             }
         }
-    }
+        i++;
+        proximity_array += sizeof(tFunkotronic_spec) / sizeof(*proximity_array);
+    } while (i < gFunkotronics_array_size);
 }
 
 // CalcProximities
@@ -105,6 +113,7 @@ void C2_HOOK_FASTCALL DisposeGroovidelics(int pOwner) {
 
 // AddGroovidelics
 
+// C2PORT-NONMATCHING: best 47.27% | difftest PASS 2000 trials (spec difftest/specs/00477160_KillGroovadelic.json) | reason VC5 loop pointer setup and branch layout
 // FUNCTION: CARMA2_HW 0x00477160
 void C2_HOOK_FASTCALL KillGroovadelic(int pOwner) {
     int i;
@@ -167,35 +176,9 @@ void C2_HOOK_FASTCALL KillFunkotronic(int pOwner) {
 
 // DisableGroovidelic
 
-// FUNCTION: CARMA2_HW 0x0047b130
-void C2_HOOK_FASTCALL DisableGroovidelic(br_actor* pActor, tU32 pBlock_flags) {
-    tGroovidelic_spec* the_groove;
-    int i;
-
-    the_groove = gGroovidelics_array;
-    for (i = 0; i < gGroovidelics_array_size; i++, the_groove++) {
-        if (the_groove->actor == pActor) {
-            the_groove->block_flags |= pBlock_flags;
-            return;
-        }
-    }
-}
-
 // EnableGroovidelic
 
-// FUNCTION: CARMA2_HW 0x0047b1a0
-void C2_HOOK_FASTCALL SetGrooveInterrupt(int pIndex, const br_matrix34* pMatrix, tInterrupt_status pPath_interrupt_status, tInterrupt_status pObject_interrupt_status, float pPath_resumption_value, float pObject_resumption_value) {
-    tGroovidelic_spec* the_groove;
-    br_actor* actor;
-
-    the_groove = &gGroovidelics_array[pIndex];
-    actor = the_groove->actor;
-    the_groove->path_interrupt_status = pPath_interrupt_status;
-    the_groove->object_interrupt_status = pObject_interrupt_status;
-    the_groove->path_resumption_value = pPath_resumption_value;
-    the_groove->object_resumption_value = pObject_resumption_value;
-    BrMatrix34Copy(&actor->t.t.mat, pMatrix);
-}
+// SetGrooveInterrupt
 
 // ResetGrooveFlags
 
@@ -208,14 +191,20 @@ void C2_HOOK_FASTCALL SetGrooveInterrupt(int pIndex, const br_matrix34* pMatrix,
 // MasterEnableFunkotronic
 
 // FUNCTION: CARMA2_HW 0x0047b310
-void C2_HOOK_FASTCALL AdjustFunkEnable(int pIndex, tS16 pFlags) {
-    if (pFlags != 0) {
-        gFunkotronics_array[pIndex].flags &= ~0x1;
+void C2_HOOK_FASTCALL AdjustFunkEnable(int pIndex, tS16 pEnable) {
+    tU32* flags;
+
+    if (pEnable != 0) {
+        flags = &gFunkotronics_array[pIndex].flags;
+        *flags &= ~0x1;
         PipeSingleFunkEnable(pIndex, 1);
-    } else {
-        gFunkotronics_array[pIndex].flags |= 0x1;
-        PipeSingleFunkEnable(pIndex, 0);
+        return;
     }
+    flags = &gFunkotronics_array[pIndex].flags;
+    *flags |= 0x1;
+    PipeSingleFunkEnable(pIndex, 0);
 }
+
+// AdjustFunkEnable
 
 // ActorsGroove

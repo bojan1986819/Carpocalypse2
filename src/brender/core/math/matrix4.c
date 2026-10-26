@@ -30,6 +30,7 @@ void C2_HOOK_CDECL BrMatrix4Copy(br_matrix4* A, const br_matrix4* B) {
     A(3, 3) = B(3, 3);
 }
 
+// C2PORT-NONMATCHING: best 38.89% | difftest PASS 2000 trials (spec difftest/specs/00535d40_BrMatrix4Mul.json) | reason VC5 x87 scheduling
 // FUNCTION: CARMA2_HW 0x00535d40
 void C2_HOOK_CDECL BrMatrix4Mul(br_matrix4* A, const br_matrix4* B, const br_matrix4* C) {
 
@@ -124,6 +125,7 @@ br_scalar C2_HOOK_STDCALL Determinant3(br_scalar a1, br_scalar a2, br_scalar a3,
         c1, BR_MAC2(a2, b3, -a3, b2));
 }
 
+// C2PORT-NONMATCHING: best 23.5% | difftest PASS 2000 trials (spec 005360f0_BrMatrix4Determinant.json) | reason x87 evaluation order
 // FUNCTION: CARMA2_HW 0x005360f0
 br_scalar C2_HOOK_CDECL BrMatrix4Determinant(const br_matrix4* mat) {
     br_scalar a1;
@@ -169,6 +171,7 @@ br_scalar C2_HOOK_CDECL BrMatrix4Determinant(const br_matrix4* mat) {
         -d1, Determinant3(a2, a3, a4, b2, b3, b4, c2, c3, c4));
 }
 
+// C2PORT-NONMATCHING: best 27.3% | difftest PASS 2000 trials (spec difftest/specs/005362c0_BrMatrix4Adjoint.json) | reason VC5 x87 scheduling
 // FUNCTION: CARMA2_HW 0x005362c0
 void C2_HOOK_CDECL BrMatrix4Adjoint(br_matrix4* A, const br_matrix4* B) {
     br_scalar a1;
@@ -310,6 +313,7 @@ void C2_HOOK_CDECL BrMatrix4TApplyV(br_vector4* A, const br_vector3* B, const br
     A->v[3] = BR_MAC3(B->v[0], C(3, 0), B->v[1], C(3, 1), B->v[2], C(3, 2));
 }
 
+// C2PORT-NONMATCHING: best 47.06% | difftest PASS 2000 trials (spec difftest/specs/00536ca0_BrMatrix4Copy34.json) | reason VC5 assignment order and register allocation
 // FUNCTION: CARMA2_HW 0x00536ca0
 void C2_HOOK_CDECL BrMatrix4Copy34(br_matrix4* A, const br_matrix34* B) {
 

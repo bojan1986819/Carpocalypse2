@@ -6,6 +6,11 @@
 #include "carpocalypse2_macros.h"
 #include "carpocalypse2_types.h"
 
+#ifdef __vita__
+#include "sdl3/vita_controls.h"
+#include "sdl3/vita_pack.h"
+#endif
+
 #include "brender/brender.h"
 
 #include <stdio.h>
@@ -23,8 +28,6 @@
 #endif
 // GLOBAL: CARMA2_HW 0x005933e8
 extern const char* gMem_names[256];
-// GLOBAL: CARMA2_HW 0x00681fa0
-FILE* gGlobalPackedFile;
 
 // GLOBAL: CARMA2_HW 0x006815c8
 br_resource_class gStainless_classes[126];
@@ -314,14 +317,6 @@ int C2_HOOK_FASTCALL AllocationErrorsAreFatal(void) {
     return !gNon_fatal_allocation_errors;
 }
 
-// FUNCTION: CARMA2_HW 0x0044c830
-void C2_HOOK_FASTCALL CloseGlobalPackedFile(void) {
-
-    if (gGlobalPackedFile != NULL) {
-        PFfclose(gGlobalPackedFile);
-        gGlobalPackedFile = NULL;
-    }
-}
 #ifdef CARPOCALYPSE2_MATCHING
 #endif
 
@@ -342,9 +337,82 @@ void C2_HOOK_FASTCALL MAMSInitMem(void) {
 
 }
 
+#ifndef CARPOCALYPSE2_MATCHING
+/* port: heap-corruption tripwire. Every registered material/model/map/table must still be a live
+ * BRender resource; a NULL or freed item means something wrote over the heap (e.g. a registry entry
+ * overwritten with 16-bit pixels). Logs the first bad item. */
+extern br_uint_32 C2_HOOK_CDECL BrModelEnum(const char* pattern, br_model_enum_cbfn* callback, void* arg);
+extern br_uint_32 C2_HOOK_CDECL BrMapEnum(const char* pattern, br_map_enum_cbfn* callback, void* arg);
+static const char* gRegistry_check_title;
+static int gRegistry_check_reported;
+
+static br_uint_32 C2_HOOK_CDECL C2CheckRegisteredItem(void* pItem, void* pName) {
+    const br_uint_8* p = pItem;
+    int skip = 0;
+
+    if (p != NULL) {
+        while (skip < 8 && p[-1] == 0) {
+            p--;
+            skip++;
+        }
+        if (*(const br_uint_32*)(p - 4) == 0xdeadbeef) {
+            return 0;
+        }
+    }
+    if (gRegistry_check_reported < 8) {
+        gRegistry_check_reported++;
+        dr_dprintf("REGISTRY CORRUPT %s item=%p at '%s'", (const char*)pName, pItem, gRegistry_check_title);
+#ifdef __vita__
+        {
+            extern void C2VitaLog(const char* pFormat, ...);
+            C2VitaLog("REGISTRY CORRUPT %s item=%p at '%s'\n", (const char*)pName, pItem, gRegistry_check_title);
+        }
+#endif
+    }
+    return 1;
+}
+
+static void C2CheckRegistries(const char* pTitle) {
+    gRegistry_check_title = pTitle != NULL ? pTitle : "";
+    BrMaterialEnum(NULL, (br_material_enum_cbfn*)C2CheckRegisteredItem, "material");
+    BrModelEnum(NULL, (br_model_enum_cbfn*)C2CheckRegisteredItem, "model");
+    BrMapEnum(NULL, (br_map_enum_cbfn*)C2CheckRegisteredItem, "map");
+    BrTableEnum(NULL, (br_table_enum_cbfn*)C2CheckRegisteredItem, "table");
+}
+
+void C2_HOOK_FASTCALL C2CheckRegistriesAt(const char* pTitle) {
+    C2CheckRegistries(pTitle);
+}
+#endif
+
 // FUNCTION: CARMA2_HW 0x0044c850
 void C2_HOOK_FASTCALL PrintMemoryDump(int pFlags, char* pTitle) {
+#ifdef __vita__
+    /* These existing startup checkpoints are otherwise empty in the port. */
+    C2VitaCheckpoint(pTitle);
+#endif
+#ifndef CARPOCALYPSE2_MATCHING
+    C2CheckRegistries(pTitle);
+#endif
+}
 
+// FUNCTION: CARMA2_HW 0x0044c860
+void C2_HOOK_FASTCALL TouchMemoryPages(void* pMemory, br_size_t pSize) {
+#ifdef CARPOCALYPSE2_MATCHING
+    br_size_t offset;
+
+    if (gPage_size == 0) {
+        GetSystemInfo(&gSystem_info);
+        gPage_size = gSystem_info.dwOemId;
+    }
+    for (offset = gPage_size * 16; offset < pSize; offset += gPage_size) {
+        *((volatile br_uint_8*)pMemory + (offset - 16 * gPage_size)) = *((volatile br_uint_8*)pMemory + (offset - 16 * gPage_size));
+        *((volatile br_uint_8*)pMemory + offset) = *((volatile br_uint_8*)pMemory + offset);
+    }
+#else
+    (void)pMemory;
+    (void)pSize;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x0044c8c0
@@ -378,7 +446,17 @@ void* C2_HOOK_CDECL DRStdlibAllocate(br_size_t size, br_uint_8 type) {
 #else
     if (size != 0) {
         p = malloc(size);
+#ifdef __vita__
+        if (p == NULL) {
+            C2VitaPackCacheClear();
+            p = malloc(size);
+        }
+#endif
         if (p == NULL && !gNon_fatal_allocation_errors) {
+#ifdef __vita__
+            C2VitaLog("ALLOCATION FAILED type=%u bytes=%u\n", (unsigned)type, (unsigned)size);
+            C2VitaCheckpoint("allocation failure");
+#endif
             sprintf(s, "%s/%d", gMem_names[type], size);
             FatalError(kFatalError_OOM_S, s);
         }

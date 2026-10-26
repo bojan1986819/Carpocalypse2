@@ -107,12 +107,15 @@ void C2_HOOK_CDECL BrMatrix23ShearY(br_matrix23* mat, br_scalar sx) {
     M(2, 1) = BR_SCALAR(0.f);
 }
 
+// C2PORT-NONMATCHING: best 29.81% | difftest PASS 2000 trials (spec 00534cd0_BrMatrix23Inverse.json) | reason restored reciprocal cutoff and binary-specific determinant scaling; remaining difference is x87/compiler scheduling
 // FUNCTION: CARMA2_HW 0x00534cd0
 br_scalar C2_HOOK_CDECL BrMatrix23Inverse(br_matrix23* B, const br_matrix23* A) {
     br_scalar det;
     br_scalar idet;
     br_scalar pos;
     br_scalar neg;
+    volatile br_scalar det_value;
+    volatile br_scalar inverse_det;
 
     idet = A(0, 0) * A(1, 1);
     if (idet < BR_SCALAR(0.f)) {
@@ -130,17 +133,22 @@ br_scalar C2_HOOK_CDECL BrMatrix23Inverse(br_matrix23* B, const br_matrix23* A) 
     }
     det = pos + neg;
 
-    if (fabs(det) < 2.384186e-07f) {
+    if (fabs(det) < 2.384185791015625e-07f) {
         return BR_SCALAR(0.f);
     }
     idet = 1 / det;
-    B(0, 0) = A(1, 1) * idet;
-    B(0, 1) = -A(0, 1) * idet;
-    B(1, 0) = -A(1, 0) * idet;
-    B(1, 1) = A(0, 0) * idet;
-    B(2, 0) = BR_MAC2(A(1, 0), A(2, 1), -A(2, 0), A(1, 1)) * idet;
-    B(2, 1) = BR_MAC2(-A(2, 1), A(0, 0), A(0, 1), A(2, 0)) * idet;
-    return det;
+    if (idet < BR_SCALAR(1e-15f)) {
+        return BR_SCALAR(0.f);
+    }
+    det_value = det;
+    inverse_det = idet;
+    B(0, 0) = A(1, 1) * inverse_det;
+    B(0, 1) = -A(0, 1) * det_value;
+    B(1, 0) = -A(1, 0) * det_value;
+    B(1, 1) = A(0, 0) * inverse_det;
+    B(2, 0) = BR_MAC2(A(1, 0), A(2, 1), -A(2, 0), A(1, 1)) * det_value;
+    B(2, 1) = BR_MAC2(-A(2, 1), A(0, 0), A(0, 1), A(2, 0)) * det_value;
+    return inverse_det;
 }
 
 // FUNCTION: CARMA2_HW 0x00534de0

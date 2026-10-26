@@ -1,3 +1,6 @@
+#ifndef CARPOCALYPSE2_MATCHING
+#include "loadprof.h"
+#endif
 #include "init.h"
 
 #include "car.h"
@@ -349,6 +352,7 @@ void C2_HOOK_FASTCALL DisposeGameIfNecessary(void) {
     dr_dprintf("DisposeGameIfNecessary() - END");
 }
 
+// C2PORT-NONMATCHING: best 42.76% | difftest PASS 2000 trials (spec difftest/specs/0047dc30_ReinitialiseRenderStuff.json) | reason compiler branch and global load scheduling
 // FUNCTION: CARMA2_HW 0x0047dc30
 void C2_HOOK_FASTCALL ReinitialiseRenderStuff(void) {
     int x_diff;
@@ -504,18 +508,28 @@ static void C2_HOOK_FASTCALL InitRaceHeadups(void) {
     }
 }
 
+// FUNCTION: CARMA2_HW 0x0047d880
 void C2_HOOK_FASTCALL Modify2DCopyPixelmaps(void) {
-    int i;
+    tDR_font* font;
+    int pixel_type;
 
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gFonts); i++) {
-        BRPM_convert(gFonts[i].images, gBack_screen->type);
-    }
-    BRPM_convert(gIcons_pix, gBack_screen->type);
-    BRPM_convert(gLit_op_stat, gBack_screen->type);
+    pixel_type = gBack_screen->type;
+    font = gFonts;
+    do {
+        BRPM_convert(font->images, pixel_type);
+        font++;
+    } while ((int)font < (int)(gFonts + CARPOCALYPSE2_ASIZE(gFonts)));
+    BRPM_convert(gIcons_pix, pixel_type);
+    BRPM_convert(gLit_op_stat, pixel_type);
 }
 
 // FUNCTION: CARMA2_HW 0x00481830
 void C2_HOOK_FASTCALL InitRace(void) {
+
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("race-to-mainloop");
+    C2LoadBegin("race-init");
+#endif
 
     gMap_view = 1;
     InitFogificateMaterials();
@@ -539,7 +553,7 @@ void C2_HOOK_FASTCALL InitRace(void) {
 
     gDAT_0074c6d0 = 0;
     gINT_0074b780 = 0;
-    gDAT_0079ec44 = NULL;
+    gLast_camera_special_volume = NULL;
     if (!TranslationMode()) {
         LoadFont(1);
         LoadFont(2);
@@ -649,14 +663,24 @@ void C2_HOOK_FASTCALL InitRace(void) {
     SetupFFBValues();
     PossibleLock(1);
     PossibleUnlock(1);
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
 }
 
 void C2_HOOK_FASTCALL LoadInTrack(void) {
+
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("track");
+#endif
 
     LoadTrack(
         gProgram_state.track_file_name,
         &gProgram_state.track_spec,
         &gCurrent_race);
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x0044c220
@@ -729,6 +753,10 @@ void C2_HOOK_FASTCALL InitLineStuff(void) {
     gLine_actor->material = gLine_material;
     gLine_actor->render_style = BR_RSTYLE_EDGES;
     gLine_model->flags = BR_MODF_KEEP_ORIGINAL | BR_MODF_QUICK_UPDATE;
+#ifndef CARPOCALYPSE2_MATCHING
+    /* Dynamic endpoints can overlap when prepared; keep their source identities. */
+    gLine_model->flags |= BR_MODF_DONT_WELD;
+#endif
     gLine_model->faces->vertices[0] = 0;
     gLine_model->faces->vertices[1] = 0;
     gLine_model->faces->vertices[2] = 1;
@@ -1176,6 +1204,7 @@ void C2_HOOK_FASTCALL Init2DStuff(void) {
         BrV1dbBeginWrapper_Float(); \
         CreateStainlessClasses(); \
         PDInstallErrorHandlers(); \
+        InstallFindFailedHooks(); \
         InstallDRMemCalls(); \
         InstallDRFileCalls(); \
         twt = OpenPackFileAndSetTiffLoading(gApplication_path); \
@@ -1183,12 +1212,16 @@ void C2_HOOK_FASTCALL Init2DStuff(void) {
         InitFogificateMaterials(); \
         PDInitTimer(); \
         InitWobbleStuff(); \
+        InitialiseStorageSpace(0, &gMisc_storage_space, 1000, 5, 1000, 1000, 10); \
+        InitialiseStorageSpace(0, &gTrack_storage_space, 1000, 50, 1000, 1000, 50); \
         LoadGeneralParameters(); \
+        FinishLoadGeneralParameters(); \
         PrintMemoryDump(0, "AFTER LOADING GENERAL PARAMETERS"); \
         DefaultNetName(); \
         strcpy(gProgram_state.player_name, "MAX DAMAGE"); \
         RestoreOptions(); \
         LoadKeyMapping(); \
+        LoadOpponents(); \
         if (!PDInitScreenVars(pArgc, pArgv)) { \
             FatalError(0); \
         } \
@@ -1207,11 +1240,11 @@ void C2_HOOK_FASTCALL Init2DStuff(void) {
         PrintMemoryDump(0, "AFTER INITIALISING EXPLOSIONS"); \
         LoadMiscStrings(); \
         PrintMemoryDump(0, "AFTER LOADING MISC STRING"); \
-        InitialiseStorageSpace(0, &gMisc_storage_space, 1000, 5, 1000, 1000, 10); \
         LoadInRegistees(); \
         InitMap(); \
         PrintMemoryDump(0, "AFTER INITIALISING GENERAL STORAGE AND LOADING IN REG"); \
         Init2DStuffForPolyFonts(); \
+        InitPolyFonts(); \
         InitLineStuff(); \
         InitSmokeStuff(); \
         PrintMemoryDump(0, "AFTER INITING LINE AND SMOKE STUFF"); \
@@ -1267,8 +1300,6 @@ void C2_HOOK_FASTCALL Init2DStuff(void) {
         InitialiseStorageSpace(0, &gTheir_cars_storage_space, 1500, 50, 1500, 1500, 50); \
         InitialiseStorageSpace(0, &gDroneStorage, 500, 50, 500, 228, 10); \
         InitialiseStorageSpace(0, &gPedStorage, 200, 10, 100, 500, 200); \
-        InitialiseStorageSpace(0, &gTrack_storage_space, 1000, 50, 1000, 1000, 50); \
-        FinishLoadingGeneral(); \
         PrintMemoryDump(0, "AFTER FINISHING LOADING GENERAL"); \
         InitOilSpills(); \
         for (;;) { \
@@ -1300,15 +1331,20 @@ void C2_HOOK_FASTCALL DoDevelopmentThings(void) {
 
 }
 
-#pragma inline_depth(0)
 // FUNCTION: CARMA2_HW 0x0047dd20
 void C2_HOOK_FASTCALL InitialiseDeathRace(int pArgc, const char** pArgv) {
 
     PDInitialiseSystem();
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("startup");
+#endif
+    DoDevelopmentThings();
     InitialiseApplication(pArgc, pArgv);
     gInitialisation_finished = 1;
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
 }
-#pragma inline_depth()
 
 // FUNCTION: CARMA2_HW 0x00481620
 void C2_HOOK_FASTCALL InitGameAccordingToSkillLevel(void) {

@@ -92,6 +92,10 @@ void C2_HOOK_FASTCALL MungeAIWorld(tU32 pTime);
 
 void C2_HOOK_FASTCALL CalculateCameraStuff(tU32 pCamera_period);
 
+int C2_HOOK_FAKE_THISCALL FUN_00494210(int pStatus, undefined4 pArg2, undefined4 pArg3, undefined4 pArg4, int pFlag);
+
+void C2_HOOK_FASTCALL FUN_00492840(void* pMemory, br_size_t pSize);
+
 void C2_HOOK_FASTCALL CheckActiveCarList(void);
 
 void C2_HOOK_FASTCALL CalculateFrameRate(void);
@@ -109,5 +113,7 @@ void C2_HOOK_FASTCALL CheckTimer(void);
 int C2_HOOK_FASTCALL MungeRaceFinished(void);
 
 void C2_HOOK_FASTCALL LoseOldestWastedMessage(void);
+
+tU32 C2_HOOK_FASTCALL GetLastTickCount(void);
 
 #endif // GUARD_MAINLOOP_H

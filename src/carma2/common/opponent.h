@@ -12,6 +12,9 @@ extern float gOpponent_nastyness_frigger;
 extern int gMinTimeOpponentRepair;
 extern int gMaxTimeOpponentRepair;
 
+void C2_HOOK_FASTCALL FUN_00401f90(int pBase, int pIndex, tU16 pValue0, tU16 pValue1, tU16 pValue2, tU32 pValue3);
+void C2_HOOK_FASTCALL BuildDronePathNodeMesh(br_model* pModel, int pVert_index, int pFace_index, const br_vector3* pPosition, tU32 pMaterial1, tU32 pMaterial2, tU32 pMaterial3);
+
 // DoNotDprintf
 
 // ProcessCurrentObjective
@@ -42,7 +45,7 @@ extern int gMaxTimeOpponentRepair;
 
 // TopUpRandomRoute
 
-int C2_HOOK_FASTCALL SearchForSection(tRoute_section* pTemp_store, tRoute_section* pPerm_store, int* pNum_of_perm_store_sections, tS16 pTarget_section, int pDepth, br_scalar pDistance_so_far, tOpponent_spec* pOpponent_spec);
+// SearchForSection
 
 // UpdatePlayersSection
 
@@ -50,7 +53,7 @@ int C2_HOOK_FASTCALL SearchForSection(tRoute_section* pTemp_store, tRoute_sectio
 
 // ShiftOpponentsProjectedRoute
 
-extern void C2_HOOK_FASTCALL NewCalcGetNearPlayerRoute(tOpponent_spec* pOpponent_spec, tCar_spec* pPursuee, int pForce);
+// NewCalcGetNearPlayerRoute
 
 // CalcReturnToStartPointRoute
 
@@ -116,7 +119,7 @@ extern void C2_HOOK_FASTCALL ForceRebuildActiveCarList(void);
 
 // OpponentRepairNecessary
 
-// PossiblyRepairOpponent
+void C2_HOOK_FASTCALL PossiblyRepairOpponent(tOpponent_spec* pOpponent_spec);
 
 // DisplayOpponentRecoveringHeadup
 
@@ -213,8 +216,8 @@ extern int gNumber_of_cops_before_faffage;
 extern tU32 gNext_grudge_reduction;
 
 extern int gFirst_frame;
-extern tPath_node* gOppo_path_nodes;
-extern tPath_section* gOppo_junction_table;
+/* porttest: gOppo_path_nodes/gOppo_junction_table alias gProgram_state.AI_vehicles.path_nodes/path_sections (0x761a40/0x761a44), see opponent.c */
+
 
 extern int gGrudge_reduction_per_period;
 
@@ -234,9 +237,13 @@ extern br_scalar gIn_view_distance;
 
 extern int gChallenger_index__opponent;
 
+void C2_HOOK_FASTCALL SetChallengerIndexIf(int pIndex, int pSet);
+
 extern tU8* gBit_per_node;
 
 extern br_material* gMat_dk_yel;
+
+extern int gPalette_materials_initialized;
 
 extern br_material* gMat_md_yel;
 
@@ -278,6 +285,12 @@ extern float gDefinite_no_cop_pursuit_speed;
 
 extern float gCop_pursuit_speed_percentage_multiplier;
 
+br_material* C2_HOOK_FASTCALL CreatePaletteMaterial(int pPalette_index);
+
+void C2_HOOK_FASTCALL InitialiseOpponentPaletteMaterials(void);
+
+void C2_HOOK_FASTCALL FUN_004af490(void);
+
 void C2_HOOK_FASTCALL PointActorAlongThisBloodyVector(br_actor* pThe_actor, br_vector3* pThe_vector);
 
 void C2_HOOK_FASTCALL PointActorAlongVectorWithUp(br_actor* pThe_actor, br_vector3* pLook, br_vector3* pUp);
@@ -291,6 +304,8 @@ void C2_HOOK_FASTCALL CalcPlayerConspicuousness(tOpponent_spec* pOpponent_spec);
 void C2_HOOK_FASTCALL ProcessPursueAndTwat(tOpponent_spec* pOpponent_spec, tProcess_objective_command pCommand);
 
 void C2_HOOK_FASTCALL DisposeOpponentPaths(void);
+
+void C2_HOOK_FASTCALL UpdateViewedOpponentHeadup(void);
 
 void C2_HOOK_FASTCALL AddIfNotInList(tPhysics_object* pObject, tPhysics_object** pList, int pCount);
 
@@ -314,7 +329,11 @@ tOpponent_spec* C2_HOOK_FASTCALL GetOpponentSpecFromCarSpec(tCar_spec* pCar_spec
 
 void C2_HOOK_CDECL DoNotDprintf_opponent(const char* pMessage, ...);
 
+void C2_HOOK_FASTCALL CalcOpponentDistanceFromHome(tOpponent_spec* pOpponent_spec);
+
 void C2_HOOK_FASTCALL InitOpponents(tRace_info* pRace_info);
+
+void C2_HOOK_FASTCALL SetInitialCopPositions(void);
 
 void C2_HOOK_FASTCALL CalcNegativeXVector(br_vector3* pNegative_x_vector, br_vector3* pStart, br_vector3* pFinish, br_scalar pLength);
 
@@ -352,7 +371,7 @@ tS16 C2_HOOK_FASTCALL FindNearestPathSection(br_vector3* pActor_coords, br_vecto
 
 void C2_HOOK_FASTCALL WeightedFindNearestNodeAndSection(tCar_spec* pCar, br_vector3* pActor_coords, tS16* pNearest_node_section_no, tS16* pNearest_node, br_scalar* pT, float pWeight);
 
-tS16 C2_HOOK_FASTCALL FindNearestGeneralSection(tCar_spec* pPursuee, const br_vector3* pActor_coords, br_vector3* pPath_direction, br_vector3* pIntersect, br_scalar* pDistance);
+tS16 C2_HOOK_FASTCALL FindNearestGeneralSection(tCar_spec* pPursuee, br_vector3* pActor_coords, br_vector3* pPath_direction, br_vector3* pIntersect,float* pDistance);
 
 int C2_HOOK_FASTCALL GetOpponentsRealSection(tOpponent_spec* pOpponent_spec, int pSection_no);
 
@@ -394,6 +413,10 @@ int C2_HOOK_FASTCALL AddToOpponentsProjectedRoute(tOpponent_spec* pOpponent_spec
 
 void C2_HOOK_FASTCALL TopUpRandomRoute(tOpponent_spec* pOpponent_spec, int pSections_to_add);
 
+int C2_HOOK_FASTCALL SearchForSection(tRoute_section* pTemp_store, tRoute_section* pPerm_store, int* pNum_of_perm_store_sections, tS16 pTarget_section, int pDepth, br_scalar pDistance_so_far, tOpponent_spec* pOpponent_spec);
+
+void C2_HOOK_FASTCALL NewCalcGetNearPlayerRoute(tOpponent_spec* pOpponent_spec, tCar_spec* pPlayer, tProcess_objective_command pCommand);
+
 void C2_HOOK_FASTCALL ProcessGetNearPlayer(tOpponent_spec* pOpponent_spec, tProcess_objective_command pCommand);
 
 void C2_HOOK_FASTCALL ProcessLevitate(tOpponent_spec* pOpponent_spec, tProcess_objective_command pCommand);
@@ -428,6 +451,8 @@ tS16 C2_HOOK_FASTCALL CalcNextTrailSection(const tOpponent_spec* pOpponent_spec,
 
 int C2_HOOK_FASTCALL GetOpponentsNextSection(const tOpponent_spec* pOpponent_spec, tS16 pCurrent_section);
 
+tU16 C2_HOOK_FASTCALL GetOpponentsSectionStartNode(const tOpponent_spec* pOpponent, tS16 pSection);
+
 const br_vector3* C2_HOOK_FASTCALL GetOpponentsSectionStartNodePoint(const tOpponent_spec* pOpponent_spec, tS16 pSection);
 
 const br_vector3* C2_HOOK_FASTCALL GetOpponentsSectionFinishNodePoint(const tOpponent_spec* pOpponent_spec, tS16 pSection);
@@ -441,5 +466,7 @@ tS16 C2_HOOK_FASTCALL GetOpponentsSectionMinSpeed(tOpponent_spec* pOpponent_spec
 int C2_HOOK_FASTCALL RematerialiseOpponentOnThisSection(tOpponent_spec* pOpponent_spec, tS16 pSection_no, float pSpeed);
 
 float C2_HOOK_FASTCALL GetOpponentsSectionWidth(const tOpponent_spec* pOpponent_spec, tS16 pSection);
+
+void C2_HOOK_FASTCALL MarkPlayerInteraction(tCar_spec* pCar_a, tCar_spec* pCar_b);
 
 #endif // GUARD_OPPONENT_H

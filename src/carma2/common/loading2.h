@@ -16,7 +16,6 @@ extern void C2_HOOK_FASTCALL GetHithers(void);
 
 extern void C2_HOOK_FASTCALL LoadGeneralParameters(void);
 
-extern void C2_HOOK_FASTCALL FinishLoadingGeneral(void);
 
 extern void C2_HOOK_FASTCALL LoadKeyMapping(void);
 

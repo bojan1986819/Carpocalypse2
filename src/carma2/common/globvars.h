@@ -83,7 +83,7 @@ extern br_model* gBlend_model;
 extern br_model* gBlend_model2;
 extern br_actor* gBlend_actor;
 
-extern br_token_value* gDAT_00660148;
+extern br_token_value gSmoke_extra_prims[3];
 
 extern tBRender_smoke gBR_smoke_structs[35];
 
@@ -117,7 +117,6 @@ extern int gTyping;
 extern int gCount_opponents;
 extern br_actor* gPlayer_car_master_actor;
 extern br_vector3 gInitial_position;
-extern int gArrow_mode;
 
 extern int gRace_head_ups[22];
 
@@ -128,6 +127,9 @@ extern int gDisallow_abandon_race;
 //extern int gPipe_reg_snap_before_new_game;
 //extern int gPipe_reg_snap_before_our_car;
 //extern int gPipe_reg_snap_after_our_car;
+/* 0x676914 is one variable. reccmp/carma2_hw-crt.csv still names it gPed_676914 (so that is the real
+   symbol, otherwise ~35 functions lose match %); gAction_replay_mode is the readable name. Once the csv is
+   renamed, turn the macro into the real name. */
 extern int gPed_676914;
 #define gAction_replay_mode gPed_676914
 //extern int gDefault_engine_noise_index;
@@ -248,7 +250,7 @@ extern int gOn_drugs;
 extern int gCheckpoint;
 //extern int gRoll_over_time[3];
 //extern int gWasted_creds[3];
-extern tU32 gTimer;
+extern int gTimer;
 extern int gCheckpoint_count;
 extern int gCountdown;
 extern int gFrame_rate;
@@ -267,5 +269,3 @@ extern char gQuick_time_temp_path[256];
 extern char gQuick_time_movie_path_stub[256];
 
 #endif // CARPOCALYPSE2_GLOBVARS_H
-
-extern int gINT_0075bba8;

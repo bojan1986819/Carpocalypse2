@@ -264,6 +264,7 @@ void C2_HOOK_CDECL BrZbsBegin(br_uint_8 colour_type, br_uint_8 depth_type, void*
     v1db.heap.size = size;
 }
 
+// FUNCTION: CARMA2_HW 0x00525d70
 void C2_HOOK_CDECL BrZbEnd(void) {
 
     v1db.zx_active &= ~BR_ZX_ZB_ACTIVE_MASK;

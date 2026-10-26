@@ -20,6 +20,20 @@ static int C2_HOOK_CDECL SortScores(const void* pArg1, const void* pArg2) {
     return gNet_players[*(int*)pArg2].score - gNet_players[*(int*)pArg1].score;
 }
 
+// FUNCTION: CARMA2_HW 0x004e33d0
+int C2_HOOK_CDECL AnyOpponentCarExists(void) {
+    int i;
+    int count;
+
+    count = GetCarCount(eVehicle_opponent);
+    for (i = 0; i < count; i++) {
+        if (GetCarSpec(eVehicle_opponent, i) != NULL) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // SortGameScores
 
 // DoNetRaceSummary

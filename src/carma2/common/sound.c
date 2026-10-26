@@ -91,6 +91,9 @@ int gMusic_available;
 // GLOBAL: CARMA2_HW 0x00684568
 int gINT_00684568;
 
+// GLOBAL: CARMA2_HW 0x0079e140
+int gINT_0079e140;
+
 // GLOBAL: CARMA2_HW 0x00684554
 int gINT_00684554;
 
@@ -189,17 +192,165 @@ int gCount_environmental_sound_sources;
 // GLOBAL: CARMA2_HW 0x0079e17c
 int gEnvironmental_sound_sources_buffer_index;
 
+// GLOBAL: CARMA2_HW 0x00589ea0
+const br_scalar gFLOAT_00589ea0 = 0.f;
+
+// GLOBAL: CARMA2_HW 0x00589ea8
+const double gDOUBLE_00589ea8 = 1.0;
+
+// GLOBAL: CARMA2_HW 0x00589eb0
+const br_scalar gFLOAT_00589eb0 = 255.f;
+
+// GLOBAL: CARMA2_HW 0x00589f08
+const br_scalar gFLOAT_00589f08 = 1.f;
+
+// GLOBAL: CARMA2_HW 0x00589f14
+const br_scalar gFLOAT_00589f14 = 2.38418579e-7f;
+
+// GLOBAL: CARMA2_HW 0x00589f18
+const br_scalar gFLOAT_00589f18 = 10.f;
+
+// GLOBAL: CARMA2_HW 0x00589f1c
+const br_scalar gFLOAT_00589f1c = 0.1f;
+
+// C2PORT-NONMATCHING: best 72.81% | difftest PASS 2000 trials (spec difftest/specs/00456af0_DoEnvSound.json) | reason x87-order
 // FUNCTION: CARMA2_HW 0x00456af0
 void C2_HOOK_FASTCALL DoEnvSound(tSpecial_volume* pVolume, br_vector3* pP, tSpecial_volume_soundfx_type pType, tSpecial_volume_soundfx_data* pSound_data, float pSound_dist, br_vector3 *pSound_dir) {
+    float fVar1;
+    float fVar2;
+    float fVar3;
+    float fVar4;
+    br_vector3 sound_pos;
+    int sound_volume;
 
-    NOT_IMPLEMENTED();
+    if (gAmbient_sound != 0 && pType != kSoundFx_None) {
+        if (pType == kSoundFx_Saturated) {
+            if (pSound_dist != gFLOAT_00589ea0) {
+                fVar1 = BrVector3Length(pSound_dir);
+                if (fVar1 > gFLOAT_00589f14) {
+                    fVar1 = gDOUBLE_00589ea8 / fVar1;
+                    fVar2 = pSound_dir->v[2] * fVar1;
+                    fVar3 = pSound_dir->v[1] * fVar1;
+                    fVar4 = fVar1 * pSound_dir->v[0];
+                } else {
+                    fVar2 = gFLOAT_00589ea0;
+                    fVar3 = gFLOAT_00589ea0;
+                    fVar4 = gFLOAT_00589f08;
+                }
+                fVar1 = -pSound_dist;
+                sound_pos.v[0] = fVar4 * fVar1 + pP->v[0];
+                sound_pos.v[1] = fVar3 * fVar1 + pP->v[1];
+                sound_pos.v[2] = fVar2 * fVar1 + pP->v[2];
+            } else {
+                sound_pos = *pP;
+            }
+        } else {
+            sound_pos.v[0] = SRandomPosNeg(10.f) + pP->v[0];
+            sound_pos.v[1] = SRandomPosNeg(10.f) + pP->v[1];
+            sound_pos.v[2] = SRandomPosNeg(10.f) + pP->v[2];
+        }
+        sound_volume = (int)((gFLOAT_00589f18 - pSound_dist) * gFLOAT_00589eb0 * gFLOAT_00589f1c);
+        DoAnEnvironmentalSound(pVolume, (tEnvironment_sound_generator_info*)pSound_data, sound_volume, &sound_pos);
+    }
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x00456c60
 void C2_HOOK_FASTCALL DoAnEnvironmentalSound(void* pSrc_object, tEnvironment_sound_generator_info* pEnv_info, int pVolume, br_vector3* pPos) {
+    tEnvironment_sound_source* source;
+    tU32 now;
+    int should_play;
+    int sound_id;
+    int pitch;
+    int free_index;
+    int i;
 
-    NOT_IMPLEMENTED();
+    now = GetTotalTime();
+    should_play = 0;
+    switch (pEnv_info->soundfx.periodicity) {
+    case kSoundFxPeriodicity_Random:
+        goto play_random;
+    case kSoundFxPeriodicity_Periodic:
+        goto play_periodic;
+    case kSoundFxPeriodicity_Continuous:
+        goto play_continuous;
+    default:
+        goto play_sound;
+    }
+
+play_continuous:
+    {
+        free_index = -1;
+        source = gEnvironment_sound_sources;
+        for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gEnvironment_sound_sources); i++, source++) {
+            if (source->field_0x10 == 1 && source->field_0x14 == pSrc_object) {
+                break;
+            }
+            if (source->field_0x10 == 0) {
+                free_index = i;
+            }
+        }
+        if (i == (int)CARPOCALYPSE2_ASIZE(gEnvironment_sound_sources)) {
+            if (free_index < 0) {
+                source = NULL;
+            } else {
+                source = &gEnvironment_sound_sources[free_index];
+                source->field_0x10 = 1;
+                source->field_0x14 = pSrc_object;
+            }
+        }
+        if (source != NULL) {
+            source->position = *pPos;
+            source->field_0x18 = 1;
+            S3UpdateSoundSource(gXXX_outlet,
+                    pEnv_info->soundfx.sound_alternatives[IRandomBetween(0, pEnv_info->soundfx.count_sound_alternatives - 1)],
+                    source->source,
+                    -1.f,
+                    -1,
+                    -1,
+                    pVolume,
+                    IRandomPosNeg(pEnv_info->soundfx.max_deviation) + 0x10000,
+                    -1);
+        }
+        gINT_0079e140 = 1;
+    }
+    goto play_sound;
+
+play_periodic:
+    if (now < pEnv_info->soundfx.field_0xc) {
+        goto play_sound;
+    }
+    should_play = 1;
+    if (pEnv_info->soundfx.period < now - pEnv_info->soundfx.field_0xc) {
+        pEnv_info->soundfx.field_0xc = now + pEnv_info->soundfx.period;
+    } else {
+        pEnv_info->soundfx.field_0xc += pEnv_info->soundfx.period;
+    }
+    goto play_sound;
+
+play_random:
+    if (now < pEnv_info->soundfx.field_0xc) {
+        goto play_sound;
+    }
+    pEnv_info->soundfx.field_0xc = now + IRandomBetween(pEnv_info->soundfx.random.min_gap, pEnv_info->soundfx.random.max_gap);
+    should_play = 1;
+
+play_sound:
+    if (should_play) {
+        pitch = IRandomPosNeg(pEnv_info->soundfx.max_deviation) + 0x10000;
+        sound_id = IRandomBetween(0, pEnv_info->soundfx.count_sound_alternatives - 1);
+        sound_id = pEnv_info->soundfx.sound_alternatives[sound_id];
+        if (gSound_enabled) {
+            if (pVolume != 0 && sound_id != 1000
+                    && (sound_id < 3000 || sound_id > 3007)
+                    && (sound_id < 5300 || sound_id > 5320)) {
+                PipeSingleSound(gXXX_outlet, sound_id, pVolume, 0, -1, pPos);
+            }
+            S3StartSound3D(gXXX_outlet, sound_id, pPos, &gZero_v__car, 1, pVolume, pitch, 0x10000);
+        }
+    }
 }
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x00455950
 int C2_HOOK_FASTCALL DRS3SetVolume(int pVolume) {
@@ -210,67 +361,70 @@ int C2_HOOK_FASTCALL DRS3SetVolume(int pVolume) {
     return S3SetVolume(pVolume);
 }
 
+// C2PORT-NONMATCHING: best 53.61% | difftest PASS 2000 trials (spec difftest/specs/00457260_FoundSoundSource.json) | reason VC5 register allocation and copy scheduling
 // FUNCTION: CARMA2_HW 0x00457260
-intptr_t C2_HOOK_FASTCALL FoundSoundSource(br_actor* pActor, void* pContext) {
-    tEnvironment_sound_generator_vector* ctx = (tEnvironment_sound_generator_vector*)pContext;
-    tEnvironment_sound_generator_info* entry;
-    char* s;
-    char* source;
-    int index;
-    tTrackSoundGenerator* generator;
+int C2_HOOK_FASTCALL FoundSoundSource(br_actor* pActor, void* pContext) {
+    int* entry;
+    int i;
+    int* generator;
+    int* source;
+    int* context = (int*)pContext;
 
-    if (ctx->count >= 0x14) {
-        return 0;
+    i = context[0];
+    if (i < 0x14) {
+        context[0] = i + 1;
+        entry = (int*)(context[1] + i * 0x38);
+        entry[10] = (int)pActor;
+        i = *(int*)(*(int*)((char*)pActor + 0x18) + 4);
+        generator = (int*)&gProgram_state.track_sound_generators[
+            *(signed char*)(i + 1) * 10 + *(signed char*)(i + 2) - 0x210];
+        entry[9] = (int)generator;
+        source = generator;
+        if ((*generator == 0) && (*((char*)((char*)pActor + 0x14) + 3) == '!')) {
+            source += 0x13;
+        } else {
+            source++;
+        }
+        memcpy(entry, source, 9 * sizeof(int));
+        memcpy(entry + 11, (char*)pActor + 0x50, 3 * sizeof(int));
     }
-    entry = &ctx->sources[ctx->count];
-    ctx->count += 1;
-    entry->actor = pActor;
-
-    s = pActor->model->identifier;
-    index = (int)*(tS8*)(s + 1) * 0xa + (int)*(tS8*)(s + 2) - 0x210;
-    generator = &gProgram_state.track_sound_generators[index];
-    entry->generator = generator;
-
-    source = (char*)((tU8*)generator + 0x4);
-    if (generator->type == kSoundGeneratorType_noncar && pActor->identifier[3] == '!') {
-        source = (char*)((tU8*)generator + 0x4c);
-    }
-    memcpy(&entry->soundfx, source, sizeof(entry->soundfx));
-    entry->pos = pActor->t.t.translate.t;
     return 0;
 }
 
 // FUNCTION: CARMA2_HW 0x00456ea0
 void C2_HOOK_FASTCALL MungeSoundGenerators(void) {
+    tU32 now = GetTotalTime();
 
     if (gAmbient_sound) {
         int i;
 
-        if (GetTotalTime() - gNext_sound_generator_munging >= 200) {
+        if (now - gNext_sound_generator_munging >= 200) {
             tEnvironment_sound_generator_vector found_sources;
+            tTrackSoundGenerator* generator;
 
             gNext_sound_generator_munging += 200;
             found_sources.sources = gEnvironmental_sound_sources_buffer[gEnvironmental_sound_sources_buffer_index ^ 1];
             found_sources.count = 0;
             ProcessNearbyActors(&gProgram_state.track_spec, (br_vector3*)gCamera_to_world.m[3], 10.f, 1, ')', 0, 0x1003, FoundSoundSource, &found_sources);
-            for (i = 0; i < gProgram_state.count_track_sound_generators; i++) {
-                tTrackSoundGenerator* generator = &gProgram_state.track_sound_generators[i];
-                if (generator->type == kSoundGeneratorType_point && Vector3DistanceSquared(&generator->point, (br_vector3*)gCamera_to_world.m[3]) < 10.f * 10.f) {
-                    tEnvironment_sound_generator_info* src = &found_sources.sources[found_sources.count];
+
+            generator = gProgram_state.track_sound_generators;
+            for (i = 0; i < gProgram_state.count_track_sound_generators; i++, generator++) {
+                if (generator->type == kSoundGeneratorType_point && Vector3Distance(&generator->point, (br_vector3*)gCamera_to_world.m[3]) < 100.f) {
+                    tEnvironment_sound_generator_info* src = &found_sources.sources[found_sources.count++];
                     src->generator = generator;
                     src->soundfx = generator->fx;
                     src->pos = generator->point;
                     src->actor = NULL;
-                    found_sources.count += 1;
                 }
             }
             for (i = 0; i < gNum_active_non_cars; i++) {
                 tNon_car_spec* c = gActive_non_car_list[i];
                 br_actor* a = c->collision_info->actor;
-                int src_count = found_sources.count;
+                int src_count;
                 if (a != NULL && a->model !=NULL
                         && a->model->identifier != NULL && a->model->identifier[0] == ')'
                         && Vector3DistanceSquared(&a->t.t.translate.t, (br_vector3*)gCamera_to_world.m[3]) < 10.f * 10.f) {
+                    src_count = found_sources.count;
                     FoundSoundSource(a, &found_sources);
                     if (src_count < found_sources.count && !Vector3IsZero(&c->collision_info->v)) {
                         found_sources.sources[src_count].soundfx = found_sources.sources[src_count].generator->fx1_noncar;
@@ -294,18 +448,19 @@ void C2_HOOK_FASTCALL MungeSoundGenerators(void) {
             gCount_environmental_sound_sources = found_sources.count;
         }
 
-        for (i = 0; i < gCount_environmental_sound_sources; i++) {
-            br_vector3 delta;
-            tEnvironment_sound_generator_info* src;
-            void *src_obj;
+        {
+            tEnvironment_sound_generator_info* src = gEnvironmental_sound_sources_buffer[gEnvironmental_sound_sources_buffer_index];
+            for (i = 0; i < gCount_environmental_sound_sources; i++, src++) {
+                float distance;
+                void *src_obj;
 
-            src = &gEnvironmental_sound_sources_buffer[gEnvironmental_sound_sources_buffer_index][i];
-            BrVector3Sub(&delta, &src->pos, (br_vector3*)gCamera_to_world.m[3]);
-            src_obj = src->actor;
-            if (src_obj == NULL) {
-                src_obj = src->generator;
+                distance = Vector3Distance(&src->pos, (br_vector3*)gCamera_to_world.m[3]);
+                src_obj = src->actor;
+                if (src_obj == NULL) {
+                    src_obj = src->generator;
+                }
+                DoAnEnvironmentalSound(src_obj, src, (int)(BR_MUL(BR_MUL(BR_SUB(gFLOAT_00589f18, distance), gFLOAT_00589eb0), gFLOAT_00589f1c)), &src->pos);
             }
-            DoAnEnvironmentalSound(src_obj, src, (int)((10.f - BrVector3LengthSquared(&delta)) * 255.f / 10.f), &src->pos);
         }
     }
 }
@@ -325,9 +480,9 @@ void C2_HOOK_FASTCALL MungeEnvironmentalSound(void) {
         }
         for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gEnvironment_sound_sources); i++) {
 
-            if (gEnvironment_sound_sources[i].field_0x18 == 0 && gEnvironment_sound_sources[i].field_0x10 != NULL) {
+            if (gEnvironment_sound_sources[i].field_0x18 == 0 && gEnvironment_sound_sources[i].field_0x10 != 0) {
                 S3UpdateSoundSource(gXXX_outlet, -1, gEnvironment_sound_sources[i].source, -1.f, -1, -1, 0, -1, -1);
-                gEnvironment_sound_sources[i].field_0x10 = NULL;
+                gEnvironment_sound_sources[i].field_0x10 = 0;
             }
         }
     }
@@ -390,6 +545,12 @@ void C2_HOOK_FASTCALL InitSound(void) {
             gSound_available = gSound_enabled = 0;
         } else {
             gSound_available = gSound_enabled = S3Init(the_path, gAusterity_mode, gPed_sound_path) == 0;
+#ifdef __vita__
+            if (gSound_available) {
+                extern void C2VitaPreloadSamples(void);
+                C2VitaPreloadSamples(); /* no-op for samples already loaded */
+            }
+#endif
         }
         S3Set3DSoundEnvironment(0.14492753f, -1.0f, -1.0f);
         gVirgin_pass = 0;
@@ -502,6 +663,7 @@ tS3_sound_tag C2_HOOK_FASTCALL DRS3StartSound(tS3_outlet* pOutlet, tS3_sound_id 
     }
 }
 
+// FUNCTION: CARMA2_HW 0x004556f0
 int C2_HOOK_FASTCALL DRS3StartSoundNoPiping(tS3_outlet* pOutlet, tS3_sound_id pSound) {
 
     if (gSound_enabled) {
@@ -538,6 +700,25 @@ int C2_HOOK_FASTCALL DRS3ChangeVolume(int pChannel_id, int pVolume) {
     }
 }
 
+/* 0x005648ac: unoptimised (frame-pointer) helper from the sound library that only returns 12; its own
+ * codegen cannot match from this /O2 file. Called (not inlined) by FUN_004557c0. */
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 0% | trivial, returns 12 (no difftest needed) | reason original compiled without optimisation (frame pointer); our file is /O2
+// FUNCTION: CARMA2_HW 0x005648ac
+int C2_HOOK_STDCALL FUN_005648ac(int pArg) {
+    (void)pArg;
+    return 12;
+}
+#pragma auto_inline(on)
+
+// FUNCTION: CARMA2_HW 0x004557c0
+int C2_HOOK_STDCALL FUN_004557c0(int pArg) {
+    if (gSound_enabled != 0) {
+        return FUN_005648ac(pArg);
+    }
+    return 0;
+}
+
 // FUNCTION: CARMA2_HW 0x00455840
 int C2_HOOK_FASTCALL DRS3StopSound(tS3_sound_tag pSound_tag) {
 
@@ -548,10 +729,30 @@ int C2_HOOK_FASTCALL DRS3StopSound(tS3_sound_tag pSound_tag) {
     }
 }
 
+// FUNCTION: CARMA2_HW 0x00455880
+int C2_HOOK_FASTCALL DRS3ReleaseSound(int pSound_id) {
+
+    if (gSound_enabled) {
+        return S3ReleaseSound(pSound_id);
+    } else {
+        return 0;
+    }
+}
+
 void C2_HOOK_FASTCALL DRS3Service(void) {
 
     if (gSound_enabled) {
         S3Service(gProgram_state.cockpit_on && gProgram_state.cockpit_image_index >= 0, 1);
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x00455860
+int C2_HOOK_FASTCALL DRS3LoadSample(int pSample_id) {
+
+    if (gSound_enabled) {
+        return S3LoadSample(pSample_id);
+    } else {
+        return 0;
     }
 }
 
@@ -588,6 +789,27 @@ int C2_HOOK_FASTCALL DRS3StopOutletSound(tS3_outlet* pOutlet) {
 
     if (gSound_enabled) {
         return S3StopOutletSound(pOutlet);
+    }
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00455990
+int C2_HOOK_FASTCALL DRS3StopAllOutletSounds(void) {
+    int result;
+
+    if (gSound_enabled) {
+        result = S3StopAllOutletSounds();
+        if (gSound_enabled) {
+            if (gProgram_state.cockpit_on && gProgram_state.cockpit_image_index >= 0) {
+                int inside_cockpit;
+
+                inside_cockpit = 1;
+                S3Service(inside_cockpit, inside_cockpit);
+            } else {
+                S3Service(0, 1);
+            }
+        }
+        return result;
     }
     return 0;
 }
@@ -699,7 +921,7 @@ void C2_HOOK_FASTCALL InitSoundSources(void) {
         for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gEnvironment_sound_sources); i++) {
 
             env_src = &gEnvironment_sound_sources[i];
-            env_src->field_0x10 = NULL;
+            env_src->field_0x10 = 0;
             if (env_src->source == NULL) {
                 env_src->source = S3CreateSoundSourceBR(&env_src->position, &gZero_v__car, gIndexed_outlets[0]);
                 if (env_src->source != NULL) {
@@ -786,6 +1008,14 @@ int C2_HOOK_FASTCALL DRS3StartSound3D(tS3_outlet* pOutlet, int pSound_id, const 
     } else {
         return 0;
     }
+}
+
+// FUNCTION: CARMA2_HW 0x00456010
+tS3_sound_tag C2_HOOK_FASTCALL DRS3StartSoundFromSource3(tS3_sound_source* pSource, tS3_sound_id pSound, tS3_repeats pRepeats, tS3_volume pVolume, tS3_pitch pPitch, tS3_speed pSpeed) {
+    if (gSound_enabled) {
+        return S3StartSoundFromSource3(pSound, pSource, pRepeats, pVolume, pPitch, pSpeed);
+    }
+    return 0;
 }
 
 // FUNCTION: CARMA2_HW 0x00456070
@@ -1172,3 +1402,4 @@ void C2_HOOK_FASTCALL StartMusicTrack(int pMusic_track) {
         gINT_00684568 = DRS3StartCDA(pMusic_track);
     }
 }
+

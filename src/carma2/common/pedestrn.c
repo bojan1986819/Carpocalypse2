@@ -1,24 +1,30 @@
+#ifndef CARPOCALYPSE2_MATCHING
+#include "loadprof.h"
+#endif
 #include "pedestrn.h"
 
 #include "animation.h"
 #include "car.h"
+#include "crush.h"
 #include "errors.h"
 #include "explosions.h"
+#include "finteray.h"
 #include "globvars.h"
 #include "globvrpb.h"
 #include "graphics.h"
 #include "loading.h"
 #include "physics.h"
 #include "phil.h"
+#include "pratcam.h"
 #include "piping.h"
 #include "platform.h"
-#include "pratcam.h"
 #include "raycast.h"
 #include "replay.h"
 #include "skidmark.h"
 #include "smashing.h"
 #include "sound.h"
 #include "spark.h"
+#include "tinted.h"
 #include "trig.h"
 #include "utility.h"
 #include "world.h"
@@ -31,7 +37,101 @@
 #include "carpocalypse2_macros.h"
 #include "carpocalypse2_types.h"
 
+#ifdef __vita__
+#include "sdl3/vita_controls.h"
+#include "sdl3/vita_perf.h"
+#include <math.h>
+#define VITA_PED_CHECKPOINT(title) C2VitaCheckpoint(title)
+#else
+#define VITA_PED_CHECKPOINT(title) ((void)0)
+#endif
+
+#ifndef CARPOCALYPSE2_MATCHING
+/* Animation velocity must survive physics callbacks between animation frames.
+ * Keep it outside the character struct: its retail layout is also used by replay. */
+typedef struct {
+    tPed_character_instance* character;
+    br_vector3 velocity;
+    int valid;
+} tPed_animation_velocity;
+static tPed_animation_velocity gPed_animation_velocities[PEDESTRIAN_MAX_COUNT];
+
+static tPed_animation_velocity* PedAnimationVelocityState(tPed_character_instance* character) {
+    uintptr_t base = (uintptr_t)gPedestrian_array;
+    uintptr_t address = (uintptr_t)character->ped;
+    tPed_animation_velocity* state;
+    if (base == 0 || address < base || address - base >= PEDESTRIAN_MAX_COUNT * sizeof(tPedestrian)
+            || (address - base) % sizeof(tPedestrian) != 0 || character->ped->character != character) {
+        return NULL;
+    }
+    state = &gPed_animation_velocities[(address - base) / sizeof(tPedestrian)];
+    if (state->character != character) {
+        state->character = character;
+        state->valid = 0;
+    }
+    return state;
+}
+
+static tPed_character_instance* AnimationDrivenPedestrian(tPhysics_object* object) {
+    tPed_character_instance* character;
+    tPedestrian* ped;
+
+    if (gAction_replay_mode || object->flags_0x238 != 2 || object->owner == NULL) {
+        return NULL;
+    }
+    character = object->owner;
+    ped = character->ped;
+    if (!(character->field_0x14 & 1) || (character->field_0x14 & 4)
+            || character->field_0x4 < 0 || character->field_0x7 < 0
+            || character->field_0xbc != NULL || ped == NULL || ped->hit_points <= 0
+            || (ped->action != ePed_action_walking && ped->action != ePed_action_running)) {
+        return NULL;
+    }
+    return character;
+}
+
+int PedestrianOwnsPassiveRoot(tPhysics_object* object) {
+    tPHIL_queued_header* info = object->field_0x240;
+    tPed_character_instance* character;
+
+    if (object->field_0xf0 != 2 || info == NULL || info->field_0x8 != 1) {
+        return 0;
+    }
+    character = AnimationDrivenPedestrian(object);
+    return character != NULL && object->actor != NULL
+        && GetCharacterMatrixPtr(character) == &object->actor->t.t.mat;
+}
+
+/* PHIL skips changed_objects callbacks on interpolation-only frames. The root
+ * still moves, while attached bones use independent world-space matrices. */
+void RefreshPedestrianAfterInterpolation(tPhysics_object* object) {
+    tPed_character_instance* character = AnimationDrivenPedestrian(object);
+    if (character == NULL) {
+        return;
+    }
+    /* Same pose reconstruction as BonerPedMovedByPhysics, without its velocity,
+     * tumble, replay recording, or gameplay callback side effects. Mode 3 keeps
+     * the interpolated root and skips detached bones. Do not advance animation. */
+    RecalculateOrientationOfRoot(character);
+    SetCharacterBonePositions(character, 3, 0);
+}
+
+const br_vector3* GetPedestrianMovementVelocity(tPedestrian* ped) {
+    tPed_character_instance* character = ped->character;
+    if (!gAction_replay_mode && !(character->field_0x14 & 4) && character->field_0xbc == NULL
+            && ped->hit_points > 0
+            && (ped->action == ePed_action_walking || ped->action == ePed_action_running)) {
+        tPed_animation_velocity* state = PedAnimationVelocityState(character);
+        if (state != NULL && state->valid) {
+            return &state->velocity;
+        }
+    }
+    return &character->field_0xd8;
+}
+#endif
+
 void C2_HOOK_FASTCALL MakeCharacterPhysicsSetup(tPhysics_object* obj, br_bounds3* frame, int bone_pos_null, br_vector3* bone_vec, br_vector3* bone_ptr);
+void C2_HOOK_FASTCALL SetPhysicsObjectOmegaRecursive(tPhysics_object* pObject, br_vector3* pOmega);
 void C2_HOOK_FASTCALL ApplyNonCarTumble(tPhysics_object* pObject, br_vector3* pV, br_scalar pTumbleFactor, br_scalar pTumbleThreshold);
 int C2_HOOK_FASTCALL PHILAddObjectWithFlag(tPhysics_object* pObject);
 void C2_HOOK_FASTCALL ScaleAllPeds(int pMorph_or_personality, br_scalar* pScale, int pMode);
@@ -39,6 +139,16 @@ void C2_HOOK_FASTCALL ApplyToPedMaterialsBr(void (C2_HOOK_FASTCALL* pCallback)(v
 void C2_HOOK_FASTCALL ApplyToPedMaterialsBone(void (C2_HOOK_FASTCALL* pCallback)(void*));
 void C2_HOOK_FASTCALL ApplyToPedMaterialsFade(void (C2_HOOK_FASTCALL* pCallback)(void*));
 void C2_HOOK_CDECL BrModelUpdate(br_model* pModel, br_uint_16 pFlags);
+void C2_HOOK_FAKE_THISCALL FUN_004d6c10(tPed_character_instance* pCharacter, undefined4 pArg2, char* pX, char* pY, char* pZ);
+void C2_HOOK_FASTCALL DroneNoOp(void);
+void C2_HOOK_FASTCALL AddRepulseLink(tU32 pTime, tCar_spec* pCar, undefined4 pField_0x24, br_vector3* pOrigin, br_vector3* pVictim, float pField_0x18, float pField_0x1c);
+extern int gForceFeedbackAvailable;
+extern int gCurrent_joystick_effect_index;
+extern void C2_HOOK_FASTCALL StartDinputEffect(int pIndex);
+extern void C2_HOOK_FASTCALL StopDinputEffect(int pIndex);
+extern void C2_HOOK_FASTCALL UnloadDinputFFBEffectAtIndex(int pIndex);
+extern void* C2_HOOK_FASTCALL FUN_00458430(int pIndex);
+extern const float gFLOAT_0058a9c8;
 #include "displays.h"
 #include "racemem.h"
 #include "structur.h"
@@ -53,10 +163,22 @@ void C2_HOOK_CDECL BrModelUpdate(br_model* pModel, br_uint_16 pFlags);
 #include "sound.h"
 
 #define PED_SCALAR_EPSILON (2.384186e-6f)
+// GLOBAL: CARMA2_HW 0x0058aa08
+const volatile double gPed_electrocution_velocity_scale = 0.7;
+
+// GLOBAL: CARMA2_HW 0x0058aa10
+const volatile double gPed_electrocution_spin_scale = 4.0;
+
+// GLOBAL: CARMA2_HW 0x0065d79c
+tU32 gPed_giblet_owner_id = 0xffffffff;
+
 // GLOBAL: CARMA2_HW 0x0065d7a8
 int gPed_cache_sizes_2[4] = {
     5, 10, 40, 75,
 };
+
+// GLOBAL: CARMA2_HW 0x0065d7a0
+int gPed_spurt_id = -1073741825;
 
 // GLOBAL: CARMA2_HW 0x0065d7b8
 int gPed_cache_sizes_1[4] = {
@@ -70,16 +192,10 @@ tPed_face_cache_0x34* gPed_face_cache_heads[4];
 tPed_face_cache_0x34* gPed_face_caches[4];
 
 // GLOBAL: CARMA2_HW 0x0069bc54
-tPed_face_cache_0x50* gPed_face_cache;
-
-// GLOBAL: CARMA2_HW 0x0065e5d8
-const tU16 gPow2_word_array[16] = {
-    0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80,
-    0x100, 0x200, 0x400, 0x800, 0x1000, 0x2000, 0x4000, 0x8000,
-};
+tFace_ref* gPed_face_cache;
 
 // GLOBAL: CARMA2_HW 0x0069bd08
-tPed_flag_cell gPed_flag_cells[16];
+tPed_proximity_side_cache gPed_proximity_side_cache[16];
 
 // GLOBAL: CARMA2_HW 0x007447f0
 int gSelected_ped;
@@ -128,7 +244,7 @@ int gPed_spurt_min_max_time[2];
 br_model* gPed_spurt_model;
 
 // GLOBAL: CARMA2_HW 0x0069411c
-int gGiblet_scrape_start;
+float gGiblet_scrape_start;
 
 // GLOBAL: CARMA2_HW 0x00694468
 tSmashable_initial_position_spec gGiblet_initial_position;
@@ -145,9 +261,6 @@ int gGiblet_size_count;
 // GLOBAL: CARMA2_HW 0x00694274
 tPed_giblet_size_spec* gGiblet_sizes;
 
-// GLOBAL: CARMA2_HW 0x0065d79c
-int gGib_shower_id = -1;
-
 // GLOBAL: CARMA2_HW 0x0058f2a8
 const br_vector3 g_Ped_x_unit_vector = { { 1.f, 0.f, 0.f}};
 
@@ -156,6 +269,15 @@ const br_vector3 g_Ped_y_unit_vector = { { 0.f, 1.f, 0.f}};
 
 // GLOBAL: CARMA2_HW 0x0058f2c8
 const br_vector3 g_Ped_z_unit_vector = { { 0.f, 0.f, 1.f}};
+
+// GLOBAL: CARMA2_HW 0x00589364
+float gPed_axis_flip_sign = -1.f;
+
+// GLOBAL: CARMA2_HW 0x00589358
+br_scalar gFloat_00589358 = 0.f;
+
+// GLOBAL: CARMA2_HW 0x0058935c
+float gFloat_0058935c = 1.f;
 
 // GLOBAL: CARMA2_HW 0x0058f230
 const char* gPed_form_collision_type_names[9] = {
@@ -195,6 +317,9 @@ const char* gPed_personality_grounding_type_names[1] = {
     "GROUND",
 };
 
+
+// GLOBAL: CARMA2_HW 0x0065d758
+tU8 gUNK_0065d758[16] = { 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0 };
 
 // GLOBAL: CARMA2_HW 0x0065d778
 tPedForms_vtable gPed_forms_vtable = {
@@ -350,17 +475,7 @@ int gCount_pedestrian_personality_cloned_materials = 0;
 // GLOBAL: CARMA2_HW 0x00677730
 tPed_morph gPed_morphs[20] = { 0 };
 
-// GLOBAL: CARMA2_HW 0x00676914
-int gPed_676914;
-
-// GLOBAL: CARMA2_HW 0x0067697c
-typedef struct {
-    undefined4 field_0x0;
-    undefined4 field_0x4;
-    undefined4 field_0x8;
-    void(C2_HOOK_FASTCALL * field_0xc)(tPed_character_instance* pPed);
-} tPed_system_vtable;
-tPed_system_vtable* gPed_67697c;
+/* 0x0067697c is gPed_vtable (below); it was also declared here as a second, never-set global */
 
 // GLOBAL: CARMA2_HW 0x00677234
 int gPed_retain_root_mode;
@@ -377,14 +492,17 @@ tTWTVFS gTwtPeds;
 // GLOBAL: CARMA2_HW 0x0069bce4
 int gPed_score_multiplier;
 
-// GLOBAL: CARMA2_HW 0x0069bc30
-int gPed_recent_points;
-
 // GLOBAL: CARMA2_HW 0x006a0418
-tU32 gPed_last_score_time;
+tU32 gPed_last_kill_time;
 
 // GLOBAL: CARMA2_HW 0x00694120
-tPedestrian* gPed_recent_ped;
+tPedestrian* gPed_last_scored_pedestrian;
+
+// GLOBAL: CARMA2_HW 0x00694124
+int gPed_face_cache_flags;
+
+// GLOBAL: CARMA2_HW 0x0069bc30
+int gPed_recent_points;
 
 // GLOBAL: CARMA2_HW 0x006a0410
 int gPipe_halted_ped_status;
@@ -429,10 +547,109 @@ br_vector3 gPed_scale;
 float gConst_replay_rate_zero;
 
 // GLOBAL: CARMA2_HW 0x0058aba0
-float gConst_average_ped_scale_factor;
+float gConst_average_ped_scale_factor = 0.33333334f;
 
 // GLOBAL: CARMA2_HW 0x0069bc24
 float gAverage_ped_scale;
+
+// GLOBAL: CARMA2_HW 0x0058aa58
+const double gConst_ped_sound_pitch = 65536.0;
+
+// GLOBAL: CARMA2_HW 0x0058aa28
+const double gPed_spurt_seed_scale = 6.9;
+
+// GLOBAL: CARMA2_HW 0x0058a9d0
+const double gPed_kill_min_height = 1.0;
+
+// GLOBAL: CARMA2_HW 0x0058ab84
+const br_scalar gFLOAT_0058ab84 = -0.01f;
+
+// GLOBAL: CARMA2_HW 0x0058aaa0
+const float gPedProximity_max_float = 3.402823466e+38f;
+
+// GLOBAL: CARMA2_HW 0x0058aaa8
+const float gPedProximity_no_hit_distance = 10000.0f;
+
+// GLOBAL: CARMA2_HW 0x0058aab0
+const double gPedProximity_parallel_epsilon = 0.001;
+
+// GLOBAL: CARMA2_HW 0x0058aab8
+const float gPedProximity_max_distance = 20.0f;
+
+// GLOBAL: CARMA2_HW 0x0058aac0
+const double gPedProximity_probe_scale = 1.3;
+
+// GLOBAL: CARMA2_HW 0x0058aac8
+const double gPedProximity_edge_epsilon = 0.0001;
+
+// GLOBAL: CARMA2_HW 0x0058a9cc
+const float gPed_direction_length_epsilon = 2.384185791015625e-7f;
+
+// GLOBAL: CARMA2_HW 0x0065e5d8
+const tU16 gPedProximity_side_masks[16] = {
+    1, 2, 4, 8, 16, 32, 64, 128,
+    256, 512, 1024, 2048, 4096, 8192, 16384, 32768,
+};
+
+// GLOBAL: CARMA2_HW 0x0058a9e0
+const double gPed_direction_hold_dot = 0.95;
+
+// GLOBAL: CARMA2_HW 0x0058a9e8
+const float gPed_turn_seconds_per_frame = 0.03333333507180214f;
+
+// GLOBAL: CARMA2_HW 0x0058a9f0
+const double gPed_kill_relative_speed_ratio = 0.5;
+
+// GLOBAL: CARMA2_HW 0x0058a9fc
+const float gPed_milliseconds_scale = -1000.0f;
+
+// GLOBAL: CARMA2_HW 0x0058aa00
+const float gPed_matrix_orientation_threshold = 0.7f;
+
+// GLOBAL: CARMA2_HW 0x0058aa18
+const double gPed_medium_blood_cloud_force_threshold = 0.25;
+
+// GLOBAL: CARMA2_HW 0x0058aa20
+const double gPed_small_blood_cloud_force_threshold = 0.05;
+
+// GLOBAL: CARMA2_HW 0x0058aa30
+const float gPed_kill_motion_speed_threshold = 5.0f;
+
+// GLOBAL: CARMA2_HW 0x0058aa98
+const double gPed_scan_distance_scale = 7.0;
+
+// GLOBAL: CARMA2_HW 0x0058aa34
+const float gPed_kill_direction_threshold = 0.1f;
+
+// GLOBAL: CARMA2_HW 0x0058aa38
+const float gPed_kill_height_margin = 0.05f;
+
+// GLOBAL: CARMA2_HW 0x0058aa40
+const double gPed_kill_velocity_squared_threshold = 2.0;
+
+// GLOBAL: CARMA2_HW 0x0058aa48
+const float gPed_kill_angular_velocity_ratio = 600.0f;
+
+// GLOBAL: CARMA2_HW 0x0058aa50
+const double gPed_fall_speed_mass_scale = 0.068;
+
+// GLOBAL: CARMA2_HW 0x0058aa78
+const double gPed_repulse_y_epsilon = 0.1;
+
+// GLOBAL: CARMA2_HW 0x0058aaf0
+const float gPed_face_bounds_min_x = -0.43478259444236755f;
+
+// GLOBAL: CARMA2_HW 0x0058aaf8
+const double gPed_face_bounds_vertical_margin = -0.36231884057971014;
+
+// GLOBAL: CARMA2_HW 0x0058ab00
+const float gPed_face_bounds_min_z = -0.28985506296157837f;
+
+// GLOBAL: CARMA2_HW 0x0058ab04
+const float gPed_face_bounds_max_x = 0.43478259444236755f;
+
+// GLOBAL: CARMA2_HW 0x0058ab08
+const float gPed_face_bounds_max_z = 1.4492753744125366f;
 
 // GLOBAL: CARMA2_HW 0x00744800
 float gPed_head_scale;
@@ -465,6 +682,16 @@ const char* gPed_remap_axis_choices[6] = {
 // GLOBAL: CARMA2_HW 0x0065e560
 const char* gForm_non_humanoid_names[1] = {
     "NONHUMANOID",
+};
+
+// GLOBAL: CARMA2_HW 0x0065e568
+const br_matrix34 gPed_face_bounds_identity = {
+    {
+        { 1.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f },
+        { 0.0f, 0.0f, 0.0f },
+    }
 };
 
 // GLOBAL: CARMA2_HW 0x0065d7f0
@@ -637,6 +864,11 @@ const tPed_anim_seq gScare_ped_anim_sequence = {
     4, { 1, 2, 1, 99 }
 };
 
+// GLOBAL: CARMA2_HW 0x0065e4e0
+const tPed_anim_seq gPed_anim_sequence_0065e4e0 = {
+    3, { 1, 2, 1 }
+};
+
 // GLOBAL: CARMA2_HW 0x0065e5b8
 const float gFlamed_ped_flame_scales[7] = {
     .275f,
@@ -669,7 +901,7 @@ const tPed_anim_seq gCalm_ped_anim_sequence = {
 const char* gPedsFolder;
 
 // GLOBAL: CARMA2_HW 0x0065d7d4
-int gGoreLevel = 1;
+int gGoreLevel = 2;
 
 // GLOBAL: CARMA2_HW 0x0065d7c8
 int gAnimalsOn = 1;
@@ -685,28 +917,32 @@ int C2_HOOK_FASTCALL GetPedCount(void) {
     return gPed_count;
 }
 
+// C2PORT-NONMATCHING: best 73.33% | difftest PASS 2000 trials (spec difftest/specs/004d2c50_GetPedPosition.json) | reason branch codegen and struct-interior operand
 // FUNCTION: CARMA2_HW 0x004d2c50
 int C2_HOOK_FASTCALL GetPedPosition(int pIndex, br_vector3* pPos) {
+    tPedestrian* ped;
 
-    if (gPedestrian_array[pIndex].hit_points <= 0) {
-        return 0;
+    ped = &gPedestrian_array[pIndex];
+    if (ped->hit_points > 0
+            && ((ped->flags & 0x1) || gMap_view == 2)
+            && (gCurrent_race.race_spec->race_type != kRaceType_Peds || (ped->flags & 0x200))) {
+        pPos->v[0] = ped->pos.v[0];
+        pPos->v[1] = ped->pos.v[1];
+        pPos->v[2] = ped->pos.v[2];
+        return 1;
     }
-    if (!(gPedestrian_array[pIndex].flags & 0x1) && gMap_view != 2) {
-        return 0;
-    }
-    if (gCurrent_race.race_spec->race_type == kRaceType_Peds && !(gPedestrian_array[pIndex].flags & 0x200)) {
-        return 0;
-    }
-    BrVector3Copy(pPos, &gPedestrian_array[pIndex].pos);
-    return 1;
+    return 0;
 }
 
+// FUNCTION: CARMA2_HW 0x00403eb0
 void C2_HOOK_FASTCALL ClearOutMorphs(void) {
-    int i;
+    int* p;
 
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gPed_morphs); i++) {
-        gPed_morphs[i].field_0x4 = 0;
-    }
+    p = (int*)&gPed_morphs[0].field_0x4;
+    do {
+        *p = 0;
+        p += sizeof(tPed_morph) / sizeof(int);
+    } while ((int)p < (int)&gPed_morphs[20].field_0x4);
 }
 
 // FUNCTION: CARMA2_HW 0x00403ed0
@@ -737,6 +973,10 @@ void C2_HOOK_FASTCALL InitBoner(tPedForms_vtable* pTable) {
     gCount_pedestrian_personality_cloned_materials = 0;
     gPed_overall_movement_disabled = 0;
     gPed_retain_root_mode = 0;
+}
+
+// FUNCTION: CARMA2_HW 0x0040c640
+void C2_HOOK_FASTCALL PedNoOp(void) {
 }
 
 // FUNCTION: CARMA2_HW 0x00403f90
@@ -771,6 +1011,7 @@ void C2_HOOK_FAKE_THISCALL ScaleModelXYZ(br_model* pModel, int pArg2, float pX, 
     BrModelUpdate(pModel, BR_MODU_VERTEX_POSITIONS);
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004042f0
 void C2_HOOK_FAKE_THISCALL ScaleModel(br_model* pModel, int pArg2, float pScale) {
     br_vertex *v;
@@ -786,6 +1027,41 @@ void C2_HOOK_FAKE_THISCALL ScaleModel(br_model* pModel, int pArg2, float pScale)
         v = (br_vertex*)((char*)v + 0x28);
     }
     BrModelUpdate(pModel, BR_MODU_VERTEX_POSITIONS);
+}
+#pragma auto_inline(on)
+
+// FUNCTION: CARMA2_HW 0x00404350
+void C2_HOOK_FASTCALL DisposeMove(tPed_move* pMove) {
+    int i;
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tPed_move, count_frames, 0x28);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tPed_move, frames, 0x4c);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tPed_move_frame, axis, 0x30);
+    C2_HOOK_BUG_ON(sizeof(tPed_move_frame) != 0x34);
+
+    for (i = 0; i < pMove->count_frames; i++) {
+        if (pMove->frames[i].axis != NULL) {
+            BrMemFree(pMove->frames[i].axis);
+        }
+    }
+    if (pMove->frames != NULL) {
+        BrMemFree(pMove->frames);
+    }
+    if (pMove != NULL) {
+        BrMemFree(pMove);
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x004043a0
+void C2_HOOK_FASTCALL DisposePedMoves(void) {
+    int i;
+
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gPed_moves); i++) {
+        if (gPed_moves[i] != NULL) {
+            DisposeMove(gPed_moves[i]);
+            gPed_moves[i] = NULL;
+        }
+    }
 }
 
 br_model* ReadSmashableInitialModel(FILE* pFile, br_scalar pScale_factor) {
@@ -816,15 +1092,23 @@ br_model* ReadSmashableInitialModel(FILE* pFile, br_scalar pScale_factor) {
     return model;
 }
 
+// C2PORT-NONMATCHING: best 47.26% | difftest PASS 2000 trials (spec difftest/specs/004cb1e0_ReadPedGiblets.json) | reason asset-parser-codegen
 // FUNCTION: CARMA2_HW 0x004cb1e0
 void C2_HOOK_FASTCALL ReadPedGiblets(FILE* pFile) {
-    tPath_name the_path;
+    union {
+        tPath_name path;
+        char model_name[512];
+    } scratch;
+    tPed_giblet_size_spec* size_ptr;
+    br_model** model_slot;
     int i;
     int j;
 
-    PathCat(the_path, gApplication_path, gPedsFolder);
-    PathCat(the_path, the_path, "GIBLETS");
-    LoadAllStuffInDirectory(&gMisc_storage_space, the_path, kRendererShadingType_Diffuse1);
+    PathCat(scratch.path, gApplication_path, gPedsFolder);
+    PathCat(scratch.path, scratch.path, "GIBLETS");
+    VITA_PED_CHECKPOINT("ReadPedGiblets: loading assets");
+    LoadAllStuffInDirectory(&gMisc_storage_space, scratch.path, kRendererShadingType_Diffuse1);
+    VITA_PED_CHECKPOINT("ReadPedGiblets: parsing settings");
 
     /*
      * ***************************
@@ -849,31 +1133,60 @@ void C2_HOOK_FASTCALL ReadPedGiblets(FILE* pFile) {
     gGiblet_size_count = GetAnInt(pFile);
     gGiblet_sizes = BrMemAllocate(gGiblet_size_count * sizeof(tPed_giblet_size_spec), kMem_misc_poly_ped);
 
-    for (i = 0; i < gGiblet_size_count; i++) {
+    i = 0;
+    size_ptr = gGiblet_sizes;
+    if (gGiblet_size_count > 0) {
+        do {
         /* flags */
-        gGiblet_sizes[i].flags = GetAnInt(pFile);
+        size_ptr->flags = GetAnInt(pFile);
         /* Min force for creation */
-        gGiblet_sizes[i].min_force = GetAScalar(pFile);
+        size_ptr->min_force = GetAScalar(pFile);
         /* Force per instance */
-        gGiblet_sizes[i].instance_force = GetAScalar(pFile);
+        size_ptr->instance_force = GetAScalar(pFile);
         /* Max instances */
-        gGiblet_sizes[i].max_count = GetAnInt(pFile);
+        size_ptr->max_count = GetAnInt(pFile);
         /* Model count */
-        gGiblet_sizes[i].model_count = GetAnInt(pFile);
+        size_ptr->model_count = GetAnInt(pFile);
 
-        for (j = 0; j < gGiblet_sizes[i].model_count; j++) {
-            float factor;
+        j = 0;
+        model_slot = size_ptr->models;
+        if (size_ptr->model_count != 0) {
+            do {
+            float scale;
+            int index;
+            int r, g, b;
+            br_model* model;
 
-            factor = 1.f;
-            if (i == gGiblet_size_count - 1) {
-                factor = 3.f / 4.f;
+            scale = GetAScalar(pFile);
+            index = GetAnInt(pFile);
+            GetThreeInts(pFile, &r, &g, &b);
+            GetAString(pFile, scratch.model_name);
+            model = BrModelFind(scratch.model_name);
+            if (model == NULL) {
+                FatalError(kFatalError_CannotFindGibletModel_S, scratch.model_name);
             }
-            gGiblet_sizes[i].models[j] = ReadSmashableInitialModel(pFile, factor);
+            if (i == gGiblet_size_count - 1) {
+                scale *= 3.0f;
+                scale *= 0.25f;
+            }
+            ScaleModel(model CARPOCALYPSE2_THISCALL_EDX, scale);
+            *model_slot = model;
+            model->faces[0].material->index_base = index;
+            model->faces[0].material->index_range = 1;
+            model->faces[0].material->colour = BR_COLOUR_RGB(r, g, b);
+            BrMaterialUpdate(model->faces[0].material, BR_MATU_ALL);
+            j++;
+            model_slot++;
+            } while (j < size_ptr->model_count);
         }
 
+        i++;
+        size_ptr++;
+        } while (i < gGiblet_size_count);
     }
 
     /* SMALL BLOOD CLOUD SPEC */
+    VITA_PED_CHECKPOINT("ReadPedGiblets: models complete, blood clouds");
     ReadExplosion(pFile, &gPed_explosion_small_blood_cloud);
     /* MED BLOOD CLOUD SPEC */
     ReadExplosion(pFile, &gPed_medium_blood_cloud);
@@ -893,12 +1206,13 @@ void C2_HOOK_FASTCALL ReadPedGiblets(FILE* pFile) {
     gPed_slick_material->index_range = 0;
     BrMatrix23Identity(&gPed_slick_material->map_transform);
     gPed_slick_material->index_shade = BrTableFind("IDENTITY.TAB");
-    gPed_slick_material->colour_map = BrTableFind("GIBSLICK");
+    gPed_slick_material->colour_map = BrMapFind("GIBSLICK");
     GlorifyMaterial(&gPed_slick_material, 1, kRendererShadingType_Diffuse2);
 
     gPed_smear_material = BrMaterialFind("PEDSMEAR");
 
     /* GIB SLICK! */
+    VITA_PED_CHECKPOINT("ReadPedGiblets: slick material complete, spill settings");
     ReadSpillData(pFile, &gPed_slick);
 
     /* SPURTING STUMP GIBLETS */
@@ -915,151 +1229,33 @@ void C2_HOOK_FASTCALL ReadPedGiblets(FILE* pFile) {
 
     ReadMinMaxTimeInMilliseconds(pFile, gPed_spurt_min_max_time);
 
-    gPed_spurt_model = ReadSmashableInitialModel(pFile, 1.f);
-}
+    {
+        float scale;
+        int index;
+        int r, g, b;
+        br_model* model;
 
-void C2_HOOK_FASTCALL ReadSettingsFile(void) {
-    tPath_name the_path;
-    FILE* file;
-    int i;
-    int j;
-    float v;
-
-    PathCat(the_path, gApplication_path, gPedsFolder);
-    PathCat(the_path, the_path, "SETTINGS.TXT");
-    file = DRfopen(the_path, "rt");
-    if (file == NULL) {
-        FatalError(kFatalError_CannotOpenPedFile_S, "SETTINGS.TXT");
-    }
-    /* ***************************
-     *        GENERAL STUFF
-     * ***************************
-     */
-
-    /* Max distance from camera that peds are processed within */
-    gPed_process_distance = GetAScalar(file);
-    gPed_process_distance_inner = 0.6f * gPed_process_distance;
-    /* Min distance from camera that peds can suddenly pop up at */
-    gPed_popup_distance = GetAScalar(file);
-    gPed_popup_distance_inner = 0.6f * gPed_popup_distance;
-    /* Maximum slope that peds will walk on (in degreesm) */
-    gPed_cos_max_slope = BR_COS(BR_ANGLE_DEG(GetAScalar(file)));
-
-    /* Nearest distance to obstacles that ped should ideally reach */
-    v = GetAScalar(file);
-    gPed_reach_squared = v * v;
-
-    /* Distance from which turning to avoid obstacles is a possibility */
-    v = GetAScalar(file);
-    gPed_min_dist_avoid_collisions_squared = v * v;
-    /* Buoyancy factor */
-    gPed_buoyancy_factor = GetAScalar(file);
-    /* Points score per ped (each level) */
-    GetThreeInts(file, &gPed_points[0], &gPed_points[1], &gPed_points[2]);
-    /* Time score per ped (each level) */
-    GetThreeInts(file, &gPed_times[0], &gPed_times[1], &gPed_times[2]);
-    /* HP damage required per severing */
-    gPed_severing_damage = GetAnInt(file);
-    /* % chance of severing occurring */
-    gPed_severing_chance = GetAnInt(file);
-    /* Maximum survivable initial impact force */
-    gPed_max_survivable_impact = GetAScalar(file);
-    /* HP Damage per unit force */
-    gPed_damage_per_force = GetAScalar(file);
-    ReadPedGiblets(file);
-
-    /* NAPALMED PED SPEC */
-    ReadExplosion(file, &gNapalmed_ped_animation);
-
-    /*
-     * ***************************
-     *       MOVEMENT STUFF
-     * ***************************
-     */
-
-    C2_HOOK_BUG_ON(sizeof(tPed_movement_spec) != 20);
-
-    /* Number of movements */
-    gPed_movements_count = GetAnInt(file);
-    gPed_movements = BrMemAllocate(gPed_movements_count * sizeof(tPed_movement_spec), kMem_misc_poly_ped);
-
-    for (i = 0; i < gPed_movements_count; i++) {
-        /* Min time between random turns */
-        gPed_movements[i].min_time_between = (int)(1000.f * GetAScalar(file));
-        /* Max time between random turns */
-        gPed_movements[i].max_time_between = (int)(1000.f * GetAScalar(file));
-        /* Max angle of random turn */
-        gPed_movements[i].max_random_angle = BR_ANGLE_DEG(GetAScalar(file));
-        /* Min walk speed multiplier */
-        gPed_movements[i].min_walk_speed_factor = 1000.f / GetAScalar(file) * 30.f;
-        /* Max walk speed multiplier */
-        gPed_movements[i].max_walk_speed_factor = 1000.f / GetAScalar(file) * 30.f;
-    }
-
-    /*
-     * ***************************
-     *       PED GROUPS
-     * ***************************
-     */
-
-    C2_HOOK_BUG_ON(sizeof(tPed_group_spec) != 8);
-
-    /* Number of groups
-     * (Remember that it starts at 0, so this no. is one more than last group no.)(honest this time ;o) */
-    gPed_groups_count = GetAnInt(file);
-    gPed_groups = BrMemAllocate(gPed_groups_count * sizeof(tPed_group_spec), kMem_misc_poly_ped);
-
-    for (i = 0; i < gPed_groups_count; i++) {
-        C2_HOOK_BUG_ON(sizeof(tPed_group_member_spec) != 16);
-
-        /* Number of peds types in this group */
-        gPed_groups[i].count = GetAnInt(file);
-        gPed_groups[i].members = BrMemAllocate(gPed_groups[i].count * sizeof(tPed_group_member_spec), kMem_misc_poly_ped);
-
-        for (j = 0; j < gPed_groups[i].count; j++) {
-            /* Name of ped */
-            GetAString(file, gPed_groups[i].members[j].name);
+        scale = GetAScalar(pFile);
+        index = GetAnInt(pFile);
+        GetThreeInts(pFile, &r, &g, &b);
+        GetAString(pFile, scratch.model_name);
+        model = BrModelFind(scratch.model_name);
+        if (model == NULL) {
+            FatalError(kFatalError_CannotFindGibletModel_S, scratch.model_name);
         }
+        ScaleModel(model CARPOCALYPSE2_THISCALL_EDX, scale);
+        gPed_spurt_model = model;
+        model->faces[0].material->index_base = index;
+        model->faces[0].material->index_range = 1;
+        model->faces[0].material->colour = BR_COLOUR_RGB(r, g, b);
+        BrMaterialUpdate(model->faces[0].material, BR_MATU_ALL);
     }
-
-    /*
-     * ***************************
-     *       GORE LEVEL
-     * ***************************
-     */
-
-    /* Number of peds to be considered "animals" */
-    gPed_animal_count = GetAnInt(file);
-    for (i = 0; i < gPed_animal_count; i++) {
-        GetAString(file, (char*)(gPed_animal_names[i]));
-    }
-
-    PFfclose(file);
 }
 
-void C2_HOOK_FASTCALL InitFaceCaches(void) {
-    int i;
-    int j;
 
-    C2_HOOK_BUG_ON(sizeof(tPed_face_cache_0x34) != 52);
-    C2_HOOK_BUG_ON(sizeof(tPed_face_cache_0x50) != 80);
 
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gPed_cache_sizes_1); i++) {
-        gPed_face_cache_heads[i] = BrMemAllocate(gPed_cache_sizes_1[i] * sizeof(tPed_face_cache_0x34), kMem_ped_face_cache);
-        for (j = 0; j < gPed_cache_sizes_1[i]; j++) {
-            gPed_face_cache_heads[i][j].field_0x0 = BrMemAllocate(gPed_cache_sizes_2[i] * sizeof(tPed_face_cache_0x50), kMem_ped_face_cache);
-            gPed_face_cache_heads[i][j].count = gPed_cache_sizes_2[i];
-        }
-    }
-    gPed_face_cache = BrMemAllocate((gPed_cache_sizes_2[3] + 1) * sizeof(tPed_face_cache_0x50), kMem_ped_face_cache);
-}
 
-void C2_HOOK_FASTCALL InitOtherPedStuff(void) {
-
-    gSelected_ped = 0;
-    gProx_ray_shade_table = GenerateShadeTable(8, gRender_palette, 0xd7, 0xff, 0xe9, .5f, .75f, .9f);
-}
-
+// C2PORT-NONMATCHING: best 24.35% | difftest PASS 2000 trials (spec difftest/specs/004cb630_InitNapalmNolts.json) | reason renderer allocation calls and VC5 codegen
 // FUNCTION: CARMA2_HW 0x004cb630
 void C2_HOOK_FASTCALL InitNapalmNolts(void) {
     int i;
@@ -1082,12 +1278,12 @@ void C2_HOOK_FASTCALL InitNapalmNolts(void) {
 
         BrVector3Set(&model->vertices[0].p, -.5f, -.5f, 0.f);
         BrVector2Set(&model->vertices[0].map, 0.f, 1.f);
-        BrVector3Set(&model->vertices[1].p, -.5f, 1.f, 0.f);
+        BrVector3Set(&model->vertices[1].p, -.5f, .5f, 0.f);
         BrVector2Set(&model->vertices[1].map, 0.f, 0.f);
-        BrVector3Set(&model->vertices[2].p, 1.f, 1.f, 0.f);
+        BrVector3Set(&model->vertices[2].p, .5f, .5f, 0.f);
         BrVector2Set(&model->vertices[2].map, 1.f, 0.f);
-        BrVector3Set(&model->vertices[2].p, 1.f, -.5f, 0.f);
-        BrVector2Set(&model->vertices[2].map, 1.f, 1.f);
+        BrVector3Set(&model->vertices[3].p, .5f, -.5f, 0.f);
+        BrVector2Set(&model->vertices[3].map, 1.f, 1.f);
 
         BrModelAdd(model);
 
@@ -1165,11 +1361,12 @@ int C2_HOOK_FASTCALL DoToPeds(tCar_spec* pCar_spec, int pOnly_alive, float pMax_
     return result;
 }
 
+// C2PORT-NONMATCHING: best 37.37% | difftest PASS 2000 trials (spec difftest/specs/004ca9f0_ReadPedSpecs.json) | reason stack-layout,register-allocation,loop-layout
 // FUNCTION: CARMA2_HW 0x004ca9f0
 void C2_HOOK_FASTCALL ReadPedSpecs(FILE* pF) {
     int i;
     char s[256];
-    char s2[256];
+    char s2[28];
 
     /* Number of ped spawn sets */
     gCount_race_pedestrian_specs = GetAnInt(pF);
@@ -1267,19 +1464,27 @@ void C2_HOOK_FASTCALL ReadPedSpecs(FILE* pF) {
     }
 
     gPedestrian_array = BrMemAllocate(PEDESTRIAN_MAX_COUNT * sizeof(tPedestrian), kMem_ped_array);
+#ifndef CARPOCALYPSE2_MATCHING
+    memset(gPed_animation_velocities, 0, sizeof(gPed_animation_velocities));
+#endif
     C2_HOOK_BUG_ON(sizeof(tPedestrian) != 0x54);
 }
 
-tPed_personality* FindOrOpenPersonality(const char* pName) {
+// FUNCTION: CARMA2_HW 0x00407930
+tPed_personality* C2_HOOK_FASTCALL FindOrOpenPersonality(const char* pName) {
     int i;
+    tPed_personality** ppersonality;
 
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gPed_personalities); i++) {
-        if (gPed_personalities[i] == NULL) {
-            continue;
+    i = 0;
+    ppersonality = gPed_personalities;
+    while ((int)ppersonality < (int)(gPed_personalities + CARPOCALYPSE2_ASIZE(gPed_personalities))) {
+        if (*ppersonality != NULL) {
+            if (strcmp(pName, (*ppersonality)->name) == 0) {
+                return gPed_personalities[i];
+            }
         }
-        if (strcmp(gPed_personalities[i]->name, pName) == 0) {
-            return gPed_personalities[i];
-        }
+        ppersonality++;
+        i++;
     }
     return ReadPersonality(pName);
 }
@@ -1338,7 +1543,46 @@ br_matrix34* C2_HOOK_FASTCALL GetCharacterMatrixPtr(tPed_character_instance *pCh
 
 // FUNCTION: CARMA2_HW 0x004d34e0
 void C2_HOOK_CDECL TurnLimbsOnAndOff(br_actor* actor, br_model* model, br_material* material, void* render_data, br_uint_8 style, int on_screen) {
-
+#ifndef CARPOCALYPSE2_MATCHING
+    tPed_character_instance* character = actor->type_data;
+    if (character != NULL && (character->field_0x14 & 1)
+            && character->field_0x4 >= 0 && (tS8)character->field_0x5 >= 0) {
+        tPed_form* form = character->personality->form;
+        tPhysics_object* object = form->simple_physicing[character->field_0x5].collision_info;
+        if (object != NULL && AnimationDrivenPedestrian(object) == character
+                && GetCharacterMatrixPtr(character) == &actor->t.t.mat) {
+            int bone;
+            int sample_bone = -1;
+            br_vector3 old_position;
+            for (bone = 1; bone < form->count_bones; bone++) {
+                int parent = form->bones[bone].indices[0];
+                if (parent >= 0 && !(character->field_0xc & (gPow2_array[bone] | gPow2_array[parent]))) {
+                    sample_bone = bone;
+                    BrVector3Copy(&old_position, (br_vector3*)form->actor_sets[character->field_0x4].actors[bone]->t.t.mat.m[3]);
+                    break;
+                }
+            }
+            /* Animation and PHIL do not share a cadence. Rebuild attached world
+             * poses from the FINAL root before either root/limb submission, also
+             * on full-step and passive frames. Mode 3 leaves root motion alone. */
+            RefreshPedestrianAfterInterpolation(object);
+            if (sample_bone >= 0 && getenv("C2_OBJLOG") != NULL) {
+                static unsigned int samples;
+                br_vector3 delta;
+                BrVector3Sub(&delta, (br_vector3*)form->actor_sets[character->field_0x4].actors[sample_bone]->t.t.mat.m[3], &old_position);
+                if (samples < 200 && BrVector3LengthSquared(&delta) > 1.e-8f) {
+                    tPHIL_queued_header* info = object->field_0x240;
+                    samples++;
+                    dr_dprintf("PEDPOSESYNC ped=%p name=%s state=%d action=%d frame=%d period=%d bone=%d delta=%.7g,%.7g,%.7g model_set=%d root_model=%s",
+                        character->ped, character->personality->name, info != NULL ? info->field_0x8 : -1,
+                        character->ped->action, character->field_0x1c, character->field_0x1e, sample_bone,
+                        delta.v[0], delta.v[1], delta.v[2], character->field_0xa,
+                        model != NULL && model->identifier != NULL ? model->identifier : "<NULL>");
+                }
+            }
+        }
+    }
+#endif
     if (gPed_count_limbed_actors < 30) {
         gPed_limbed_actors[gPed_count_limbed_actors] = actor;
         gPed_count_limbed_actors += 1;
@@ -1347,19 +1591,181 @@ void C2_HOOK_CDECL TurnLimbsOnAndOff(br_actor* actor, br_model* model, br_materi
 }
 
 #pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 40.23% | difftest PASS 2000 trials (spec difftest/specs/004097b0_MorphCharacterBonePositions.json) + PASS 2000 trials (spec difftest/specs/004097b0_MorphCharacterBonePositions_EXHAUSTED.json) | reason x87 scheduling and stack layout
 // FUNCTION: CARMA2_HW 0x004097b0
 int C2_HOOK_FASTCALL MorphCharacterBonePositions(tPed_character_instance* pPed, tU32 pArg2) {
+    tPed_morph* morph;
+    tPed_personality* personality;
+    tPed_form* form;
+    tPed_form_actor_set* actor_set;
+    tPed_form_bone* form_bone;
+    tPed_personality_bone* personality_bone;
+    tS8* morph_angles;
+    br_matrix34 inverse;
+    br_matrix34 rotation;
+    br_vector3 original_pos;
+    br_vector3 move;
+    br_vector3 delta;
+    int i;
+    float frame_time;
 
-    NOT_IMPLEMENTED();
+    frame_time = (float)pArg2;
+    pPed->field_0xbc->field_0x0 += pPed->field_0xbc->field_0x4 * frame_time;
+    if (pPed->field_0xbc->field_0x0 >= gFloat_0058935c) {
+        pPed->field_0xbc->field_0x4 = 0.f;
+        if (pPed->field_0xbc->field_0x2c != 0) {
+            br_matrix34* character_matrix;
+            tPed_move_frame* move_frame;
+
+            personality = pPed->personality;
+            form = personality->form;
+            if (pPed->field_0x4 < 0) {
+                character_matrix = &pPed->field_0x2c;
+            } else if (pPed->field_0xe8 != NULL) {
+                character_matrix = pPed->field_0xe8;
+            } else {
+                character_matrix = &form->actor_sets[pPed->field_0x4].actors[0]->t.t.mat;
+            }
+            move_frame = &form->moves[pPed->field_0x7].move->frames[(tS16)pPed->field_0x1c];
+            BrMatrix34LPInverse(&inverse, &move_frame->mat);
+            BrMatrix34Mul(&pPed->field_0x8c, &inverse, character_matrix);
+            BrVector3Set((br_vector3*)pPed->field_0x8c.m[3], 0.f, 0.f, 0.f);
+        }
+        pPed->field_0xbc = NULL;
+        SetCharacterBonePositions(pPed, 0, 0);
+        return 0;
+    }
+
+    morph = pPed->field_0xbc;
+    personality = pPed->personality;
+    form = personality->form;
+    if (pPed->field_0x4 >= 0) {
+        actor_set = &form->actor_sets[pPed->field_0x4];
+    } else {
+        actor_set = NULL;
+    }
+    form_bone = form->bones;
+    personality_bone = personality->bones;
+    morph_angles = &morph->field_0x2d[0][0];
+    for (i = 0; i < form->count_bones; i++) {
+        int parent_index;
+
+        parent_index = form_bone->indices[0];
+        if (parent_index < 0) {
+            if (!(pPed->field_0x14 & 0x4) && morph->field_0x2c == 0) {
+                br_matrix34* character_matrix;
+
+                if (pPed->field_0x4 < 0) {
+                    character_matrix = &pPed->field_0x2c;
+                } else if (pPed->field_0xe8 != NULL) {
+                    character_matrix = pPed->field_0xe8;
+                } else {
+                    character_matrix = &form->actor_sets[pPed->field_0x4].actors[0]->t.t.mat;
+                }
+                BrVector3Copy(&original_pos, (br_vector3*)character_matrix->m[3]);
+                MakeRotationMatrix(&rotation,
+                    (tU8)((float)morph_angles[0] + (float)morph_angles[3] * morph->field_0x0),
+                    (tU32)((float)morph_angles[1] + (float)morph_angles[4] * morph->field_0x0),
+                    (tU32)((float)morph_angles[2] + (float)morph_angles[5] * morph->field_0x0));
+                BrMatrix34Mul(character_matrix, &rotation, &pPed->field_0x8c);
+
+                move.v[0] = (morph->field_0x8.v[0] * (1.f - morph->field_0x0)
+                    + morph->field_0x14.v[0] * morph->field_0x0) * frame_time;
+                move.v[1] = (morph->field_0x8.v[1] * (1.f - morph->field_0x0)
+                    + morph->field_0x14.v[1] * morph->field_0x0) * frame_time;
+                move.v[2] = (morph->field_0x8.v[2] * (1.f - morph->field_0x0)
+                    + morph->field_0x14.v[2] * morph->field_0x0) * frame_time;
+                BrMatrix34ApplyV(&delta, &move, &pPed->field_0x5c);
+                BrVector3Add((br_vector3*)character_matrix->m[3], &original_pos, &delta);
+            }
+        } else if (!(gPow2_array[i] & pPed->field_0xc)
+                && !(gPow2_array[parent_index] & pPed->field_0xc)
+                && actor_set != NULL) {
+            br_matrix34* mat;
+            br_matrix34* parent_mat;
+
+            if (pPed->field_0xe8 != NULL) {
+                mat = &pPed->field_0xe8[i];
+                parent_mat = &pPed->field_0xe8[i];
+            } else {
+                mat = &actor_set->actors[i]->t.t.mat;
+                parent_mat = &actor_set->actors[parent_index]->t.t.mat;
+            }
+            SetBoner(pPed, mat, parent_mat, &pPed->field_0x8c,
+                (tU8)((float)morph_angles[0] + (float)morph_angles[3] * morph->field_0x0),
+                (tU8)((float)morph_angles[1] + (float)morph_angles[4] * morph->field_0x0),
+                (tU8)((float)morph_angles[2] + (float)morph_angles[5] * morph->field_0x0),
+                &personality_bone->field_0x20, &personality_bone->field_0x2c);
+        }
+        form_bone++;
+        personality_bone++;
+        morph_angles += 6;
+    }
+    return 1;
 }
 #pragma auto_inline(on)
 
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 45.71% | difftest PASS 2000 trials (spec difftest/specs/00407e70_SetBoner.json) | reason x87 scheduling
 // FUNCTION: CARMA2_HW 0x00407e70
 void C2_HOOK_FASTCALL SetBoner(tPed_character_instance* pPed, br_matrix34* pMat, br_matrix34* pParent_mat, br_matrix34* pArg4, tU8 pAngle_x, tU8 pAngle_y, tU8 pAngle_z, br_vector3* pArg8, br_vector3* pParg9) {
-
-    NOT_IMPLEMENTED();
+    if (gMutant_speed != 0.0f) {
+        FUN_004d6c10(pPed, (undefined4)pMat, (char*)&pAngle_x, (char*)&pAngle_y, (char*)&pAngle_z);
+    }
+    MakeRotationMatrix(pMat, pAngle_x, pAngle_y, pAngle_z);
+    if (pArg4 != NULL) {
+        pMat->m[3][0] = -pArg8->v[0] * pMat->m[0][0] + -pArg8->v[2] * pMat->m[2][0] + -pArg8->v[1] * pMat->m[1][0];
+        pMat->m[3][1] = -pArg8->v[0] * pMat->m[0][1] + -pArg8->v[1] * pMat->m[1][1] + -pArg8->v[2] * pMat->m[2][1];
+        pMat->m[3][2] = -pArg8->v[0] * pMat->m[0][2] + -pArg8->v[2] * pMat->m[2][2] + -pArg8->v[1] * pMat->m[1][2];
+        BrMatrix34Post(pMat, pArg4);
+        pMat->m[3][0] = pParg9->v[0] * pParent_mat->m[0][0] + pParg9->v[2] * pParent_mat->m[2][0] + pParg9->v[1] * pParent_mat->m[1][0] + pParent_mat->m[3][0] + pMat->m[3][0];
+        pMat->m[3][1] = pParent_mat->m[0][1] * pParg9->v[0] + pParent_mat->m[1][1] * pParg9->v[1] + pParg9->v[2] * pParent_mat->m[2][1] + pParent_mat->m[3][1] + pMat->m[3][1];
+        pMat->m[3][2] = pParent_mat->m[0][2] * pParg9->v[0] + pParent_mat->m[1][2] * pParg9->v[1] + pParg9->v[2] * pParent_mat->m[2][2] + pParent_mat->m[3][2] + pMat->m[3][2];
+        return;
+    }
+    pMat->m[3][0] = pParg9->v[0] * pParent_mat->m[0][0] + pParg9->v[2] * pParent_mat->m[2][0] + pParg9->v[1] * pParent_mat->m[1][0] + -pArg8->v[0] * pMat->m[0][0] + -pArg8->v[2] * pMat->m[2][0] + -pArg8->v[1] * pMat->m[1][0] + pParent_mat->m[3][0];
+    pMat->m[3][1] = -pArg8->v[0] * pMat->m[0][1] + -pArg8->v[1] * pMat->m[1][1] + -pArg8->v[2] * pMat->m[2][1] + pParent_mat->m[0][1] * pParg9->v[0] + pParent_mat->m[1][1] * pParg9->v[1] + pParg9->v[2] * pParent_mat->m[2][1] + pParent_mat->m[3][1];
+    pMat->m[3][2] = pParent_mat->m[0][2] * pParg9->v[0] + pParg9->v[1] * pParent_mat->m[1][2] + pParg9->v[2] * pParent_mat->m[2][2] + -pArg8->v[0] * pMat->m[0][2] + -pArg8->v[2] * pMat->m[2][2] + -pArg8->v[1] * pMat->m[1][2] + pParent_mat->m[3][2];
 }
 
+#pragma auto_inline(on)
+
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 26.47% | difftest PASS 2000 trials (spec difftest/specs/004080d0_MakeRotationMatrix.json) | reason x87-order
+// FUNCTION: CARMA2_HW 0x004080d0
+void C2_HOOK_FASTCALL MakeRotationMatrix(br_matrix34* pMat, tU8 pAngle_x, tU32 pAngle_y, tU32 pAngle_z) {
+    float fVar1;
+    float fVar2;
+    float fVar3;
+    float fVar4;
+    float fVar5;
+    float fVar6;
+    tU32 local_4;
+
+    local_4 = (tU32)pAngle_x;
+    fVar4 = gPed_cos_table[pAngle_z & 0xff];
+    fVar5 = gPed_sin_table[pAngle_z & 0xff];
+    fVar6 = gPed_sin_table[local_4];
+    fVar1 = gPed_cos_table[local_4];
+    fVar2 = gPed_sin_table[pAngle_y & 0xff];
+    fVar3 = gPed_cos_table[pAngle_y & 0xff];
+
+    pMat->m[0][0] = fVar4 * fVar3;
+    pMat->m[3][2] = 0.0f;
+    pMat->m[3][1] = 0.0f;
+    pMat->m[1][0] = fVar6 * fVar4 * fVar2 - fVar5 * fVar1;
+    pMat->m[3][0] = 0.0f;
+    pMat->m[2][0] = fVar4 * fVar1 * fVar2 + fVar5 * fVar6;
+    pMat->m[0][1] = fVar5 * fVar3;
+    pMat->m[1][1] = fVar5 * fVar6 * fVar2 + fVar4 * fVar1;
+    pMat->m[2][1] = fVar5 * fVar1 * fVar2 - fVar6 * fVar4;
+    pMat->m[0][2] = -fVar2;
+    pMat->m[1][2] = fVar6 * fVar3;
+    pMat->m[2][2] = fVar3 * fVar1;
+}
+#pragma auto_inline(on)
+
+// C2PORT-NONMATCHING: best 47.32% | difftest PASS 2000 trials (spec difftest/specs/00407b30_SetCharacterBonePositions.json) | reason stack-layout-loop-register-order
 // FUNCTION: CARMA2_HW 0x00407b30
 void C2_HOOK_FASTCALL SetCharacterBonePositions(tPed_character_instance* pPed, undefined4 pArg2, undefined4 pArg3) {
     tPed_personality *personality;
@@ -1381,11 +1787,12 @@ void C2_HOOK_FASTCALL SetCharacterBonePositions(tPed_character_instance* pPed, u
     }
     personality = pPed->personality;
     form = personality->form;
-    actor_set = NULL;
     if (pPed->field_0x4 >= 0) {
         actor_set = &form->actor_sets[pPed->field_0x4];
+    } else {
+        actor_set = NULL;
     }
-    ped_move_frame = &form->moves[pPed->field_0x7].move->frames[pPed->field_0x1c];
+    ped_move_frame = &form->moves[pPed->field_0x7].move->frames[(tS16)pPed->field_0x1c];
     for (i = 0; i < form->count_bones; i++) {
         int parent_index = form->bones[i].indices[0];
 
@@ -1416,7 +1823,7 @@ void C2_HOOK_FASTCALL SetCharacterBonePositions(tPed_character_instance* pPed, u
                 if (pPed->field_0x4 < 0) {
                     mat = &pPed->field_0x2c;
                 } else if (pPed->field_0xe8 == NULL) {
-                    mat = &form->actor_sets[pPed->field_0x4].actors[0]->t.t.mat;
+                    mat = &pPed->personality->form->actor_sets[pPed->field_0x4].actors[0]->t.t.mat;
                 } else {
                     mat = pPed->field_0xe8;
                 }
@@ -1464,41 +1871,58 @@ void C2_HOOK_FASTCALL SetOnGroundVector(tPed_character_instance* pPed, br_vector
     pNew_pos->v[2] = pPos->v[2];
 }
 
+// FUNCTION: CARMA2_HW 0x00409340
 void C2_HOOK_FASTCALL RecalculateOrientationOfRoot(tPed_character_instance* pPed) {
     br_matrix34* character_matrix;
     tPed_form* form;
     br_matrix34 mat34;
 
-    character_matrix = GetCharacterMatrixPtr(pPed);
     form = pPed->personality->form;
-    BrMatrix34LPInverse(&mat34, &form->moves[pPed->field_0x7].move->frames[pPed->field_0x1c].mat);
+    if (pPed->field_0x4 < 0) {
+        character_matrix = &pPed->field_0x2c;
+    } else if (pPed->field_0xe8 != NULL) {
+        character_matrix = pPed->field_0xe8;
+    } else {
+        character_matrix = &form->actor_sets[pPed->field_0x4].actors[0]->t.t.mat;
+    }
+    BrMatrix34LPInverse(&mat34, &form->moves[pPed->field_0x7].move->frames[(short)pPed->field_0x1c].mat);
     BrMatrix34Mul(&pPed->field_0x8c, &mat34, character_matrix);
     BrVector3Set((br_vector3*)pPed->field_0x8c.m[3], 0.f, 0.f, 0.f);
 }
 
 // FUNCTION: CARMA2_HW 0x0040a050
-int C2_HOOK_FASTCALL SetCharacterMove(tPed_character_instance* pPed,int pMove_action, float pSpeed, int pArg4, int pArg5, undefined4 pArg6) {
+int C2_HOOK_FASTCALL SetCharacterMove(tPed_character_instance* pPed, int pMove_action, float pSpeed, int pArg4, int pArg5, undefined4 pArg6) {
     tPed_personality* personality;
     tPed_form* form;
     tPed_move* original_ped_move;
     tPed_move* ped_move;
-    tPed_morph* ped_morph;
     br_matrix34* character_matrix;
     int move_id;
-    tS8 original_field_0x7;
-    undefined2 original_0x1e;
-    float new_field_0x1e_0x20;
+    int original_field_0x7;
+    int force_restart;
+    tS16 original_0x1e;
+    int new_field_0x1e_0x20;
     tPed_move_frame* ped_frame;
+    br_vector3 discarded_translation;
 
+    move_id = pMove_action;
     personality = pPed->personality;
     form = personality->form;
-    original_field_0x7 = pPed->field_0x7;
-    original_ped_move = NULL;
-    if (original_field_0x7 >= 0) {
-        original_ped_move = form->moves[pPed->field_0x7].move;
+    if (pPed->field_0x7 >= 0) {
+        original_ped_move = personality->form->moves[pPed->field_0x7].move;
+    } else {
+        original_ped_move = NULL;
     }
-    character_matrix = GetCharacterMatrixPtr(pPed);
-    move_id = pMove_action & ~0x40000000;
+    if (pPed->field_0x4 < 0) {
+        character_matrix = &pPed->field_0x2c;
+    } else if (pPed->field_0xe8 != NULL) {
+        character_matrix = pPed->field_0xe8;
+    } else {
+        character_matrix = &form->actor_sets[pPed->field_0x4].actors[0]->t.t.mat;
+    }
+    force_restart = move_id & 0x40000000;
+    move_id &= ~0x40000000;
+    original_field_0x7 = pPed->field_0x7;
     if (move_id >= 0) {
         int i;
 
@@ -1527,44 +1951,47 @@ int C2_HOOK_FASTCALL SetCharacterMove(tPed_character_instance* pPed,int pMove_ac
             return 2;
         }
     }
-    original_0x1e = pPed->field_0x1e;
-    if (pSpeed >= 0.f) {
-        new_field_0x1e_0x20 = pSpeed;
-    } else {
-        new_field_0x1e_0x20 = -(float) form->moves[original_field_0x7].move->frametime * pSpeed;
-    }
+    original_0x1e = (tS16)pPed->field_0x1e;
+    new_field_0x1e_0x20 = (int)(pSpeed < gFloat_00589358
+        ? -(form->moves[pPed->field_0x7].move->frametime * pSpeed) : pSpeed);
     if (pArg4 >= 0) {
-        pPed->field_0x1e = (undefined2)new_field_0x1e_0x20;;
+        pPed->field_0x1e = (undefined2)new_field_0x1e_0x20;
     } else {
         pPed->field_0x20 = (undefined2)new_field_0x1e_0x20;
     }
-    if ((original_field_0x7 >= 0 && form->moves[original_field_0x7].id == move_id && !(pMove_action & 0x40000000U))
-           || move_id < 0 || pArg4 < 0) {
+    if (original_field_0x7 >= 0 && ((form->moves[original_field_0x7].id == move_id && !force_restart)
+            || move_id < 0 || pArg4 < 0)) {
         return 1;
     }
     ped_move = personality->form->moves[pPed->field_0x7].move;
+    /* The original sums frames backwards, then discards the translation. */
+    BrVector3Set(&discarded_translation, gFloat_00589358, gFloat_00589358, gFloat_00589358);
     if (original_ped_move != NULL && original_ped_move->field_0x2a == 0 && !gPed_overall_movement_disabled) {
         int i;
 
-        for (i = 0; i < pPed->field_0x1c; i++) {
+        for (i = (tS16)pPed->field_0x1c; i > 0; i--) {
+            discarded_translation.v[0] += original_ped_move->frames[i].mat.m[3][0];
+            discarded_translation.v[1] += original_ped_move->frames[i].mat.m[3][1];
+            discarded_translation.v[2] += original_ped_move->frames[i].mat.m[3][2];
         }
     }
     if (original_ped_move != NULL) {
-        ped_frame = &original_ped_move->frames[pPed->field_0x1c];
+        ped_frame = &original_ped_move->frames[(tS16)pPed->field_0x1c];
+    } else {
+        ped_frame = (tPed_move_frame*)pArg4;
     }
     ResetAnimation(pPed);
     if (pArg4 != 0 && original_ped_move != NULL && pArg6 != 0) {
         int i;
 
         for (i = 0; i < CARPOCALYPSE2_ASIZE(gPed_morphs); i++) {
-            if (!gPed_morphs[i].field_0x4) {
+            if (gPed_morphs[i].field_0x4 == gFloat_00589358) {
                 pPed->field_0xbc = &gPed_morphs[i];
                 break;
             }
         }
     }
-    ped_morph = pPed->field_0xbc;
-    if (ped_morph == NULL) {
+    if (pPed->field_0xbc == NULL) {
         pArg4 = 0;
     }
     if (pArg4 != 0) {
@@ -1572,45 +1999,63 @@ int C2_HOOK_FASTCALL SetCharacterMove(tPed_character_instance* pPed,int pMove_ac
         float sum;
         int i;
 
-        BrVector3Copy(&ped_morph->field_0x20, &original_ped_move->field_0x40);
+        pPed->field_0xbc->field_0x20 = original_ped_move->field_0x40;
         if (original_0x1e != 0 && original_ped_move->field_0x2a == 0) {
-            BrVector3InvScale(&ped_morph->field_0x8, &ped_morph->field_0x20, (float)(original_ped_move->count_frames * original_0x1e));
+            pPed->field_0xbc->field_0x8.v[0] = pPed->field_0xbc->field_0x20.v[0] / (float)(original_ped_move->count_frames * original_0x1e);
+            pPed->field_0xbc->field_0x8.v[1] = pPed->field_0xbc->field_0x20.v[1] / (float)(original_ped_move->count_frames * original_0x1e);
+            pPed->field_0xbc->field_0x8.v[2] = pPed->field_0xbc->field_0x20.v[2] / (float)(original_ped_move->count_frames * original_0x1e);
         } else {
-            BrVector3Set(&ped_morph->field_0x8, 0.f, 0.f, 0.f);
+            BrVector3Set(&pPed->field_0xbc->field_0x8, 0.f, 0.f, 0.f);
         }
-        if (new_field_0x1e_0x20 != 0 && ped_move->field_0x2a == 0) {
-            BrVector3InvScale(&ped_morph->field_0x14, &ped_move->field_0x34, (float)(ped_move->count_frames * new_field_0x1e_0x20));
+        if ((tS16)new_field_0x1e_0x20 != 0 && ped_move->field_0x2a == 0) {
+            pPed->field_0xbc->field_0x14.v[0] = ped_move->field_0x34.v[0] / (float)(ped_move->count_frames * (tS16)new_field_0x1e_0x20);
+            pPed->field_0xbc->field_0x14.v[1] = ped_move->field_0x34.v[1] / (float)(ped_move->count_frames * (tS16)new_field_0x1e_0x20);
+            pPed->field_0xbc->field_0x14.v[2] = ped_move->field_0x34.v[2] / (float)(ped_move->count_frames * (tS16)new_field_0x1e_0x20);
         } else {
-            BrVector3Set(&ped_morph->field_0x14, 0.f, 0.f, 0.f);
+            BrVector3Set(&pPed->field_0xbc->field_0x14, 0.f, 0.f, 0.f);
         }
         e.order = 0;
         BrMatrix34ToEuler(&e, &ped_frame->mat);
-        ped_morph->field_0x2d[0][0] = e.a / 256;
-        ped_morph->field_0x2d[0][1] = e.b / 256;
-        ped_morph->field_0x2d[0][2] = e.c / 256;
+        pPed->field_0xbc->field_0x2d[0][0] = e.a / 256;
+        pPed->field_0xbc->field_0x2d[0][1] = e.b / 256;
+        pPed->field_0xbc->field_0x2d[0][2] = e.c / 256;
         BrMatrix34ToEuler(&e, &ped_move->frames[0].mat);
-        ped_morph->field_0x2d[0][3] = e.a / 256;
-        ped_morph->field_0x2d[0][4] = e.b / 256;
-        ped_morph->field_0x2d[0][5] = e.c / 256;
+        pPed->field_0xbc->field_0x2d[0][3] = (e.a >> 8) - (tU8)pPed->field_0xbc->field_0x2d[0][0];
+        pPed->field_0xbc->field_0x2d[0][4] = (e.b >> 8) - (tU8)pPed->field_0xbc->field_0x2d[0][1];
+        pPed->field_0xbc->field_0x2d[0][5] = (e.c >> 8) - (tU8)pPed->field_0xbc->field_0x2d[0][2];
 
         sum = 0.f;
         for (i = 1; i < form->count_bones; i++) {
-            ped_morph->field_0x2d[i][0] = ped_frame->axis[i].euler1;
-            ped_morph->field_0x2d[i][1] = ped_frame->axis[i].euler2;
-            ped_morph->field_0x2d[i][2] = ped_frame->axis[i].euler3;
-            ped_morph->field_0x2d[i][3] = ped_move->frames->axis[i].euler1 - ped_frame->axis[i].euler1 ;
-            ped_morph->field_0x2d[i][4] = ped_move->frames->axis[i].euler2 - ped_frame->axis[i].euler2 ;
-            ped_morph->field_0x2d[i][5] = ped_move->frames->axis[i].euler3 - ped_frame->axis[i].euler3 ;
-            sum += (float)(abs(ped_morph->field_0x2d[i][3]) + abs(ped_morph->field_0x2d[i][4]) + abs(ped_morph->field_0x2d[i][5]));
+            pPed->field_0xbc->field_0x2d[i][0] = ped_frame->axis[i].euler1;
+            pPed->field_0xbc->field_0x2d[i][1] = ped_frame->axis[i].euler2;
+            pPed->field_0xbc->field_0x2d[i][2] = ped_frame->axis[i].euler3;
+            pPed->field_0xbc->field_0x2d[i][3] = ped_move->frames->axis[i].euler1 - ped_frame->axis[i].euler1;
+            pPed->field_0xbc->field_0x2d[i][4] = ped_move->frames->axis[i].euler2 - ped_frame->axis[i].euler2;
+            pPed->field_0xbc->field_0x2d[i][5] = ped_move->frames->axis[i].euler3 - ped_frame->axis[i].euler3;
+            sum += (float)(abs(pPed->field_0xbc->field_0x2d[i][3]) + abs(pPed->field_0xbc->field_0x2d[i][4]) + abs(pPed->field_0xbc->field_0x2d[i][5]));
         }
         pPed->field_0xbc->field_0x2c = !!(pArg4 & 0x40000000);
-        ped_morph->field_0x0 = 0.f;
-        ped_morph->field_0x4 = 1.f / (sum * 3.f * (float)form->count_bones * (pArg4 & (~0x40000000)) / 64.f);
+        pPed->field_0xbc->field_0x0 = 0.f;
+        pPed->field_0xbc->field_0x4 = 1.0 / ((sum / ((float)form->count_bones * 3.0)) * (pArg4 & ~0x40000000) * 0.015625);
         pPed->field_0x24 = 0;
     }
 
     if (gPed_retain_root_mode) {
-        RecalculateOrientationOfRoot(pPed);
+        br_matrix34 mat34;
+        br_matrix34* root_matrix;
+        tPed_form* root_form;
+
+        root_form = pPed->personality->form;
+        if (pPed->field_0x4 < 0) {
+            root_matrix = &pPed->field_0x2c;
+        } else if (pPed->field_0xe8 != NULL) {
+            root_matrix = pPed->field_0xe8;
+        } else {
+            root_matrix = &root_form->actor_sets[pPed->field_0x4].actors[0]->t.t.mat;
+        }
+        BrMatrix34LPInverse(&mat34, &root_form->moves[pPed->field_0x7].move->frames[(tS16)pPed->field_0x1c].mat);
+        BrMatrix34Mul(&pPed->field_0x8c, &mat34, root_matrix);
+        BrVector3Set((br_vector3*)pPed->field_0x8c.m[3], 0.f, 0.f, 0.f);
         SetCharacterBonePositions(pPed, 3, 0);
     } else {
         if (personality->moves[pPed->field_0x7].grounding_mode == ePed_personality_grounded) {
@@ -1728,11 +2173,12 @@ void C2_HOOK_FASTCALL DropPointOntoPlane(const br_vector3* pPoint, const br_vect
     BrVector3Accumulate(pDest, pPoint);
 }
 
+// C2PORT-NONMATCHING: best 51.28% | difftest PASS 2000 trials (spec difftest/specs/00404150_OrthogonalVector.json) | reason inlined BrVector3Cross codegen (x87 order)
 // FUNCTION: CARMA2_HW 0x00404150
 void C2_HOOK_FASTCALL OrthogonalVector(br_vector3* pDest, const br_vector3* pA, const br_vector3* pB) {
 
     BrVector3Cross(pDest, pA, pB);
-    if (fabsf(pDest->v[0]) < 2.384186e-06f && fabsf(pDest->v[1]) < 2.384186e-06f && fabsf(pDest->v[1]) < 2.384186e-06f) {
+    if (fabsf(pDest->v[0]) < 2.384185791015625e-06f && fabsf(pDest->v[1]) < 2.384185791015625e-06f && fabsf(pDest->v[2]) < 2.384185791015625e-06f) {
         if (fabsf(pA->v[0]) <= fabsf(pA->v[2])) {
             BrVector3Cross(pDest, pA, &g_Ped_x_unit_vector);
         } else {
@@ -1817,6 +2263,7 @@ void C2_HOOK_FASTCALL SetCharacterDirection(tPed_character_instance* pPed, const
     }
 }
 
+// FUNCTION: CARMA2_HW 0x004d5730
 int C2_HOOK_FASTCALL OrientationChanged(const br_matrix34* pOrientation_1, const br_matrix34* pOrientation_2, float pCos_angle) {
 
     return BrVector3Dot((br_vector3*)pOrientation_1->m[0], (br_vector3*)pOrientation_2->m[0]) < pCos_angle
@@ -1824,6 +2271,7 @@ int C2_HOOK_FASTCALL OrientationChanged(const br_matrix34* pOrientation_1, const
         || BrVector3Dot((br_vector3*)pOrientation_1->m[2], (br_vector3*)pOrientation_2->m[2]) < pCos_angle;
 }
 
+// FUNCTION: CARMA2_HW 0x004d57c0
 void C2_HOOK_FASTCALL AssertRootObjectsMatrix(tPed_character_instance* pPed) {
     tPhysics_object* collision_info;
     int i;
@@ -1922,17 +2370,14 @@ void C2_HOOK_FASTCALL BuildPedestrian(tPedestrian* pPed, const char* pGroup_name
 
     BrMatrix34Identity(&mat);
     BrVector3Copy((br_vector3*)mat.m[3], pPos);
-#pragma inline_depth(0)
     pPed->character = BuildCharacterInstance(pGroup_name, &mat);
-#pragma inline_depth()
     SetModelCallbacks(pPed->character);
     sprintf(texture_name, "%sB", pGroup_name);
     texture = BrMapFind(texture_name);
     if (texture == NULL) {
         FatalError(kFatalError_CantFindPedTexture_S, texture_name);
     }
-    strcpy(material_name, pGroup_name);
-    sprintf(material_name + strlen(material_name), "%d.MAT", 1);
+    sprintf(material_name, "%s%d.MAT", pGroup_name, 1);
     material = BrMaterialFind(material_name);
     if (material != NULL) {
         material->colour_map = texture;
@@ -1951,7 +2396,7 @@ void C2_HOOK_FASTCALL BuildPedestrian(tPedestrian* pPed, const char* pGroup_name
     pPed->movement_spec = pMovement_spec;
     pPed->speed_factor = 1.f;
     pPed->exclusion_spec = pExclusion_spec;
-    if (pMovement_spec->max_walk_speed_factor != 0.f) {
+    if (pMovement_spec->max_walk_speed_factor != 0) {
         SetPedMove(pPed, 30, IRandomBetween((int)pMovement_spec->min_walk_speed_factor, (int)pMovement_spec->max_walk_speed_factor), 0, 0, 0, 0);
     } else {
         SetPedMove(pPed, 0, -1, 0, 0, 0, 0);
@@ -1961,6 +2406,7 @@ void C2_HOOK_FASTCALL BuildPedestrian(tPedestrian* pPed, const char* pGroup_name
     BrVector3Copy(&pPed->pos, pPos);
 }
 
+// C2PORT-NONMATCHING: best 29.25% | difftest PASS 2000 trials (spec difftest/specs/004d2cc0_SpawnPedsOnFace.json) | reason pedestrian-spawn-codegen
 // FUNCTION: CARMA2_HW 0x004d2cc0
 void C2_HOOK_FASTCALL SpawnPedsOnFace(br_face *pFace, br_model *pModel) {
     br_material* material;
@@ -2076,6 +2522,10 @@ void C2_HOOK_FASTCALL SpawnPedsOnFace(br_face *pFace, br_model *pModel) {
 
 // FUNCTION: CARMA2_HW 0x004d3520
 void C2_HOOK_FASTCALL FinishUpLoadingPeds(void) {
+
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("peds-finish");
+#endif
     tPedestrian* new_pedestrians;
     int i;
 
@@ -2097,12 +2547,15 @@ void C2_HOOK_FASTCALL FinishUpLoadingPeds(void) {
         gPedestrian_array[i].character->ped = &gPedestrian_array[i];
         C2_HOOK_BUG_ON(offsetof(tRace_pedestrian, ped) != 0xe4);
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
 }
 
 void C2_HOOK_FASTCALL ResetPedFaceCache(void) {
     int i;
 
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gPed_cache_sizes_1); i++) {
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gPed_cache_sizes_1); i++) {
         int j;
 
         gPed_face_caches[i] = gPed_face_cache_heads[i];
@@ -2129,19 +2582,35 @@ void C2_HOOK_FASTCALL ResetNapalmBolts(void) {
     for (i = 0; i < CARPOCALYPSE2_ASIZE(gNapalm_bolts); i++) {
         int j;
 
-        gNapalm_bolts[0].ped = NULL;
-        for (j = 0; j < CARPOCALYPSE2_ASIZE(gNapalm_bolts[0].actors); j++) {
-            gNapalm_bolts[0].actors[j]->render_style = BR_RSTYLE_NONE;
+        gNapalm_bolts[i].ped = NULL;
+        for (j = 0; j < CARPOCALYPSE2_ASIZE(gNapalm_bolts[i].actors); j++) {
+            gNapalm_bolts[i].actors[j]->render_style = BR_RSTYLE_NONE;
         }
     }
 }
 
+// C2PORT-NONMATCHING: best 88.62% | difftest PASS 2000 trials (spec difftest/specs/004d5bd0_InitPedsForRace.json) | reason inlined cache reset and VC5 loop layout
 // FUNCTION: CARMA2_HW 0x004d5bd0
 void C2_HOOK_FASTCALL InitPedsForRace(void) {
+    int i;
 
     C2_HOOK_BUG_ON(sizeof(gPed_cache_006944c0) != 30000);
 
-    ResetPedSystem();
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gPed_cache_sizes_1); i++) {
+        int j;
+
+        gPed_face_caches[i] = gPed_face_cache_heads[i];
+        for (j = 0; j < gPed_cache_sizes_1[i]; j++) {
+            gPed_face_cache_heads[i][j].field_0x14 = 0;
+            if (j != gPed_cache_sizes_1[i] - 1) {
+                gPed_face_cache_heads[i][j].next = &gPed_face_cache_heads[i][j + 1];
+                gPed_face_cache_heads[i][j + 1].prev = &gPed_face_cache_heads[i][j];
+            } else {
+                gPed_face_cache_heads[i][j].next = &gPed_face_cache_heads[i][0];
+                gPed_face_cache_heads[i][0].prev = &gPed_face_cache_heads[i][j];
+            }
+        }
+    }
     gPed_count = 0;
     gCount_changed_points = 0;
     gTwtPeds = -1;
@@ -2190,11 +2659,15 @@ void C2_HOOK_FASTCALL RenderElectroBastardRays(br_pixelmap* pRender_screen, br_p
     br_scalar distance;
     br_scalar t;
     int model_updated = 0;
-    br_uint_8 b = 0xff;
+#ifdef __vita__
+    int ray_segment;
+    static unsigned abnormal_rays;
+    C2VitaPerfBegin(C2VP_RAYS);
+#endif
 
     the_time = GetTotalTime();
     ARStartPipingSession(ePipe_chunk_prox_ray);
-    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gProximity_rays); i++) {
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(gProximity_rays); i++) {
 
         if (gProximity_rays[i].start_time == 0) {
             continue;
@@ -2208,10 +2681,10 @@ void C2_HOOK_FASTCALL RenderElectroBastardRays(br_pixelmap* pRender_screen, br_p
             BrActorAdd(gCamera, gLine_actor);
             gLine_model->vertices[0].red = 0x80;
             gLine_model->vertices[0].grn = 0x80;
-            gLine_model->vertices[0].blu = b;
-            gLine_model->vertices[1].red = b;
-            gLine_model->vertices[1].grn = b;
-            gLine_model->vertices[1].blu = b;
+            gLine_model->vertices[0].blu = 0x80;
+            gLine_model->vertices[1].red = 0xff;
+            gLine_model->vertices[1].grn = 0xff;
+            gLine_model->vertices[1].blu = 0xff;
             BrModelUpdate(gLine_model, BR_MODU_ALL);
             model_updated = 1;
         }
@@ -2227,26 +2700,60 @@ void C2_HOOK_FASTCALL RenderElectroBastardRays(br_pixelmap* pRender_screen, br_p
 
         BrVector3Sub(&r1, &ped_pos_cam, &car_pos_cam);
         distance = BrVector3Length(&r1);
+#ifdef __vita__
+        /* A stale/escaped endpoint must not turn one effect into unbounded GPU
+         * work. The float increment eventually stagnates at large distances.
+         * Normal rays retain the original two .05f additions exactly; distant
+         * rays use at most256 segments spanning the same endpoints. */
+        if (!isfinite(distance) || !isfinite(car_pos_cam.v[0])
+                || !isfinite(car_pos_cam.v[1]) || !isfinite(car_pos_cam.v[2])
+                || !isfinite(ped_pos_cam.v[0]) || !isfinite(ped_pos_cam.v[1])
+                || !isfinite(ped_pos_cam.v[2])) {
+            if (abnormal_rays++ < 8)
+                C2VitaLog("VITA RAY invalid index=%d distance=%g car=(%g,%g,%g) ped=(%g,%g,%g)\n",
+                    i, distance, car_pos_cam.v[0], car_pos_cam.v[1], car_pos_cam.v[2],
+                    ped_pos_cam.v[0], ped_pos_cam.v[1], ped_pos_cam.v[2]);
+            gProximity_rays[i].start_time = 0;
+            continue;
+        }
+        if (distance > 25.6f && abnormal_rays++ < 8)
+            C2VitaLog("VITA RAY bounded index=%d distance=%g segments=256\n", i, distance);
+#endif
         BrVector3Normalise(&r1, &r1);
 
-        from_pos = car_pos_cam;
+        BrVector3Copy(&from_pos, &car_pos_cam);
 
         seed = ped_pos.v[0] + ped_pos.v[1] + ped_pos.v[2] + car_pos.v[0] + car_pos.v[1] + car_pos.v[2];
-        srand(the_time + *(int*)&seed);
+#ifdef __vita__
+        /* Float-to-int conversion is undefined for escaped world coordinates. */
+        if (!isfinite(seed) || seed < -2147483648.f || seed > 2147483520.f) seed = 0.f;
+#endif
+        srand(the_time + (int)seed);
 
+#ifdef __vita__
+        for (ray_segment = 0, t = 0.f; ray_segment < 256 && t < distance; ++ray_segment) {
+            if (distance > 25.6f) t = distance * ((float)ray_segment / 256.f);
+#else
         for (t = 0.f; t < distance; t += .05f) {
+#endif
             BrVector3Scale(&ray, &r1, t);
             BrVector3Add(&to_pos, &ray, &car_pos_cam);
             to_pos.v[0] += SRandomPosNeg(.1f);
             to_pos.v[1] += SRandomPosNeg(.1f);
             to_pos.v[2] += SRandomPosNeg(.1f);
             DrawLine3D(&to_pos, &from_pos, pRender_screen, pDepth_buffer, gProx_ray_shade_table);
-            from_pos = to_pos;
+            BrVector3Copy(&from_pos, &to_pos);
             t += .05f;
+#ifdef __vita__
+            t += .05f;
+#endif
         }
         DrawLine3D(&ped_pos_cam, &from_pos, pRender_screen, pDepth_buffer, gProx_ray_shade_table);
     }
     AREndPipingSession();
+#ifdef __vita__
+    C2VitaPerfEnd(C2VP_RAYS);
+#endif
     if (gNo_2d_effects && model_updated) {
         BrActorRemove(gLine_actor);
         BrActorAdd(gDont_render_actor, gLine_actor);
@@ -2257,6 +2764,16 @@ void C2_HOOK_FASTCALL RenderElectroBastardRays(br_pixelmap* pRender_screen, br_p
 void C2_HOOK_FASTCALL ResetPedNearness(void) {
 
     gPed_nearness = 1;
+}
+
+// FUNCTION: CARMA2_HW 0x004d63a0
+void C2_HOOK_FASTCALL FUN_004d63a0(void) {
+    tPedestrian* ped;
+
+    ped = &gPedestrian_array[gSelected_ped];
+
+    ped->field_0x0c->field_0x6c = 0;
+    ((void (C2_HOOK_CDECL *)(tPed_character_instance*, int))SetCharacterPhysicsLevelAR)(ped->character, 5);
 }
 
 // FUNCTION: CARMA2_HW 0x004d69b0
@@ -2273,7 +2790,7 @@ void C2_HOOK_FASTCALL ScalePeds(br_vector3* scale) {
     (void)ScaleAllPeds(-1, s, 1);
     gPed_scale = *scale;
     gAverage_ped_scale = (gPed_scale.v[0] + gPed_scale.v[1] + gPed_scale.v[2]) * gConst_average_ped_scale_factor;
-    if (gPed_676914) {
+    if (gAction_replay_mode) {
         if (ARGetReplayRate() > gConst_replay_rate_zero) {
             for (i = 0; i < gPed_count; i++) {
                 if (gPedestrian_array[i].flags & 1) {
@@ -2294,7 +2811,7 @@ void C2_HOOK_STDCALL ScalePedHeads(float head_scale) {
     s[2] = s[0];
     (void)ScaleAllPeds(-2, s, 0);
     gPed_head_scale = head_scale;
-    if (gPed_676914) {
+    if (gAction_replay_mode) {
         if (ARGetReplayRate() > gConst_replay_rate_zero) {
             for (i = 0; i < gPed_count; i++) {
                 if (gPedestrian_array[i].flags & 1) {
@@ -2306,6 +2823,7 @@ void C2_HOOK_STDCALL ScalePedHeads(float head_scale) {
 }
 
 #pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 50.83% | difftest PASS 2000 trials (spec difftest/specs/0040bb20_ScalePedPersonality.json) | reason VC5 loop, register, and stack layout
 // FUNCTION: CARMA2_HW 0x0040bb20
 void C2_HOOK_FASTCALL ScalePedPersonality(tPed_personality* pPersonality, int pIndex, br_scalar* pScale, int pMode) {
     br_scalar s[3];
@@ -2318,6 +2836,7 @@ void C2_HOOK_FASTCALL ScalePedPersonality(tPed_personality* pPersonality, int pI
 
     for (i = start; i < count; i++) {
         int k;
+        tPed_personality_bone* bone = &pPersonality->bones[i];
 
         if (pPersonality->form->bones[i].remapped_bone != NULL) {
             for (k = 0; k < 3; k++) {
@@ -2335,7 +2854,7 @@ void C2_HOOK_FASTCALL ScalePedPersonality(tPed_personality* pPersonality, int pI
 
             for (a = 0; a < 2; a++) {
                 for (j = 0; j < 4; j++) {
-                    br_model* model = pPersonality->bones[i].models[j].models[a];
+                    br_model* model = (*bone).models[j].models[a];
 
                     if (model != NULL) {
                         br_vertex* v;
@@ -2353,9 +2872,9 @@ void C2_HOOK_FASTCALL ScalePedPersonality(tPed_personality* pPersonality, int pI
                 }
             }
 
-            pPersonality->bones[i].field_0x20.v[0] *= s[0];
-            pPersonality->bones[i].field_0x20.v[1] *= s[1];
-            pPersonality->bones[i].field_0x20.v[2] *= s[2];
+            (*bone).field_0x20.v[0] *= s[0];
+            (*bone).field_0x20.v[1] *= s[1];
+            (*bone).field_0x20.v[2] *= s[2];
 
             if (pIndex == -1) {
                 tS8 head_index = pPersonality->form->bones[i].indices[0];
@@ -2372,9 +2891,9 @@ void C2_HOOK_FASTCALL ScalePedPersonality(tPed_personality* pPersonality, int pI
                             }
                         }
                     }
-                    pPersonality->bones[i].field_0x2c.v[0] *= s[0];
-                    pPersonality->bones[i].field_0x2c.v[1] *= s[1];
-                    pPersonality->bones[i].field_0x2c.v[2] *= s[2];
+                    (*bone).field_0x2c.v[0] *= s[0];
+                    (*bone).field_0x2c.v[1] *= s[1];
+                    (*bone).field_0x2c.v[2] *= s[2];
                 }
             } else {
                 for (j = 0; j < pPersonality->form->count_bones; j++) {
@@ -2416,6 +2935,7 @@ void C2_HOOK_FASTCALL ScalePedPersonality(tPed_personality* pPersonality, int pI
     }
 }
 
+// C2PORT-NONMATCHING: best 34.68% | difftest PASS 2000 trials (spec difftest/specs/0040bee0_ScalePedForm.json) | reason hinge-remap-codegen
 // FUNCTION: CARMA2_HW 0x0040bee0
 void C2_HOOK_FASTCALL ScalePedForm(tPed_form* pForm, int pIndex, br_scalar* pScale, int pMode) {
     br_scalar s[3];
@@ -2494,33 +3014,48 @@ void C2_HOOK_FASTCALL ScalePedForm(tPed_form* pForm, int pIndex, br_scalar* pSca
                 }
             }
         }
+        /* retail 0x40c162..0x40c265: inside the per-bone loop, for every bone (not only with pMode):
+         * scale this bone's physics objects, using the bone's own remap and the bone model bounds.
+         * The port had moved this after the loop, so it indexed collision_infos[count] (one past the
+         * last bone: garbage object on the Vita, 00.22 crash in ScalePedForm via ScaleAllPeds). */
+        {
+            int n;
+
+            for (n = 0; n < pForm->max_boned_physicing_at_once; n++) {
+                tPhysics_object* obj = pForm->boned_physicing[n].collision_infos[i];
+
+#ifndef CARPOCALYPSE2_MATCHING
+                C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(br_model, bounds, 0x34);
+                if (obj == NULL) {
+                    continue; /* massless bones have no physics object (form loader) */
+                }
+#endif
+                if (obj->owner != NULL) {
+                    tPed_character_instance* owner = (tPed_character_instance*)obj->owner;
+
+                    if (pForm->bones[i].remapped_bone != NULL) {
+                        for (k = 0; k < 3; k++) {
+                            int axis = pForm->bones[i].remapped_bone->powerup_axis[k];
+                            s[axis % 3] = pScale[k];
+                            if (axis >= 3) {
+                                s[k] = -s[k];
+                            }
+                        }
+                    }
+                    obj->M *= s[0] * s[1] * s[2];
+                    obj->I.v[0] *= s[0];
+                    obj->I.v[1] *= s[1];
+                    obj->I.v[2] *= s[2];
+                    MakeCharacterPhysicsSetup(obj, &owner->personality->bones[i].models[0].models[0]->bounds, 0, NULL, NULL);
+                } else {
+                    obj->M *= pScale[0] * pScale[1] * pScale[2];
+                }
+            }
+        }
     }
 
     if (pMode != 0) {
         int n;
-
-        for (n = 0; n < pForm->max_boned_physicing_at_once; n++) {
-            tPhysics_object* obj = pForm->boned_physicing[n].collision_infos[i];
-
-            if (obj->owner != NULL) {
-                if (pForm->bones[0].remapped_bone != NULL) {
-                    for (k = 0; k < 3; k++) {
-                        int axis = pForm->bones[0].remapped_bone->powerup_axis[k];
-                        s[axis % 3] = pScale[k];
-                        if (axis >= 3) {
-                            s[k] = -s[k];
-                        }
-                    }
-                }
-                obj->M *= s[0] * s[1] * s[2];
-                obj->I.v[0] *= s[0];
-                obj->I.v[1] *= s[1];
-                obj->I.v[2] *= s[2];
-                MakeCharacterPhysicsSetup(obj, (br_bounds3*)&((tPed_character_instance*)obj->owner)->personality->bb, 0, NULL, NULL);
-            } else {
-                obj->M *= pScale[0] * pScale[1] * pScale[2];
-            }
-        }
 
         for (n = 0; n < pForm->max_simple_physicing_at_once; n++) {
             tPhysics_object* obj = pForm->simple_physicing[n].collision_info;
@@ -2626,6 +3161,21 @@ void C2_HOOK_FASTCALL DeetherealiseCharacter1(void* pCharacter) {
     *(tU32*)((char*)pCharacter + 0x19c) &= ~4;
 }
 
+// FUNCTION: CARMA2_HW 0x004d6c10
+void C2_HOOK_FAKE_THISCALL FUN_004d6c10(tPed_character_instance* pCharacter, undefined4 pArg2, char* pX, char* pY, char* pZ) {
+    char r;
+
+    CARPOCALYPSE2_THISCALL_UNUSED(pArg2);
+    if (pCharacter->ped->hit_points <= 0 && pCharacter->ped->action == ePed_action_dead && gPeds_already_munged == 0) {
+        r = IRandomPosNeg(30);
+        *pX = *pX + r;
+        r = IRandomPosNeg(30);
+        *pY = *pY + r;
+        r = IRandomPosNeg(30);
+        *pZ += r;
+    }
+}
+
 // FUNCTION: CARMA2_HW 0x0040c490
 void C2_HOOK_FASTCALL ApplyToPedMaterialsBr(void (C2_HOOK_FASTCALL* pCallback)(void*)) {
     int i;
@@ -2687,6 +3237,35 @@ void C2_HOOK_FASTCALL ApplyToPedMaterialsFade(void (C2_HOOK_FASTCALL* pCallback)
 
 #pragma auto_inline(on)
 
+// FUNCTION: CARMA2_HW 0x004d6cc0
+void C2_HOOK_FASTCALL ScareSelectedPed(void) {
+    int pose;
+    int bone_index;
+    tPed_character_instance* character;
+    tPedestrian* ped;
+    tU32 time;
+
+    time = GetTotalTime();
+    ped = &gPedestrian_array[gSelected_ped];
+    if (ped->hit_points > 0 && ped->field_0x0c != NULL) {
+        ped->field_0x0c->field_0x1c = &gScare_ped_anim_sequence;
+        ped->field_0x0c->field_0x78 = time;
+        ped->field_0x0c->field_0x1a = 0;
+        pose = ped->field_0x0c->field_0x1c->poses[0];
+        character = ped->character;
+        bone_index = (tS8)character->personality->form->index_head_bone;
+        if (character->field_0x4 >= 0) {
+            if (bone_index < 0) {
+                PipeSinglePedModelChange(character->ped, bone_index, NULL, -1, GetCharacterModelSet(character), 0);
+                SetCharacterAllBonesModel(character, pose, 0);
+                return;
+            }
+            PipeSinglePedModelChange(character->ped, bone_index, GetCharacterBoneModel(character, bone_index), pose, GetCharacterModelSet(character), 0);
+            SetCharacterBoneModel(character, bone_index, pose, 0);
+        }
+    }
+}
+
 // FUNCTION: CARMA2_HW 0x004d6b40
 void C2_HOOK_FASTCALL MakePedsEthereal(void) {
 
@@ -2737,17 +3316,62 @@ void C2_HOOK_FASTCALL PossiblePedSmear(tPedestrian* pPed) {
     }
 }
 
+// C2PORT-NONMATCHING: best 83.81% | difftest PASS 2000 trials (spec difftest/specs/004d5970_LastChanceForPedEffects.json) | reason x87 register scheduling and loop stack layout
 // FUNCTION: CARMA2_HW 0x004d5970
 void C2_HOOK_FASTCALL LastChanceForPedEffects(void) {
     int i;
+    tPedestrian* ped;
 
-    for (i = 0; i < gPed_count; i++) {
-        tPedestrian* ped = &gPedestrian_array[i];
+    ped = gPedestrian_array;
+    for (i = 0; i < gPed_count; i++, ped++) {
+        tPed_cache_006944c0* smear_info;
+        br_vector3 pos;
 
         if (ped->flags & 0x1) {
-            PossiblePedSmear(ped);
+            smear_info = ped->field_0x0c;
+            if (smear_info != NULL) {
+                if ((smear_info->field_0xc4 & 0x2) == 0 || smear_info->field_0xca < 2) {
+                    smear_info->field_0xc4 &= ~0x1;
+                } else {
+                    pos.v[0] = BR_MUL(smear_info->field_0xe4.v[0], gPed_kill_min_height / (float)smear_info->field_0xca);
+                    pos.v[1] = BR_MUL(smear_info->field_0xe4.v[1], gPed_kill_min_height / (float)smear_info->field_0xca);
+                    pos.v[2] = BR_MUL(smear_info->field_0xe4.v[2], gPed_kill_min_height / (float)smear_info->field_0xca);
+                    if (!(smear_info->field_0xc4 & 0x1)) {
+                        smear_info->field_0xc4 |= 0x1;
+                        smear_info->field_0xc8 = -1;
+                    } else if (SkidSection(
+                            &smear_info->field_0xc8,
+                            &smear_info->field_0xcc,
+                            &smear_info->field_0xd8,
+                            gPed_smear_material,
+                            &pos,
+                            &smear_info->field_0xf0,
+                            &smear_info->field_0xfc,
+                            &smear_info->field_0x108,
+                            0.0f,
+                            smear_info->field_0x124 - smear_info->field_0x128 - gFLOAT_0058ab84)) {
+                        smear_info->field_0xc4 &= ~0x1;
+                    }
+                    smear_info->field_0xfc = pos;
+                    smear_info->field_0x108 = smear_info->field_0xf0;
+                }
+            }
         }
     }
+}
+
+// FUNCTION: CARMA2_HW 0x004ce770
+int C2_HOOK_FASTCALL AddPedToDistanceList(tPedestrian* pPed, tCar_spec* pCar, float pDistance, tU32 pNow, tPedestrian_distances* pList) {
+    int result;
+
+    result = (int)pPed->field_0x0c;
+    if (result != 0 && pPed->field_0x0c->field_0x98 == 0) {
+        pList->entries[pList->count].ped = pPed;
+        pList->entries[pList->count].distance = pDistance;
+        pList->count++;
+        result = 1;
+    }
+    return result;
 }
 
 // FUNCTION: CARMA2_HW 0x004ce7d0
@@ -2789,7 +3413,10 @@ void C2_HOOK_FASTCALL MungeNapalm(void) {
                     memmove(&bolt->field_0x2c[1], &bolt->field_0x2c[0], (CARPOCALYPSE2_ASIZE(bolt->field_0x2c) - 1) * sizeof(br_vector3));
                     BrVector3Sub(&bolt->field_0x2c[0], &bolt->ped->pos, &bolt->actors[0]->t.t.translate.t);
                     BrVector3Normalise(&bolt->field_0x2c[0], &bolt->field_0x2c[0]);
-                    BrVector3Scale(&bolt->field_0x2c[0], &bolt->field_0x2c[0], FRandomBetween(.8f, 1.25f));
+                    /* retail 0x4ce90e: a separate random factor per component */
+                    bolt->field_0x2c[0].v[0] *= FRandomBetween(.8f, 1.25f);
+                    bolt->field_0x2c[0].v[1] *= FRandomBetween(.8f, 1.25f);
+                    bolt->field_0x2c[0].v[2] *= FRandomBetween(.8f, 1.25f);
                     if (delta_time < 500) {
                         bolt->field_0x2c[0].v[1] += (float)(500 - delta_time) * 2.f / 1000.f;
                     }
@@ -2853,7 +3480,7 @@ void C2_HOOK_FASTCALL MungeNapalm(void) {
 
             C2_HOOK_BUG_ON(CARPOCALYPSE2_ASIZE(flame_positions) != CARPOCALYPSE2_ASIZE(gFlamed_ped_flame_scales));
             memset(flame_positions, 0, sizeof(flame_positions));
-            for (j = 0; i < CARPOCALYPSE2_ASIZE(flame_positions); i++) {
+            for (j = 0; j < CARPOCALYPSE2_ASIZE(flame_positions); j++) {
                 br_actor* actor = bolt->actors[j];
                 if (!gAction_replay_mode) {
                     time = (int)((float)time - 0.036f);
@@ -2863,7 +3490,9 @@ void C2_HOOK_FASTCALL MungeNapalm(void) {
                         if (time < bolt->field_0x28) {
                             break;
                         }
-                        vert_index = (bolt->field_0x24 - time) / 50;
+                        /* retail 0x4cee0c: signed divide (imul/sar); unsigned turned a negative
+                         * difference into a huge index past field_0x2c (crash) */
+                        vert_index = (int)(bolt->field_0x24 - time) / 50;
                         vert_index = vert_index >= 0 ? vert_index : 0;
                         actor->t.t.translate.t.v[0] = bolt->actors[j - 1]->t.t.translate.t.v[0] - bolt->field_0x2c[vert_index].v[0] * .036f;
                         actor->t.t.translate.t.v[1] = bolt->actors[j - 1]->t.t.translate.t.v[1] - bolt->field_0x2c[vert_index].v[1] * .036f;
@@ -2873,7 +3502,9 @@ void C2_HOOK_FASTCALL MungeNapalm(void) {
                 } else if (actor->render_style != BR_RSTYLE_FACES) {
                     break;
                 }
-                actor->t = gCamera->t;
+                /* retail 0x4cee85 copies only the camera rotation (rep movsd, 9 dwords) so the flame
+                 * faces the camera; the translation (the flame's position) stays */
+                memcpy(&actor->t.t.mat.m[0], &gCamera->t.t.mat.m[0], 3 * sizeof(br_vector3));
                 BrMatrix34PreScale(&actor->t.t.mat,
                     (float)actor->material->colour_map->width * gFlamed_ped_flame_scales[j] / 128.f,
                     (float)actor->material->colour_map->height * gFlamed_ped_flame_scales[j] / 128.f,
@@ -2935,12 +3566,12 @@ undefined4 C2_HOOK_FASTCALL CharacterNoLongerRenderable(tPed_character_instance*
     if (pCharacter->field_0x4 < 0) {
         return 0xb;
     }
-    if (gPed_676914 == 0) {
+    if (gAction_replay_mode == 0) {
         CharacterNoLongerCollideworthy(pCharacter);
     }
     form = pCharacter->personality->form;
     actor_set = &form->actor_sets[pCharacter->field_0x4];
-    if (gPed_676914 == 0) {
+    if (gAction_replay_mode == 0) {
         actor_set->field_0x0 = 0;
     }
     BrMatrix34Copy(&pCharacter->field_0x2c, GetCharacterMatrixPtr(pCharacter));
@@ -2996,7 +3627,7 @@ void C2_HOOK_FASTCALL OneLessPed(tPedestrian* pPed) {
     }
     if (gCurrent_race.race_spec->race_type == kRaceType_SmashNPed) {
         if (pPed->flags & 0x200) {
-            AccumulateRuntimeVariable(gCurrent_race.race_spec->options.smash_and_peds.var_smash_number, 1);
+            SetRuntimeVariable(gCurrent_race.race_spec->options.smash_and_peds.var_smash_number, 1);
             if (GetRuntimeVariable(gCurrent_race.race_spec->options.smash_and_peds.var_smash_number) >= gCurrent_race.race_spec->options.smash_and_peds.var_smash_target) {
                 RaceCompleted(eRace_over_3);
             }
@@ -3004,6 +3635,7 @@ void C2_HOOK_FASTCALL OneLessPed(tPedestrian* pPed) {
     }
 }
 
+// C2PORT-NONMATCHING: best 86.17% | difftest PASS 2000 trials (spec difftest/specs/upstream_20261015/004cd260_ScoreForKilledPedestrian.json) | reason branch/register/stack layout; side-effect callees stubbed
 // FUNCTION: CARMA2_HW 0x004cd260
 void C2_HOOK_FAKE_THISCALL ScoreForKilledPedestrian(tPedestrian* pPed, undefined4 pArg2, float pHeight) {
     tU32 now;
@@ -3027,7 +3659,7 @@ void C2_HOOK_FAKE_THISCALL ScoreForKilledPedestrian(tPedestrian* pPed, undefined
         PipeSinglePedMove(pPed, -1, -1, -1, 0, 0, 0, 0, NULL, NULL, action, ePed_action_dead, NULL);
         pPed->action = ePed_action_dead;
     }
-    pPed->death_time = now;
+    pPed->field_0x30 = now;
     if (pPed->field_0x0c == NULL) {
         return;
     }
@@ -3038,14 +3670,14 @@ void C2_HOOK_FAKE_THISCALL ScoreForKilledPedestrian(tPedestrian* pPed, undefined
     if (car->driver != eDriver_local_human) {
         return;
     }
-    if (now - gPed_last_score_time <= 1000) {
+    if (now - gPed_last_kill_time <= 1000) {
         if (gPed_score_multiplier < 10) {
             gPed_score_multiplier++;
         }
     } else {
         gPed_score_multiplier = 1;
     }
-    gPed_last_score_time = now;
+    gPed_last_kill_time = now;
     points = gPed_points[gProgram_state.skill_level];
     points *= gPed_score_multiplier;
     vecs.rel.v[0] = pPed->pos.v[0] - car->pos.v[0];
@@ -3075,21 +3707,21 @@ void C2_HOOK_FAKE_THISCALL ScoreForKilledPedestrian(tPedestrian* pPed, undefined
         PratcamEvent(0x1e);
         DoFancyHeadup(0x1e);
     } else if ((pHeight == gConst_replay_rate_zero
-            && (fabsf(car->collision_info->omega.v[0]) > 5.0f
-                || fabsf(car->collision_info->omega.v[2]) > 5.0f
-                || (actor = car->collision_info->actor, actor->t.t.mat.m[1][1] < 0.1f)
-                || actor->t.t.mat.m[3][1] - pPed->pos.v[1] > 0.05f))
+            && (fabsf(car->collision_info->omega.v[0]) > gPed_kill_motion_speed_threshold
+                || fabsf(car->collision_info->omega.v[2]) > gPed_kill_motion_speed_threshold
+                || (actor = car->collision_info->actor, actor->t.t.mat.m[1][1] < gPed_kill_direction_threshold)
+                || actor->t.t.mat.m[3][1] - pPed->pos.v[1] > gPed_kill_height_margin))
         || pPed->field_0x0c->field_0x98 > 0) {
         points *= 4;
         PratcamEvent(0x1e);
         DoFancyHeadup(3);
-    } else if (pHeight > 1.0) {
+    } else if (pHeight > gPed_kill_min_height) {
         points *= 2;
         DoFancyHeadup(6);
         PratcamEvent(0x1e);
     } else if (obj == NULL
-        || (BrVector3LengthSquared(&obj->v) < 2.0
-            && BrVector3LengthSquared(&obj->field_0x1b4) < 2.0)) {
+        || (BrVector3LengthSquared(&obj->v) < gPed_kill_velocity_squared_threshold
+            && BrVector3LengthSquared(&obj->field_0x1b4) < gPed_kill_velocity_squared_threshold)) {
         if (pHeight != gConst_replay_rate_zero) {
             if (gPed_score_multiplier > 1) {
                 DoFancyHeadup(gPed_score_multiplier + 6);
@@ -3099,7 +3731,7 @@ void C2_HOOK_FAKE_THISCALL ScoreForKilledPedestrian(tPedestrian* pPed, undefined
                 DoFancyHeadup(0);
                 PratcamEvent(0x1e);
             }
-        } else if (fabsf(vecs.out.v[0]) / fabsf(vecs.out.v[2]) < 0.5) {
+        } else if (fabsf(vecs.out.v[0]) / fabsf(vecs.out.v[2]) < gPed_kill_relative_speed_ratio) {
             if (vecs.out.v[2] <= gConst_replay_rate_zero || car->collision_info->velocity_car_space.v[2] <= gConst_replay_rate_zero) {
                 if (gPed_score_multiplier > 1) {
                     DoFancyHeadup(gPed_score_multiplier + 6);
@@ -3116,7 +3748,7 @@ void C2_HOOK_FAKE_THISCALL ScoreForKilledPedestrian(tPedestrian* pPed, undefined
         } else if (fabsf(car->collision_info->velocity_car_space.v[2]) < fabsf(car->collision_info->velocity_car_space.v[0])) {
             points *= 2;
             DoFancyHeadup(2);
-        } else if (fabsf(car->collision_info->omega.v[1] / car->collision_info->velocity_car_space.v[2]) > 600.0f) {
+        } else if (fabsf(car->collision_info->omega.v[1] / car->collision_info->velocity_car_space.v[2]) > gPed_kill_angular_velocity_ratio) {
             points *= 2;
             DoFancyHeadup(2);
         } else {
@@ -3141,84 +3773,82 @@ void C2_HOOK_FAKE_THISCALL ScoreForKilledPedestrian(tPedestrian* pPed, undefined
     }
     EarnCredits(points);
     gPed_recent_points = points;
-    gPed_recent_ped = pPed;
+    gPed_last_scored_pedestrian = pPed;
     AwardTime(gPed_times[gProgram_state.skill_level]);
 }
 
+// C2PORT-NONMATCHING: best 66.42% | difftest PASS 2000 trials (spec difftest/specs/00409570_SetCharacterPhysicsLevel.json) | reason physics-graph-register-allocation
 // FUNCTION: CARMA2_HW 0x00409570
 int C2_HOOK_CDECL SetCharacterPhysicsLevel(tPed_character_instance* pCharacter, int pLevel, tU32 pArg3) {
+    tPhysics_object** piVar1;
     tPhysics_object* obj;
-    tPed_form* form;
-    int result = 0;
-    int mcc2_result;
-    int i;
+    tPhysics_object** piVar4;
+    tPhysics_object* child;
+    int iVar3;
+    int uVar5;
 
+    iVar3 = 0;
     if (pLevel < 5) {
-        if (pCharacter->field_0x14 & 4) {
-            ((void(C2_HOOK_FASTCALL*)(tPed_character_instance*, int))0x409400)(pCharacter, 1);
+        if ((pCharacter->field_0x14 & 4) == 0) {
+            iVar3 = 0x1f;
         } else {
-            result = 0x1f;
+            BonerActiveHalted2(pCharacter, 1);
+            iVar3 = 0;
         }
     }
     if (pLevel < 1) {
-        CharacterNoLongerCollideworthy(pCharacter);
+        iVar3 = CharacterNoLongerCollideworthy(pCharacter);
     }
-    if (pLevel == 0) {
-        return result;
-    }
-
-    mcc2_result = MakeCharacterCollideworthy2(pCharacter, pLevel & 2, pArg3, -1);
-    if (mcc2_result == 0x17) {
-        mcc2_result = 0;
-    }
-    if (!(pLevel & 4) || mcc2_result != 0) {
-        return mcc2_result;
-    }
-
-    if (pCharacter->field_0x14 & 4) {
-        return 0;
-    }
-    if (pCharacter->field_0x14 == 0) {
-        return 0x15;
-    }
-
-    form = pCharacter->personality->form;
-    if (pCharacter->field_0x14 & 1) {
-        obj = form->simple_physicing[(tS8)pCharacter->field_0x5].collision_info;
-    } else {
-        tPhysics_object** list_objs = form->boned_physicing[(tS8)pCharacter->field_0x5].collision_infos;
-        obj = NULL;
-        for (i = 0; i < form->count_bones; i++) {
-            if (list_objs[i]->shape) {
-                obj = list_objs[i];
-                break;
-            }
+    if (pLevel != 0) {
+        iVar3 = MakeCharacterCollideworthy2(pCharacter, pLevel & 2, pArg3, -1);
+        if (iVar3 == 0x17) {
+            iVar3 = 0;
         }
-    }
-
-    obj->disable_move_rotate = 0;
-    {
-        br_vector3* field_0xd8 = &pCharacter->field_0xd8;
-        if (field_0xd8 != NULL) {
-            obj->v = *field_0xd8;
-            {
-                tPhysics_object* child = obj->child;
-                while (child != NULL) {
-                    ((void(C2_HOOK_FASTCALL*)(tPhysics_object*, br_vector3*))0x409300)(child, field_0xd8);
-                    child = child->next;
+        if ((pLevel & 4) != 0 && iVar3 == 0) {
+            if ((pCharacter->field_0x14 & 4) == 0) {
+                if (pCharacter->field_0x14 == 0) {
+                    return 0x15;
                 }
+                if ((pCharacter->field_0x14 & 1) == 0) {
+                    obj = NULL;
+                    uVar5 = pCharacter->personality->form->count_bones;
+                    iVar3 = 0;
+                    if (uVar5 != 0) {
+                        piVar1 = pCharacter->personality->form->boned_physicing[(tS8)pCharacter->field_0x5].collision_infos;
+                        piVar4 = piVar1;
+                        do {
+                            if ((*piVar4)->shape != NULL) {
+                                obj = piVar1[iVar3];
+                                goto found_object;
+                            }
+                            iVar3++;
+                            piVar4++;
+                        } while (iVar3 < uVar5);
+                    }
+                } else {
+                    obj = pCharacter->personality->form->simple_physicing[(tS8)pCharacter->field_0x5].collision_info;
+                }
+found_object:
+                obj->disable_move_rotate = 0;
+                if (&pCharacter->field_0xd8 != NULL) {
+                    child = obj->child;
+                    obj->v = pCharacter->field_0xd8;
+                    for (; child != NULL; child = child->next) {
+                        SetObjectV(child, &pCharacter->field_0xd8);
+                    }
+                }
+                PHILMakeObjectActive(obj, NULL, NULL, 1);
+                obj->field_0xed = 1;
+                PHILSetObjectProperty(obj, 0, 1.0);
+                PHILSetObjectProperty(obj, 3, 0);
+                PHILSetObjectProperty(obj, 4, 0);
+                PHILSetObjectProperty(obj, 5, 0);
+                pCharacter->field_0x14 |= 4;
             }
+            iVar3 = 0;
         }
     }
-
-    PHILMakeObjectActive(obj, NULL, NULL, 1);
-    obj->field_0xed = 1;
-    PHILSetObjectProperty(obj, 0, 1.0);
-    PHILSetObjectProperty(obj, 3, 0);
-    PHILSetObjectProperty(obj, 4, 0);
-    PHILSetObjectProperty(obj, 5, 0);
-    pCharacter->field_0x14 |= 4;
-    return 0;
+    return iVar3;
 }
 
 void C2_HOOK_FASTCALL MakePedVanish(tPedestrian* pPed) {
@@ -3606,6 +4236,7 @@ void C2_HOOK_FASTCALL MakeEmBleed(tPedestrian* pPed, tU32 pTime) {
                 pPed->field_0x0c->field_0x84 = 0;
             }
         }
+        pPed->field_0x0c->field_0x88 = pTime; /* retail 0x4d5158 */
         for (i = 1; i < pPed->character->personality->form->count_bones; i++) {
             if ((pPed->character->field_0xc & gPow2_array[i]) && !(pPed->character->field_0x10 & gPow2_array[i])) {
                 tPhysics_object* object;
@@ -3627,7 +4258,7 @@ void C2_HOOK_FASTCALL MakeEmBleed(tPedestrian* pPed, tU32 pTime) {
                     BrVector3Copy(&bone_look, (br_vector3*)bone_matrix->m[0]);
                     DoSpurt(bone_matrix, &pPed->character->personality->bones[i].field_0x20, &bone_look, &object->v);
                 }
-                other_bone_index = pPed->character->personality->form->bones[0].indices[i];
+                other_bone_index = pPed->character->personality->form->bones[i].indices[0]; /* parent bone, retail 0x4d5272 */
                 if (pPed->character->field_0xc & gPow2_array[other_bone_index]) {
                     bone_v = &pPed->character->personality->form[0].boned_physicing[pPed->character->field_0x6].collision_infos[other_bone_index]->v;
                     if (pPed->field_0x0c->field_0x23[i] == 0) {
@@ -3772,7 +4403,13 @@ void C2_HOOK_FASTCALL MungePedestrians(void) {
                         ped->field_0x0c->field_0x98 = 0;
                         MakePedVanish(ped);
                     } else {
+#ifdef CARPOCALYPSE2_FIX_BUGS
+                        /* NapalmPedestrianNearCar stores -(bolt index) - 1; retail (0x4d3d59) decodes it as index + 2,
+                         * killing the wrong bolt and, for bolts 3 and 4, writing past gNapalm_bolts[5] (Vita crash) */
+                        KillNapalmBolt(&gNapalm_bolts[-ped->field_0x0c->field_0x98 - 1]);
+#else
                         KillNapalmBolt(&gNapalm_bolts[-ped->field_0x0c->field_0x98 + 1]);
+#endif
                     }
                 }
             }
@@ -3856,7 +4493,7 @@ void C2_HOOK_FASTCALL MungePedestrians(void) {
             if (ped->character->field_0x14) {
                 if (gPed_gravity_multiplier != PHILGetObjectProperty(GET_PED_COLLISION_OBJECT(ped), 0)) {
                     PHILSetObjectProperty(GET_PED_COLLISION_OBJECT(ped), 0, gPed_gravity_multiplier);
-                    if (ped->character->field_0x6 >= 0) {
+                    if ((tS8)ped->character->field_0x6 >= 0) {
                         int j;
 
                         for (j = 0; j < ped->character->personality->form->count_bones; j++) {
@@ -3868,7 +4505,13 @@ void C2_HOOK_FASTCALL MungePedestrians(void) {
             if (!gAction_replay_mode) {
                 if (GET_PED_COLLISION_OBJECT(ped)->last_special_volume != NULL && GET_PED_COLLISION_OBJECT(ped)->last_special_volume->gravity_multiplier < 1.f) {
                     if (ped->field_0x0c->field_0x98 < 0) {
+#ifdef CARPOCALYPSE2_FIX_BUGS
+                        /* NapalmPedestrianNearCar stores -(bolt index) - 1; retail (0x4d3d59) decodes it as index + 2,
+                         * killing the wrong bolt and, for bolts 3 and 4, writing past gNapalm_bolts[5] (Vita crash) */
+                        KillNapalmBolt(&gNapalm_bolts[-ped->field_0x0c->field_0x98 - 1]);
+#else
                         KillNapalmBolt(&gNapalm_bolts[1 - ped->field_0x0c->field_0x98]);
+#endif
                     } else if (ped->field_0x0c->field_0x98 > 0) {
                         StopObjectSmokingInstantly(ped->character->personality->form->simple_physicing[ped->character->field_0x5].collision_info);
                         ped->field_0x0c->field_0x98 = 0;
@@ -3989,7 +4632,11 @@ void C2_HOOK_FASTCALL MungePedestrians(void) {
         if (!(ped->character->field_0x14 & 0x4)) {
             tPhysics_object* simple_coll_info = ped->character->personality->form->simple_physicing[ped->character->field_0x5].collision_info;
             if (simple_coll_info != NULL) {
+#ifdef CARPOCALYPSE2_MATCHING
                 BrVector3Copy(&simple_coll_info->v, &ped->character->field_0xd8);
+#else
+                BrVector3Copy(&simple_coll_info->v, GetPedestrianMovementVelocity(ped));
+#endif
                 if (ped->hit_points <= 0
                         && ped->action == ePed_action_dead && ped->character->personality->form->moves[ped->character->field_0x7].id != 113
                         && ((gMutant_speed != 0.f && ped->character->field_0x1e == 0)
@@ -4024,6 +4671,14 @@ void C2_HOOK_FASTCALL MakeFlagWavingBastardWaveHisFlagWhichIsTheProbablyTheLastT
 
 }
 
+// FUNCTION: CARMA2_HW 0x004d35e0
+void C2_HOOK_FASTCALL FUN_004d35e0(tPedestrian* pPed) {
+
+    pPed->field_0x0c->field_0x6c = 0;
+    ((void (C2_HOOK_CDECL *)(tPed_character_instance*, int))SetCharacterPhysicsLevelAR)(pPed->character, 5);
+}
+
+// C2PORT-NONMATCHING: best 19% | difftest PASS 2000 trials (spec 004d6c70_FlushAllPedCaches.json) | reason loop code generation
 // FUNCTION: CARMA2_HW 0x004d6c70
 void C2_HOOK_FASTCALL FlushAllPedCaches(void) {
 
@@ -4044,18 +4699,6 @@ void C2_HOOK_FASTCALL FlushAllPedCaches(void) {
             cache->field_0xb0 = NULL;
         }
     }
-}
-
-// UNLABELED: CARMA2_HW 0x004d6da0
-void C2_HOOK_FASTCALL FUN_004d6da0(void) {
-
-    NOT_IMPLEMENTED();
-}
-
-// UNLABELED: CARMA2_HW 0x004d6d90
-void C2_HOOK_FASTCALL FUN_004d6d90(void) {
-
-    NOT_IMPLEMENTED();
 }
 
 // FUNCTION: CARMA2_HW 0x004cdc00
@@ -4142,173 +4785,698 @@ undefined4 C2_HOOK_FASTCALL CBPassiveCollision(tPed_character_instance* pCharact
 #pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004cdeb0
 void C2_HOOK_FASTCALL PedProcessContact(tPedestrian* pPed, tPhysics_object* pCollision_info) {
+    tPedestrian* other_ped;
+    tCar_spec* pCar;
+
     if (pCollision_info == NULL) {
         return;
     }
     if (pPed->field_0x0c == NULL) {
         return;
     }
-    NOT_IMPLEMENTED();
+    if (pCollision_info->owner != NULL
+            && pCollision_info->flags_0x238 >= 2
+            && pCollision_info->flags_0x238 <= 4
+            && pPed->field_0x0c->field_0xc0 == NULL) {
+        other_ped = ((tPed_character_instance*)pCollision_info->owner)->ped;
+        if (other_ped != NULL && other_ped->field_0x0c != NULL) {
+            pPed->field_0x0c->field_0xc0 = other_ped->field_0x0c->field_0xc0;
+        }
+    }
+    if ((pCollision_info->owner == NULL || pCollision_info->flags_0x238 != 1)
+            && (pCollision_info->flags_0x238 != 0x20
+                || (gMutant_tail_state != 2 && GetTotalTime() - gINT_00705b70 >= 7500))
+            && pCollision_info->flags_0x238 != 0x40
+            && pCollision_info->flags_0x238 != 0x10) {
+        return;
+    }
+    if (pCollision_info->flags_0x238 == 0x40) {
+        pCar = ((tShit_mine*)pCollision_info->owner)->field_0x30;
+    } else if (pCollision_info->flags_0x238 == 0x10) {
+        pCar = (tCar_spec*)((tDrone_spec*)pCollision_info->owner)->field_0x5d4;
+    } else {
+        pCar = (tCar_spec*)pCollision_info->owner;
+    }
+    if ((pCar != NULL && pCar->driver > 5) || pCollision_info->parent != NULL) {
+        pPed->field_0x0c->field_0xc0 = pCar;
+        if (pCollision_info->owner != NULL && pCollision_info->flags_0x238 == 0x20) {
+            ((tU8*)pPed->field_0x0c)[0x2e] |= 8;
+        }
+        if (pCollision_info->owner != NULL
+                && pCollision_info->flags_0x238 == 0x20
+                && gMutant_tail_state == 1) {
+            ((tU8*)pPed->field_0x0c)[0x2e] |= 0x10;
+        }
+        if (pCollision_info->flags_0x238 == 0x40) {
+            pPed->field_0x0c->field_0x2e = 0x40;
+        }
+        if (pCollision_info->flags_0x238 == 0x10) {
+            pPed->field_0x0c->field_0x2e = 1;
+            return;
+        }
+    } else if (pCar != NULL && pPed->field_0x0c->field_0xc0 == NULL) {
+        pPed->field_0x0c->field_0xc0 = (tCar_spec*)pCar->field_0xc8;
+        ((tU8*)pPed->field_0x0c)[0x2e] |= 1;
+    }
 }
 #pragma auto_inline(on)
 
 #pragma auto_inline(off)
-// UNLABELED: CARMA2_HW 0x004cd9e0
-int C2_HOOK_FASTCALL PedTryDismember(tPedestrian* pPed, int pBone) {
-    NOT_IMPLEMENTED();
-}
-
 // FUNCTION: CARMA2_HW 0x004cd640
 int C2_HOOK_FASTCALL SetPedFall(tPedestrian* pPed, int pSpeed, int pMove1, int pMove2, tPhysics_object* pCollision_info) {
-    tPed_character_instance* character;
-    tPed_personality* personality;
-    tPed_form* form;
-    tPhysics_object* phys;
-    float mass;
-    double a;
-    int move_time;
-    int count;
-    tU8 head_flag;
+    register int fall_speed;
+    register int severed_count;
+    int damage;
+    float remaining_speed;
+    int bone_index;
 
-    character = pPed->character;
-    count = 0;
-    personality = character->personality;
-    form = personality->form;
-    phys = form->simple_physicing[(int)character->field_0x5].collision_info;
-    mass = phys->M;
-    a = 0.068 / mass;
-    move_time = (int)(a * a * pSpeed);
-    if (form->non_humanoid == 0) {
-        goto SKIP_CLAMP;
-    }
-    if (gPed_dismemberfest == 0) {
-        if (gExploding_pedestrians == 0) {
-            goto SKIP_CLAMP;
+    severed_count = 0;
+    {
+        tPed_character_instance* character;
+        tPed_form* form;
+        double mass_scale;
+
+        character = pPed->character;
+        form = character->personality->form;
+        mass_scale = gPed_fall_speed_mass_scale / form->simple_physicing[(tS8)character->field_0x5].collision_info->M;
+        fall_speed = (int)(mass_scale * mass_scale * pSpeed);
+        if (form->non_humanoid != 0
+                && (gPed_dismemberfest != 0 || gExploding_pedestrians != 0)
+                && fall_speed < 100) {
+            fall_speed = 100;
         }
     }
-    if (move_time >= 100) {
-        goto SKIP_CLAMP;
-    }
-    move_time = 100;
-SKIP_CLAMP:
-    *(float*)&move_time = (float)move_time;
+    remaining_speed = (float)fall_speed;
+
     if (pCollision_info == NULL) {
-        goto CHECK_COUNT;
+        goto skip_severing;
     }
     if (gImmortal_peds != 0) {
-        goto CHECK_COUNT;
+        goto skip_severing;
     }
     if (gGoreLevel < 2) {
-        goto CHECK_COUNT;
+        goto skip_severing;
     }
-    while (1) {
-        int limit;
-        float diff;
+    for (;;) {
+        damage = gPed_dismemberfest != 0 ? 5 : gPed_severing_damage;
+        remaining_speed -= (float)damage;
+        if (remaining_speed < gConst_replay_rate_zero || severed_count >= 5) {
+            break;
+        }
+        if (gExploding_pedestrians != 0 || gPed_dismemberfest != 0 || PercentageChance(gPed_severing_chance)) {
+            bone_index = IRandomBetween(1, pPed->character->personality->form->count_bones - 1);
+            severed_count += FUN_004cd9e0(pPed, bone_index);
+        }
+    }
+skip_severing:
+    if (severed_count > 4) {
+        ((tU8*)pPed->field_0x0c)[0x2e] |= 2;
+    }
 
-        if (gPed_dismemberfest != 0) {
-            limit = 5;
+    if (pPed->hit_points <= 0) {
+        if (fall_speed > 2) {
+            MakePedNoise(pPed, 5, 0, pCollision_info);
+        }
+        return 1;
+    }
+
+    if (pPed->character->personality->form->non_humanoid != 0 && pPed->character->field_0xc != 0) {
+        pPed->hit_points = 0;
+        fall_speed = 0;
+    }
+    if ((pPed->character->field_0xc & gPow2_array[(tS8)pPed->character->personality->form->index_head_bone]) == 0) {
+        if (fall_speed < 100) {
+            pPed->hit_points -= (tS8)fall_speed;
         } else {
-            limit = gPed_severing_damage;
+            pPed->hit_points = 0;
         }
-        diff = *(float*)&move_time - limit;
-        if (diff < 0.0f) {
-            goto CHECK_COUNT;
-        }
-        if (count >= 5) {
-            goto CHECK_COUNT;
-        }
-        if (gExploding_pedestrians == 0) {
-            if (gPed_dismemberfest == 0) {
-                if (!PercentageChance(gPed_severing_chance)) {
-                    continue;
-                }
-            }
-        }
-        {
-            int n_bones;
-            int r;
-
-            n_bones = form->count_bones;
-            r = IRandomBetween(1, n_bones - 1);
-            count += PedTryDismember(pPed, r);
-        }
+    } else {
+        pPed->hit_points = 0;
     }
-CHECK_COUNT:
-    if (count > 4) {
-        ((tU8*)&pPed->field_0x0c->field_0x2e)[0] |= 2;
+
+    if (gImmortal_peds != 0 && pPed->hit_points <= 0) {
+        pPed->hit_points = 1;
     }
     if (pPed->hit_points > 0) {
-        goto ALIVE;
-    }
-    if (move_time <= 2) {
-        goto DEAD_RET1;
-    }
-    MakePedNoise(pPed, 5, 0, pCollision_info);
-    return 1;
-ALIVE:
-    head_flag = form->non_humanoid;
-    if (head_flag != 0) {
-        if (pPed->character->field_0xc == 0) {
-            goto CHECK_HEAD_BIT;
+        if (pMove1 >= 0) {
+            SetPedMove(pPed, pMove1, -1, 0, 1, GetTotalTime(), 5);
         }
-        pPed->hit_points = 0;
-        move_time = 0;
-    }
-CHECK_HEAD_BIT:
-    {
-        int head_idx;
-        int bit;
-
-        head_idx = form->index_head_bone;
-        bit = gPow2_array[head_idx];
-        if ((pPed->character->field_0xc & bit) == 0) {
-            goto CHECK_TIME;
-        }
-        if (move_time < 100) {
-            pPed->hit_points = 0;
-        } else {
-            pPed->hit_points -= (tS8)move_time;
-        }
-    }
-CHECK_TIME:
-        if (gImmortal_peds == 0) {
-            goto CHECK_HP;
-        }
-        if (pPed->hit_points > 0) {
-            goto CHECK_HP;
-        }
-        pPed->hit_points = 1;
-    CHECK_HP:
-        if (pPed->hit_points <= 0) {
-            goto DEAD;
-        }
-        if (pMove1 < 0) {
-            goto DEAD_NO_MOVE1;
-        }
-        SetPedMove(pPed, pMove1, -1, 0, 1, GetTotalTime(), 5);
-    DEAD_NO_MOVE1:
         MakePedNoise(pPed, 4, 0, pCollision_info);
         return 0;
-    DEAD:
-        if (pMove2 < 0) {
-            goto DEAD_NO_MOVE2;
+    } else {
+        if (pMove2 >= 0) {
+            SetPedMove(pPed, pMove2, -1, 0, 1, GetTotalTime(), 5);
         }
-        SetPedMove(pPed, pMove2, -1, 0, 1, GetTotalTime(), 5);
-    DEAD_NO_MOVE2:
         MakePedNoise(pPed, 1, 0, pCollision_info);
         KillPedestrian(pPed, pCollision_info);
-    DEAD_RET1:
-        return 1;
+    }
+    return 1;
+}
+#pragma auto_inline(on)
+
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 63.00% | difftest PASS 2000 trials (spec difftest/specs/004cd9e0_FUN_004cd9e0.json) | reason regalloc-frame-loop
+// FUNCTION: CARMA2_HW 0x004cd9e0
+int C2_HOOK_FASTCALL FUN_004cd9e0(tPedestrian* pPed, register int pBoneIndex) {
+    register tPed_character_instance* pCharacter;
+    register tPed_form* pForm;
+    register int child_count;
+    register int i;
+    register int* pMask;
+    br_actor* actor;
+    br_vector3 velocity;
+    br_vector3 omega;
+    int result;
+    register tS8 previous_bone_index;
+
+    pCharacter = pPed->character;
+    pForm = pCharacter->personality->form;
+    child_count = 0;
+    i = 0;
+    if (pForm->count_bones != 0) {
+        pMask = (int*)gPow2_array;
+        do {
+            if (pForm->bones[i].indices[0] == pBoneIndex
+                    && (*pMask & pCharacter->field_0xc) == 0) {
+                child_count += FUN_004cd9e0(pPed, i);
+            }
+            pMask++;
+            i++;
+            pForm = pCharacter->personality->form;
+        } while (i < pForm->count_bones);
+    }
+    ((tU8*)pPed->field_0x0c)[0x23 + pBoneIndex] = (tU8)gPed_dismember_spurting_member_count;
+
+    if (gExploding_pedestrians != 0) {
+        velocity.v[0] = SRandomPosNeg(3.f);
+        velocity.v[1] = SRandomBetween(0.f, 3.f);
+        velocity.v[2] = SRandomPosNeg(3.f);
+        velocity.v[0] += pCharacter->field_0xd8.v[0];
+        velocity.v[1] += pCharacter->field_0xd8.v[1];
+        velocity.v[2] += pCharacter->field_0xd8.v[2];
+        omega.v[0] = SRandomPosNeg(20.f);
+        omega.v[1] = SRandomPosNeg(20.f);
+        omega.v[2] = SRandomPosNeg(20.f);
+        previous_bone_index = (tS8)pCharacter->field_0x6;
+        result = MakeCharacterBonePhysicworthy(pCharacter, pBoneIndex, &velocity, &omega);
+        if (result != 0 && (tS8)pCharacter->field_0x6 >= 0) {
+            FUN_004c8bf0((int)pCharacter->ped, pBoneIndex, previous_bone_index, (tS8)pCharacter->field_0x6);
+            actor = pCharacter->personality->form->actor_sets[(tS8)pCharacter->field_0x4].actors[pBoneIndex];
+            if (actor->parent == NULL && (pBoneIndex == 0 || (pCharacter->field_0xc & gPow2_array[pBoneIndex]) != 0)) {
+                BrActorAdd(gNon_track_actor, actor);
+            }
+        }
+        return result + child_count;
+    }
+
+    previous_bone_index = (tS8)pCharacter->field_0x6;
+    result = MakeCharacterBonePhysicworthy(pCharacter, pBoneIndex, NULL, NULL);
+    if (result != 0 && (tS8)pCharacter->field_0x6 >= 0) {
+        FUN_004c8bf0((int)pCharacter->ped, pBoneIndex, previous_bone_index, (tS8)pCharacter->field_0x6);
+        actor = pCharacter->personality->form->actor_sets[(tS8)pCharacter->field_0x4].actors[pBoneIndex];
+        if (actor->parent == NULL && (pBoneIndex == 0 || (pCharacter->field_0xc & gPow2_array[pBoneIndex]) != 0)) {
+            BrActorAdd(gNon_track_actor, actor);
+        }
+    }
+    return result + child_count;
 }
 #pragma auto_inline(on)
 
 extern br_error C2_HOOK_CDECL HostRegistersGet(void* regs);
 
+// GLOBAL: CARMA2_HW 0x0058a9c8
+const float gFLOAT_0058a9c8 = -1.0f;
+
+// GLOBAL: CARMA2_HW 0x0058a9d8
+const float gFLOAT_0058a9d8 = 1.0f;
+
+// GLOBAL: CARMA2_HW 0x0058aa60
+const float gPed_mutant_tail_impact_multiplier = 10.0f;
+
+// GLOBAL: CARMA2_HW 0x0058ab10
+const double gPed_mutant_tail_speed_threshold = -1.7;
+
+// GLOBAL: CARMA2_HW 0x0058ab18
+const double gPed_impact_base = 1.5;
+
+// GLOBAL: CARMA2_HW 0x0058ab20
+const double gPed_impact_minimum = 0.01;
+
+// GLOBAL: CARMA2_HW 0x0058ab28
+const double gPed_smear_direction_minimum = 0.707;
+
+// GLOBAL: CARMA2_HW 0x0058ab30
+const float gPed_smear_normal_minimum = 0.997f;
+
+// GLOBAL: CARMA2_HW 0x0058ab34
+const float gPed_smear_position_tolerance = 0.01f;
+
+// GLOBAL: CARMA2_HW 0x0065e670
+const char gPed_smear_missing_cache_message[] = "Can't smear a ped with no process data";
+
+// GLOBAL: CARMA2_HW 0x0058aad0
+const double gDOUBLE_0058aad0 = 0.93;
+
+// GLOBAL: CARMA2_HW 0x0058aad8
+const double gDOUBLE_0058aad8 = 0.706;
+
+// GLOBAL: CARMA2_HW 0x0058f2e4
+const int gPed_flags_0058f2e4[3] = { 8, 16, 32 };
+
+// GLOBAL: CARMA2_HW 0x0065d7d8
+float gPed_tumble_factor = 8.0f;
+
 #pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 26.46% | difftest PASS 2000 trials (spec difftest/specs/004d1030_CBActiveHaltedInternal_DEEP.json) | reason stack-layout
 // FUNCTION: CARMA2_HW 0x004d1030
-int C2_HOOK_FASTCALL CBActiveHaltedInternal(tPed_character_instance* pCharacter, tPhysics_object* pPhysics, int pMode) {
-    NOT_IMPLEMENTED();
+int C2_HOOK_FASTCALL CBActiveHaltedInternal(tPed_character_instance* pCharacter, tPhysics_object* pPhysics, int pMode)
+
+{
+  typedef unsigned char undefined1;
+  typedef unsigned char byte;
+  typedef unsigned short ushort;
+  typedef unsigned int uint;
+  typedef int bool;
+  int* param_1 = (int*)pCharacter;
+  int* param_2 = (int*)pPhysics;
+  int param_3 = pMode;
+  char *pcVar1;
+  float fVar2;
+  undefined1 uVar3;
+  char cVar4;
+  bool bVar5;
+  bool bVar6;
+  int iVar7;
+  uint uVar8;
+  int *piVar9;
+  undefined4 uVar10;
+  float *pfVar11;
+  int iVar12;
+  int *piVar13;
+  int *piVar14;
+  int iVar15;
+  tU32 current_time;
+  br_actor* pActor;
+  float local_40;
+  undefined1 local_38 [4];
+  undefined1 local_34 [4];
+  br_vector3 local_30;
+  float local_24;
+  float local_20;
+  float local_1c;
+  br_vector3 local_18;
+  undefined1 local_c [12];
+
+  if (gAction_replay_mode != 0) {
+    return 1;
+  }
+  if (gPipe_halted_ped_status != 0) {
+    ((void (C2_HOOK_FASTCALL *)(const tPedestrian*, tU32, int, int, int, tS8, tU8, undefined, tU8, const br_vector3*, const br_vector3*, const br_matrix34*))PipeSinglePedStatus)(
+        *(tPedestrian**)(param_1 + 0x39), (tU32)(param_1 + 0x30) | 0xff, -1, 5, 1,
+        *(tS8*)((char*)param_1 + 4), *(tS8*)((char*)param_1 + 4),
+        *(tU8*)((char*)param_1 + 5), *(tU8*)((char*)param_1 + 5),
+        (br_vector3*)(param_1 + 0x30), (br_vector3*)(param_1 + 0x33),
+        (br_matrix34*)((char*)param_1 + 0x8c));
+    return 1;
+  }
+  piVar9 = (int *)param_1[0x39];
+  piVar9[7] = *(int *)(*param_2 + 0x50);
+  piVar9[8] = *(int *)(*param_2 + 0x54);
+  piVar9[9] = *(int *)(*param_2 + 0x58);
+  current_time = GetTotalTime();
+  if (((*(byte *)(param_1 + 5) & 1) == 0) && (param_3 == 0)) goto LAB_004d1bcc;
+  if (param_3 == 0) {
+    uVar8 = (uint)*(ushort *)(param_2 + 0x5d);
+    fVar2 = gConst_replay_rate_zero;
+    if (uVar8 < *(ushort *)((int)param_2 + 0x176)) {
+      pfVar11 = gFace_list__car[uVar8].normal.v + 1;
+      iVar15 = *(ushort *)((int)param_2 + 0x176) - uVar8;
+      do {
+        if (fVar2 < *pfVar11) {
+          local_24 = pfVar11[-1];
+          local_20 = *pfVar11;
+          local_1c = pfVar11[1];
+          fVar2 = *pfVar11;
+        }
+        pfVar11 = pfVar11 + 0x14;
+        iVar15 = iVar15 + -1;
+      } while (iVar15 != 0);
+    }
+  }
+  else {
+    local_24 = *(float *)(param_3 + 0x34);
+    local_20 = *(float *)(param_3 + 0x38);
+    local_1c = *(float *)(param_3 + 0x3c);
+    fVar2 = *(float *)(param_3 + 0x38);
+  }
+  if ((*(float*)((char*)param_1 + 0x9c) <= gDOUBLE_0058aad0) || ((char)piVar9[1] < '\x01')) {
+    bVar5 = 0;
+    if ((*(float*)((char*)param_2 + 8) <= *(float*)((char*)param_2 + 0xc)) || (*(float*)((char*)param_2 + 8) <= *(float*)((char*)param_2 + 0x10))) {
+      if ((*(float*)((char*)param_2 + 0xc) <= *(float*)((char*)param_2 + 0x10)) || (*(float*)((char*)param_2 + 0xc) <= *(float*)((char*)param_2 + 8))) {
+        iVar15 = *param_2;
+        local_30.v[0] = *(float *)(iVar15 + 0x44) * gFLOAT_0058a9c8;
+        local_30.v[1] = *(float *)(iVar15 + 0x48) * gFLOAT_0058a9c8;
+        local_30.v[2] = *(float *)(iVar15 + 0x4c);
+      }
+      else {
+        iVar15 = *param_2;
+        local_30.v[0] = *(float *)(iVar15 + 0x38) * gFLOAT_0058a9c8;
+        local_30.v[1] = *(float *)(iVar15 + 0x3c) * gFLOAT_0058a9c8;
+        local_30.v[2] = *(float *)(iVar15 + 0x40);
+      }
+    }
+    else {
+      iVar15 = *param_2;
+      local_30.v[0] = *(float *)(iVar15 + 0x2c) * gFLOAT_0058a9c8;
+      local_30.v[1] = *(float *)(iVar15 + 0x30) * gFLOAT_0058a9c8;
+      local_30.v[2] = *(float *)(iVar15 + 0x34);
+    }
+    local_30.v[2] = local_30.v[2] * gFLOAT_0058a9c8;
+    local_40 = local_1c * local_30.v[2] + local_20 * local_30.v[1] + local_24 * local_30.v[0];
+    if ((fVar2 == gConst_replay_rate_zero) || (gDOUBLE_0058aad8 <= fabsf(local_40))) {
+      bVar6 = 0;
+    }
+    else {
+      bVar6 = 1;
+    }
+  }
+  else {
+    bVar5 = 1;
+    bVar6 = 0;
+  }
+  if (((bVar6) && (piVar9[3] != 0)) &&
+     (*(byte *)(piVar9[3] + 0x19) < (byte)(('\0' < (char)piVar9[1]) + 2U))) {
+    SetPedRetainRootMode();
+    switch(*(undefined4 *)
+            (*(int *)(*(int *)(*(int *)*piVar9 + 0x28) + 0x40) + *(char *)(*piVar9 + 7) * 8)) {
+    case 0x5a:
+    case 0x5b:
+    case 0x5c:
+    case 0x61:
+    case 0x71:
+      if ((char)piVar9[1] < '\x01') {
+        SetPedMove((tPedestrian*)piVar9, 0x5e, -1, 0, 0, current_time, 5);
+      }
+      else {
+        SetPedMove((tPedestrian*)piVar9, 0x5d, -1, 0, 0, current_time, 5);
+        if (('\0' < (char)piVar9[1]) && (piVar9[3] != 0)) {
+          *(undefined **)(piVar9[3] + 0x1c) = (undefined*)&gPed_anim_sequence_0065e4e0;
+          *(int *)(piVar9[3] + 0x78) = current_time;
+          *(undefined1 *)(piVar9[3] + 0x1a) = 0;
+          piVar13 = (int *)*piVar9;
+          iVar7 = *piVar13;
+          uVar3 = *(undefined1 *)(*(int *)(piVar9[3] + 0x1c) + 1);
+          iVar15 = (int)*(char *)(*(int *)(iVar7 + 0x28) + 0x4d);
+          if (-1 < (char)piVar13[1]) {
+            if (iVar15 < 0) {
+                uVar10 = GetCharacterModelSet((tPed_character_instance*)piVar13);
+                PipeSinglePedModelChange((tPedestrian*)piVar9, iVar15, NULL, -1, uVar10, 0);
+                SetCharacterAllBonesModel((tPed_character_instance*)piVar13, uVar3, 0);
+            } else {
+                uVar10 = GetCharacterModelSet((tPed_character_instance*)piVar13);
+                PipeSinglePedModelChange((tPedestrian*)piVar9, iVar15,
+                    GetCharacterBoneModel((tPed_character_instance*)piVar13, iVar15),
+                    uVar3, uVar10, 0);
+                SetCharacterBoneModel((tPed_character_instance*)piVar13, iVar15, uVar3, 0);
+            }
+          }
+        }
+      }
+    }
+    ClearPedRetainRootMode();
+    if ((*(byte *)(param_1 + 5) & 1) == 0) {
+      ((void (C2_HOOK_CDECL *)(tPed_character_instance*, tU32))SetCharacterPhysicsLevelAR)((tPed_character_instance*)param_1, 5);
+    }
+    iVar7 = PercentageChance(0x32);
+    if (iVar7 != 0) {
+      gPed_tumble_factor = -gPed_tumble_factor;
+    }
+    MakePedNoise((tPedestrian*)piVar9, 3, 0, NULL);
+    local_18.v[0] = local_30.v[0] * gPed_tumble_factor;
+    local_18.v[1] = local_30.v[1] * gPed_tumble_factor;
+    local_18.v[2] = local_30.v[2] * gPed_tumble_factor;
+    ApplyNonCarTumble((tPhysics_object*)param_2, &local_18, 1.39f, 0.0f);
+    if (piVar9[3] != 0) {
+      pcVar1 = (char *)(piVar9[3] + 0x19);
+      *pcVar1 = *pcVar1 + '\x01';
+    }
+    *(undefined1 *)(param_2 + 0x3b) = 0;
+    if ((*(byte *)(param_1 + 5) & 1) == 0) {
+      piVar9 = (int *)GetRootObject((tPed_character_instance*)param_1);
+    }
+    else {
+      piVar9 = *(int **)(*(int *)(*(int *)(*param_1 + 0x28) + 0x38) + 4 +
+                        *(char *)((int)param_1 + 5) * 8);
+    }
+    iVar7 = 0x2c;
+    piVar13 = piVar9 + 0x23;
+    do {
+      iVar15 = 3;
+      piVar14 = piVar13;
+      do {
+        iVar7 = iVar7 + 4;
+        piVar13 = piVar14 + 1;
+        iVar15 = iVar15 + -1;
+        *piVar14 = *(int *)(*piVar9 + -4 + iVar7);
+        piVar14 = piVar13;
+      } while (iVar15 != 0);
+    } while (iVar7 < 0x50);
+    piVar9[0x67] = piVar9[0x67] | 0x100;
     return 0;
+  }
+  ((void (C2_HOOK_FASTCALL *)(const tPedestrian*, tU32, int, int, int, tS8, tU8, undefined, tU8, const br_vector3*, const br_vector3*, const br_matrix34*))PipeSinglePedStatus)(
+        *(tPedestrian**)(param_1 + 0x39), (tU32)(param_1 + 0x30) | 0xff, -1, 5, 1,
+        *(tS8*)((char*)param_1 + 4), *(tS8*)((char*)param_1 + 4),
+        *(tU8*)((char*)param_1 + 5), *(tU8*)((char*)param_1 + 5),
+        (br_vector3*)(param_1 + 0x30), (br_vector3*)(param_1 + 0x33),
+        (br_matrix34*)((char*)param_1 + 0x8c));
+  *(short *)(param_1[0x39] + 6) = *(short *)(param_1[0x39] + 6) + 1;
+  SetPedRetainRootMode();
+  switch(*(undefined4 *)
+          (*(int *)(*(int *)(*(int *)*piVar9 + 0x28) + 0x40) + *(char *)(*piVar9 + 7) * 8)) {
+  case 0x5a:
+  case 0x5b:
+  case 0x5c:
+  case 0x61:
+  case 0x71:
+    if ((char)piVar9[1] < '\x01') {
+      SetPedMove((tPedestrian*)piVar9, 0x5e, -1, 0, 0, current_time, 5);
+    }
+    else {
+      SetPedMove((tPedestrian*)piVar9, 0x5d, -1, 0, 0, current_time, 5);
+      if (('\0' < (char)piVar9[1]) && (piVar9[3] != 0)) {
+        *(undefined **)(piVar9[3] + 0x1c) = (undefined*)&gPed_anim_sequence_0065e4e0;
+        *(int *)(piVar9[3] + 0x78) = current_time;
+        *(undefined1 *)(piVar9[3] + 0x1a) = 0;
+        piVar13 = (int *)*piVar9;
+        iVar15 = *piVar13;
+        uVar3 = *(undefined1 *)(*(int *)(piVar9[3] + 0x1c) + 1);
+        iVar12 = (int)*(char *)(*(int *)(iVar15 + 0x28) + 0x4d);
+        if (-1 < (char)piVar13[1]) {
+          if (iVar12 < 0) {
+                uVar10 = GetCharacterModelSet((tPed_character_instance*)piVar13);
+                PipeSinglePedModelChange((tPedestrian*)piVar9, iVar12, NULL, -1, uVar10, 0);
+                SetCharacterAllBonesModel((tPed_character_instance*)piVar13, uVar3, 0);
+            } else {
+                uVar10 = GetCharacterModelSet((tPed_character_instance*)piVar13);
+                PipeSinglePedModelChange((tPedestrian*)piVar9, iVar12,
+                    GetCharacterBoneModel((tPed_character_instance*)piVar13, iVar12),
+                    uVar3, uVar10, 0);
+                SetCharacterBoneModel((tPed_character_instance*)piVar13, iVar12, uVar3, 0);
+            }
+        }
+      }
+    }
+  }
+  ClearPedRetainRootMode();
+  if (piVar9[3] != 0) {
+    *(undefined1 *)(piVar9[3] + 0x19) = 0;
+  }
+  if ((char)piVar9[1] < '\x01') {
+    SetCharacterMoveAR((tPed_character_instance*)*piVar9, -1, gMutant_speed == gConst_replay_rate_zero ? 0.0f : -gMutant_speed, 0, 0, current_time);
+    piVar13 = (int *)*piVar9;
+    if ((*(byte *)(piVar13 + 5) & 1) == 0) {
+      iVar7 = GetRootObject((tPed_character_instance*)piVar13);
+    }
+    else {
+      iVar7 = *(int *)(*(int *)(*(int *)(*piVar13 + 0x28) + 0x38) + 4 +
+                      *(char *)((int)piVar13 + 5) * 8);
+    }
+    if (*(int *)(iVar7 + 600) != 0) {
+      piVar13 = (int *)*piVar9;
+      if ((*(byte *)(piVar13 + 5) & 1) == 0) {
+        iVar7 = GetRootObject((tPed_character_instance*)piVar13);
+      }
+      else {
+        iVar7 = *(int *)(*(int *)(*(int *)(*piVar13 + 0x28) + 0x38) + 4 +
+                        *(char *)((int)piVar13 + 5) * 8);
+      }
+      if (*(float *)(*(int *)(iVar7 + 600) + 0x88) < gFLOAT_0058a9d8) goto LAB_004d1b73;
+    }
+    if ((((gAction_replay_mode == 0) && (iVar7 = PercentageChance(0x4b), iVar7 != 0)) &&
+        ((*(ushort *)(piVar9 + 2) & 0x10) == 0)) && (0 < gGoreLevel)) {
+      *(ushort *)(piVar9 + 2) = *(ushort *)(piVar9 + 2) | 0x10;
+      pActor = GetCharacterActorPtr((tPed_character_instance*)*piVar9);
+      QueueOilSpill2FromSettings((const tQueueOilSpill2Settings*)&gPed_slick, pActor);
+    }
+  }
+  else {
+    RecacheAndSetFace((tPedestrian*)piVar9, (int*)local_34, (int*)local_38, (br_vector3*)local_c, 1, current_time);
+    if (((bVar6) || ((bVar5 && (gPeds_suicidal != 0)))) && (gImmortal_peds == 0)) {
+      MakePedNoise((tPedestrian*)piVar9, 5, 0, NULL);
+      KillPedestrian((tPedestrian*)piVar9, NULL);
+      if ((char)piVar9[1] < '\x01') {
+        SetPedMove((tPedestrian*)piVar9, 0x5e, -1, 0, 0, current_time, 5);
+      }
+      else {
+        SetPedMove((tPedestrian*)piVar9, 0x5d, -1, 0, 0, current_time, 5);
+        if (('\0' < (char)piVar9[1]) && (piVar9[3] != 0)) {
+          *(undefined **)(piVar9[3] + 0x1c) = (undefined*)&gPed_anim_sequence_0065e4e0;
+          *(int *)(piVar9[3] + 0x78) = current_time;
+          *(undefined1 *)(piVar9[3] + 0x1a) = 0;
+          piVar13 = (int *)*piVar9;
+          iVar7 = *piVar13;
+          uVar3 = *(undefined1 *)(*(int *)(piVar9[3] + 0x1c) + 1);
+          iVar15 = (int)*(char *)(*(int *)(iVar7 + 0x28) + 0x4d);
+          if (-1 < (char)piVar13[1]) {
+            if (iVar15 < 0) {
+                uVar10 = GetCharacterModelSet((tPed_character_instance*)piVar13);
+                PipeSinglePedModelChange((tPedestrian*)piVar9, iVar15, NULL, -1, uVar10, 0);
+                SetCharacterAllBonesModel((tPed_character_instance*)piVar13, uVar3, 0);
+            } else {
+                uVar10 = GetCharacterModelSet((tPed_character_instance*)piVar13);
+                PipeSinglePedModelChange((tPedestrian*)piVar9, iVar15,
+                    GetCharacterBoneModel((tPed_character_instance*)piVar13, iVar15),
+                    uVar3, uVar10, 0);
+                SetCharacterBoneModel((tPed_character_instance*)piVar13, iVar15, uVar3, 0);
+            }
+          }
+        }
+      }
+      if (gMutant_speed == gConst_replay_rate_zero) {
+        SetCharacterMoveAR((tPed_character_instance*)*piVar9, -1, gMutant_speed == gConst_replay_rate_zero ? 0.0f : -gMutant_speed, 0, 0, current_time);
+      }
+      else {
+        SetCharacterMoveAR((tPed_character_instance*)*piVar9, -1, gMutant_speed == gConst_replay_rate_zero ? 0.0f : -gMutant_speed, 0, 0, current_time);
+      }
+    }
+    else if (((param_1[3] & gPed_flags_0058f2e4[0]) == 0) || ((gPed_flags_0058f2e4[2] & param_1[3]) == 0)) {
+      if ((*(int *)(*piVar9 + 0xc) != 0) &&
+         (((iVar15 = piVar9[3], iVar15 != 0 && (*(undefined4 **)(iVar15 + 0xc0) == &gProgram_state.current_car))
+          && ((*(ushort *)(iVar15 + 0x2e) & 4) == 0)))) {
+        *(ushort *)(iVar15 + 0x2e) = *(ushort *)(iVar15 + 0x2e) | 4;
+        EarnCredits(gPed_points[gProgram_state.skill_level]);
+        DoFancyHeadup(4);
+      }
+      *(byte *)(piVar9 + 2) = *(byte *)(piVar9 + 2) & 0xf7;
+      if (bVar5) {
+        SetPedXZDirection((tPedestrian*)piVar9, (br_vector3*)((char*)param_1 + 0xa4), 0.0f, current_time);
+        piVar9[4] = 0;
+        if ((((*(uint *)(*piVar9 + 0xc) & gPed_flags_0058f2e4[0]) == 0) &&
+            ((gPed_flags_0058f2e4[2] & *(uint *)(*piVar9 + 0xc)) == 0)) && (piVar9[3] != 0)) {
+          *(undefined4 *)(piVar9[3] + 0x80) = 100;
+          *(undefined4 *)(piVar9[3] + 0xb8) = 0x3db851ec;
+          SetPedMove((tPedestrian*)piVar9, 0x29, 100, 0, 0, current_time, 1);
+          piVar9[10] = current_time;
+        }
+        else {
+          SetPedMove((tPedestrian*)piVar9, 0x29, -1, 0, 0, current_time, 1);
+          piVar9[10] = current_time;
+        }
+      }
+      else {
+        if (local_40 <= gConst_replay_rate_zero) {
+          cVar4 = *(char *)(*(int *)(*param_1 + 0x28) + 0x4f);
+        }
+        else {
+          cVar4 = *(char *)(*(int *)(*param_1 + 0x28) + 0x4e);
+        }
+        iVar7 = (int)cVar4;
+        if (iVar7 < 0) {
+        local_30.v[0] = *(float*)((char*)param_1 + iVar7 * -12 + 0x8c) * gFLOAT_0058a9c8;
+        local_30.v[1] = *(float*)((char*)param_1 + (0xc - iVar7) * 12) * gFLOAT_0058a9c8;
+        local_30.v[2] = *(float*)((char*)param_1 + iVar7 * -12 + 0x94) * gFLOAT_0058a9c8;
+        }
+        else {
+        local_30.v[0] = *(float*)((char*)param_1 + iVar7 * 12 + 0x8c);
+        local_30.v[1] = *(float*)((char*)param_1 + (iVar7 + 0xc) * 12);
+        local_30.v[2] = *(float*)((char*)param_1 + iVar7 * 12 + 0x94);
+        }
+        SetPedXZDirection((tPedestrian*)piVar9, &local_30, 0.0f, current_time);
+        SetPedMove((tPedestrian*)piVar9, local_40 <= gConst_replay_rate_zero ? 0x50 : 0x51, -1, 0, 1, current_time, 4);
+      }
+      RescanPedProximity((tPedestrian*)piVar9, NULL);
+      PedScanForObjects((tPedestrian*)piVar9, current_time);
+    }
+    else {
+      if ((char)piVar9[1] < '\x01') {
+        SetPedMove((tPedestrian*)piVar9, 0x29, 100, 0, 0, current_time, 1);
+      }
+      else {
+        SetPedMove((tPedestrian*)piVar9, 0x29, -1, 0, 0, current_time, 1);
+        if (('\0' < (char)piVar9[1]) && (piVar9[3] != 0)) {
+          *(undefined **)(piVar9[3] + 0x1c) = (undefined*)&gPed_anim_sequence_0065e4e0;
+          *(int *)(piVar9[3] + 0x78) = current_time;
+          *(undefined1 *)(piVar9[3] + 0x1a) = 0;
+          piVar13 = (int *)*piVar9;
+          uVar3 = *(undefined1 *)(*(int *)(piVar9[3] + 0x1c) + 1);
+          iVar7 = (int)*(char *)(*(int *)(*piVar13 + 0x28) + 0x4d);
+          if (-1 < (char)piVar13[1]) {
+            if (iVar7 < 0) {
+                uVar10 = GetCharacterModelSet((tPed_character_instance*)piVar13);
+                PipeSinglePedModelChange((tPedestrian*)piVar9, iVar7, NULL, -1, uVar10, 0);
+                SetCharacterAllBonesModel((tPed_character_instance*)piVar13, uVar3, 0);
+            } else {
+                uVar10 = GetCharacterModelSet((tPed_character_instance*)piVar13);
+                PipeSinglePedModelChange((tPedestrian*)piVar9, iVar7,
+                    GetCharacterBoneModel((tPed_character_instance*)piVar13, iVar7),
+                    uVar3, uVar10, 0);
+                SetCharacterBoneModel((tPed_character_instance*)piVar13, iVar7, uVar3, 0);
+            }
+          }
+        }
+      }
+      iVar7 = piVar9[3];
+      if (((iVar7 != 0) && (*(undefined4 **)(iVar7 + 0xc0) == &gProgram_state.current_car)) &&
+         ((*(ushort *)(iVar7 + 0x2e) & 4) == 0)) {
+        *(ushort *)(iVar7 + 0x2e) = *(ushort *)(iVar7 + 0x2e) | 4;
+        EarnCredits(gPed_points[gProgram_state.skill_level]);
+        DoFancyHeadup(4);
+      }
+    }
+  }
+LAB_004d1b73:
+  if ((*(byte *)(param_1 + 5) & 1) == 0) {
+    piVar9 = (int *)GetRootObject((tPed_character_instance*)param_1);
+  }
+  else {
+    piVar9 = *(int **)(*(int *)(*(int *)(*param_1 + 0x28) + 0x38) + 4 +
+                      *(char *)((int)param_1 + 5) * 8);
+  }
+  iVar7 = 0x2c;
+  piVar13 = piVar9 + 0x23;
+  do {
+    iVar15 = 3;
+    piVar14 = piVar13;
+    do {
+      iVar7 = iVar7 + 4;
+      piVar13 = piVar14 + 1;
+      iVar15 = iVar15 + -1;
+      *piVar14 = *(int *)(*piVar9 + -4 + iVar7);
+      piVar14 = piVar13;
+    } while (iVar15 != 0);
+  } while (iVar7 < 0x50);
+  piVar9[0x67] = piVar9[0x67] | 0x100;
+LAB_004d1bcc:
+  if ((char)param_2[0x8e] == '\x05') {
+    param_2[0x68] = 0x40000;
+  }
+  else {
+    param_2[0x68] = 0x10000;
+  }
+  param_2[0x69] = 0x50000;
+  ClearSplashes((tPhysics_object*)param_2);
+  return 1;
 }
 #pragma auto_inline(on)
 
@@ -4317,15 +5485,19 @@ int C2_HOOK_FASTCALL CBActiveHalted(tPed_character_instance* pCharacter, tPhysic
     return CBActiveHaltedInternal(pCharacter, pPhysics, 0);
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x0040c620
 void C2_HOOK_FASTCALL SetPedRetainRootMode(void) {
     gPed_retain_root_mode = 1;
 }
+#pragma auto_inline(on)
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x0040c630
 void C2_HOOK_FASTCALL ClearPedRetainRootMode(void) {
     gPed_retain_root_mode = 0;
 }
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x004d2930
 void C2_HOOK_FASTCALL CBMovedByPhysics(tPed_character_instance* pCharacter, tPhysics_object* pPhysics, undefined4 pArg3) {
@@ -4342,6 +5514,12 @@ void C2_HOOK_FASTCALL CBMovedByPhysics(tPed_character_instance* pCharacter, tPhy
 
     ped = pCharacter->ped;
     BrVector3Copy(&ped->pos, (br_vector3*)pPhysics->actor->t.t.mat.m[3]);
+#ifndef CARPOCALYPSE2_MATCHING
+    if (getenv("C2_PEDLOG") != NULL) {
+        dr_dprintf("PEDLOG %p M=%.4g v=%.4g,%.4g,%.4g pos=%.4g,%.4g,%.4g hp=%d wf=%.3g", pPhysics, pPhysics->M, pPhysics->v.v[0], pPhysics->v.v[1], pPhysics->v.v[2],
+            pPhysics->actor->t.t.mat.m[3][0], pPhysics->actor->t.t.mat.m[3][1], pPhysics->actor->t.t.mat.m[3][2], ped->hit_points, pPhysics->world_friction);
+    }
+#endif
     pCharacter->field_0xd8.v[0] = pPhysics->v.v[0];
     pCharacter->field_0xd8.v[1] = pPhysics->v.v[1];
     pCharacter->field_0xd8.v[2] = pPhysics->v.v[2];
@@ -4385,7 +5563,7 @@ void C2_HOOK_FASTCALL CBMovedByPhysics(tPed_character_instance* pCharacter, tPhy
         }
     }
 
-    if (!gPed_676914) {
+    if (!gAction_replay_mode) {
         PipeSinglePedPhysics((ped->field_0x06 << 16) | (ped - gPedestrian_array), GetCharacterMatrixPtr(pCharacter));
     }
 }
@@ -4473,7 +5651,7 @@ int C2_HOOK_FASTCALL CBMoveCompleted(tPed_character_instance* pCharacter) {
                 int bone_index;
                 tPed_character_instance* character;
 
-                ped->field_0x0c->field_0x1c = (const tPed_anim_seq*)0x65e4e0;
+                ped->field_0x0c->field_0x1c = &gPed_anim_sequence_0065e4e0;
                 ped->field_0x0c->field_0x78 = time;
                 ped->field_0x0c->field_0x1a = 0;
                 character = ped->character;
@@ -4591,24 +5769,22 @@ void C2_HOOK_FASTCALL CBDisposePersonality(tPed_personality* pPersonality) {
 
 // FUNCTION: CARMA2_HW 0x004cccc0
 void C2_HOOK_FASTCALL DoBloodSpurt(uintptr_t pArg1, int pArg2, int pArg3, br_vector3* pArg4, br_vector3* pArg5, br_vector3* pArg6) {
-    int old_rand;
+    int saved_random_seed;
     int i;
-    br_vector3* saved_pArg4;
+    tSmash_vertex* fragment;
+    float scale;
 
-    old_rand = rand();
+    saved_random_seed = rand();
     srand(pArg3);
     for (i = 0; i < gPed_spurty_lumps_count; i++) {
-        tSmash_vertex* fragment;
-
-        fragment = AllocateFragment(gPed_spurt_model, pArg1, 1);
-        if (fragment != NULL) {
-            float v;
-
-            v = PositionFragment(fragment->actor, &gPed_spurt_initial_position, 0, 0, 0, pArg4, pArg4, 0);
-            InitFragmentSpeed(fragment, &gPed_spurt_initial_speed, pArg5, v, gPed_spurt_min_max_time, pArg2, pArg6, 0, 0);
+        fragment = AcquireGlassFragment(gPed_spurt_model, pArg1, 1);
+        if (fragment == NULL) {
+            break;
         }
+        scale = FUN_004eb4a0(fragment->actor, &gPed_spurt_initial_position, 0, pArg4, pArg4, 0, NULL, 0);
+        FUN_004eb120(fragment, &gPed_spurt_initial_speed, pArg5, scale, gPed_spurt_min_max_time, pArg2, pArg6, NULL, NULL);
     }
-    srand(old_rand);
+    srand(saved_random_seed);
 }
 
 // FUNCTION: CARMA2_HW 0x004ca890
@@ -4617,24 +5793,37 @@ void C2_HOOK_FASTCALL DoVanishDismembered(uintptr_t pOwner, tS32 value) {
 }
 
 // FUNCTION: CARMA2_HW 0x004ccd70
-void C2_HOOK_FASTCALL DoBloodSpurtUndo(int pArg1, uintptr_t pArg2, int pArg3, undefined4 pArg4, br_vector3* pArg5, br_vector3* pArg6, br_vector3* pArg7) {
-    int old_rand;
+void C2_HOOK_FASTCALL DoBloodSpurtUndo(int pCurrent_time, uintptr_t pOwner, int pSpurt_time, tU32 pSeed, br_vector3* pPosition, br_vector3* pDirection, br_vector3* pRandom_direction) {
+    int saved_random_seed;
     int i;
+    tSmash_vertex* fragment;
+    float scale;
+    float time_since_spurt;
 
-    old_rand = rand();
-    srand((int)pArg4);
+    saved_random_seed = rand();
+    srand(pSeed);
     for (i = 0; i < gPed_spurty_lumps_count; i++) {
-        tSmash_vertex* fragment;
-
-        fragment = AllocateFragment(gPed_spurt_model, pArg2, 1);
-        if (fragment != NULL) {
-            float v;
-
-            v = PositionFragment(fragment->actor, &gPed_spurt_initial_position, 0, 0, 0, pArg5, pArg5, 0);
-            InitFragmentSpeed(fragment, &gPed_spurt_initial_speed, pArg6, v, gPed_spurt_min_max_time, (int)pArg4, pArg7, 0, 0);
+        fragment = AcquireGlassFragment(gPed_spurt_model, pOwner, 1);
+        if (fragment == NULL) {
+            break;
         }
+        scale = FUN_004eb4a0(fragment->actor, &gPed_spurt_initial_position, 0, pPosition, pPosition, 0, NULL, 0);
+        FUN_004eb120(fragment, &gPed_spurt_initial_speed, pDirection, scale, gPed_spurt_min_max_time, pSpurt_time, pRandom_direction, NULL, NULL);
     }
-    srand(old_rand);
+    srand(saved_random_seed);
+
+    time_since_spurt = (float)(pCurrent_time - pSpurt_time);
+    fragment = gSmash_glass_fragments;
+    i = CARPOCALYPSE2_ASIZE(gSmash_glass_fragments);
+    do {
+        if (fragment->end_time != 0 && fragment->field_0x18 == pOwner) {
+            fragment->field_0x34 = 0;
+            FUN_004eff30(fragment, GetTotalTime(), time_since_spurt);
+            fragment->field_0x34 = 1;
+        }
+        fragment++;
+        i--;
+    } while (i != 0);
 }
 
 // FUNCTION: CARMA2_HW 0x004cbbb0
@@ -4710,6 +5899,34 @@ tPed_remap* C2_HOOK_FASTCALL ReadRemap(const char *pFile_name) {
     return remap;
 }
 
+// FUNCTION: CARMA2_HW 0x004046d0
+void C2_HOOK_FASTCALL DisposeRemap(tPed_remap* pRemap) {
+
+    if (pRemap != NULL) {
+        if (pRemap->bones != NULL) {
+            BrMemFree(pRemap->bones);
+        }
+        BrMemFree(pRemap);
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x00404700
+void C2_HOOK_FASTCALL DisposeAllRemaps(void) {
+    tPed_remap** remap;
+    tPed_remap* the_remap;
+
+    for (remap = gPed_remaps; (int)remap < (int)&gPed_remaps[10]; remap++) {
+        the_remap = *remap;
+        if (the_remap != NULL) {
+            if (the_remap->bones != NULL) {
+                BrMemFree(the_remap->bones);
+            }
+            BrMemFree(the_remap);
+            *remap = NULL;
+        }
+    }
+}
+
 // FUNCTION: CARMA2_HW 0x004cbaa0
 FILE* C2_HOOK_FASTCALL BonerOpenPersonality(const char* pName) {
     tPath_name path;
@@ -4734,6 +5951,7 @@ FILE* C2_HOOK_FASTCALL BonerOpenCharacterForm(const char* pName) {
     return DRfopen(path, "rt");
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004cbb50
 FILE* C2_HOOK_FASTCALL BonerOpenMoves(const char* pName) {
     tPath_name path;
@@ -4743,7 +5961,9 @@ FILE* C2_HOOK_FASTCALL BonerOpenMoves(const char* pName) {
     PathCat(path, path, pName);
     return DRfopen(path, "rb");
 }
+#pragma auto_inline(on)
 
+// FUNCTION: CARMA2_HW 0x004cbc10
 void C2_HOOK_FASTCALL BonerReadPersonalityModels(const char* pName) {
     tPath_name path;
 
@@ -4772,11 +5992,13 @@ void C2_HOOK_FASTCALL RemapVector(br_vector3* pV, const tPed_remap_bone* pRemap)
     }
 }
 
+// FUNCTION: CARMA2_HW 0x00404740
 tPed_remap* C2_HOOK_FASTCALL FindOrOpenRemap(const char* pName) {
     int i;
+    tPed_remap** remap;
 
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gPed_remaps); i++) {
-        if (gPed_remaps[i] != NULL && strcmp(gPed_remaps[i]->name, pName) == 0) {
+    for (i = 0, remap = gPed_remaps; (int)remap < (int)&gPed_remaps[10]; remap++, i++) {
+        if (*remap != NULL && strcmp(pName, (*remap)->name) == 0) {
             return gPed_remaps[i];
         }
     }
@@ -4808,12 +6030,16 @@ void C2_HOOK_FASTCALL Flip3DStoBRaxes(br_matrix34* pMat) {
     pMat->m[3][2] = -f;
 }
 
+// FUNCTION: CARMA2_HW 0x00404840
 tPed_move* C2_HOOK_FASTCALL ReadMove(const char* pName, tPed_form* pForm, const char* pLooping_reset_flags, const br_vector3* pMovement_direction, tU32 pFlags) {
+    tS32 count_bones_in_anim_file;
     FILE* f;
     tPed_move* move;
+    tPed_move_frame* frame;
     int i;
     char bone_names[50][36];
-    tS32 count_bones_in_anim_file;
+    char* bone_name;
+    tPed_form_bone* form_bone;
     br_vector3 rot_pos;
     br_vector3 move_pos;
 
@@ -4836,20 +6062,25 @@ tPed_move* C2_HOOK_FASTCALL ReadMove(const char* pName, tPed_form* pForm, const 
     }
     count_bones_in_anim_file = ReadS32(f);
     move->count_frames = ReadS32(f);
-    for (i = 0; i < count_bones_in_anim_file; i++) {
-        PFfread(bone_names[i], 1, 33, f);
+    bone_name = (char*)bone_names;
+    for (i = count_bones_in_anim_file; i > 0; i--) {
+        PFfread(bone_name, 1, 33, f);
         PFfseek(f, sizeof(tU32) * ReadS32(f), SEEK_CUR);
+        bone_name += 0x24;
     }
     BrVector3Set(&move_pos, 0.f, 0.f, 0.f);
     move->frames = BrMemAllocate(move->count_frames * sizeof(tPed_move_frame), kMem_boner_type_frames);
-    for (i = 0; i < move->count_frames; i++) {
+    frame = move->frames;
+    for (i = 0; i < move->count_frames; i++, frame++) {
         int j;
 
-        move->frames[i].axis = BrMemAllocate(pForm->count_bones * sizeof(tPed_move_frame_axis), kBoner_mem_type_frame_2);
-        for (j = 0; j < count_bones_in_anim_file; j++) {
+        frame->axis = BrMemAllocate(pForm->count_bones * sizeof(tPed_move_frame_axis), kBoner_mem_type_frame_2);
+        bone_name = (char*)bone_names;
+        for (j = count_bones_in_anim_file; j > 0; j--) {
             br_matrix34 mat;
+            br_vector3 axis_swap;
+            float flip_component;
             int k = 0;
-            const char* bone_name_anim_file = bone_names[j];
 
             for (k = 0; k < 4; k++) {
                 int l;
@@ -4858,29 +6089,44 @@ tPed_move* C2_HOOK_FASTCALL ReadMove(const char* pName, tPed_form* pForm, const 
                     mat.m[k][l] = ReadF32(f);
                 }
             }
-            for (k = 0; k < pForm->count_bones; k++) {
-                if (strcmp(pForm->bones[k].name, bone_name_anim_file) == 0) {
+            for (k = 0, form_bone = pForm->bones; k < pForm->count_bones; k++, form_bone++) {
+                if (strcmp(form_bone->name, bone_name) == 0) {
                     br_euler e;
                     br_matrix34 mat_lp;
 
-                    Flip3DStoBRaxes(&mat);
+                    BrVector3Copy(&axis_swap, (br_vector3*)mat.m[1]);
+                    BrVector3Copy((br_vector3*)mat.m[1], (br_vector3*)mat.m[2]);
+                    BrVector3Negate((br_vector3*)mat.m[2], &axis_swap);
+                    flip_component = mat.m[0][1];
+                    mat.m[0][1] = mat.m[0][2];
+                    mat.m[0][2] = flip_component * gPed_axis_flip_sign;
+                    flip_component = mat.m[1][1];
+                    mat.m[1][1] = mat.m[1][2];
+                    mat.m[1][2] = flip_component * gPed_axis_flip_sign;
+                    flip_component = mat.m[2][1];
+                    mat.m[2][1] = mat.m[2][2];
+                    mat.m[2][2] = flip_component * gPed_axis_flip_sign;
+                    flip_component = mat.m[3][1];
+                    mat.m[3][1] = mat.m[3][2];
+                    mat.m[3][2] = flip_component * gPed_axis_flip_sign;
                     BrMatrix34LPNormalise(&mat_lp, &mat);
-                    if (pForm->bones[k].indices[0] == -1) {
-                        memmove(&move->frames[i].mat, &mat_lp, 9 * sizeof(float));
+                    if (form_bone->indices[0] == -1) {
+                        memcpy(&frame->mat, &mat_lp, 9 * sizeof(float));
                         if (i != 0) {
-                            BrVector3Sub((br_vector3*)move->frames[i].mat.m[3], (br_vector3*)mat_lp.m[3], &rot_pos);
-                            BrVector3Accumulate(&move_pos, (br_vector3*)move->frames[i].mat.m[3]);
+                            BrVector3Sub((br_vector3*)frame->mat.m[3], (br_vector3*)mat_lp.m[3], &rot_pos);
+                            BrVector3Accumulate(&move_pos, (br_vector3*)frame->mat.m[3]);
                         }
                         BrVector3Copy(&rot_pos, (br_vector3*)mat_lp.m[3]);
                     }
                     e.order = 0;
                     BrMatrix34ToEuler(&e, &mat_lp);
-                    move->frames[i].axis[k].euler1 = e.a / 256;
-                    move->frames[i].axis[k].euler2 = e.b / 256;
-                    move->frames[i].axis[k].euler3 = e.c / 256;
+                    frame->axis[k].euler1 = e.a / 256;
+                    frame->axis[k].euler2 = e.b / 256;
+                    frame->axis[k].euler3 = e.c / 256;
                     break;
                 }
             }
+            bone_name += 0x24;
         }
     }
     if (strchr(pLooping_reset_flags, 'X') != NULL) {
@@ -4953,6 +6199,7 @@ tPed_move* C2_HOOK_FASTCALL ReadMove(const char* pName, tPed_form* pForm, const 
     return move;
 }
 
+// FUNCTION: CARMA2_HW 0x004047b0
 tPed_move* C2_HOOK_FASTCALL FindOrOpenMove(const char* pName, tPed_form* pForm, const char* pLooping_reset_flags, const br_vector3* pMovement_direction, tU32 flags) {
     int i;
 
@@ -5296,12 +6543,13 @@ FILE* C2_HOOK_FASTCALL BonerOpenDefaultMoves(const char* pName) {
     return DRfopen(path, "rt");
 }
 
+// FUNCTION: CARMA2_HW 0x00406a40
 tPed_form* C2_HOOK_FASTCALL FindOrOpenForm(const char* pName) {
     int i;
 
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gPed_forms); i++) {
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gPed_forms); i++) {
         if (gPed_forms[i] != NULL) {
-            if (strcmp(gPed_forms[i]->name, pName) == 0) {
+            if (strcmp(pName, gPed_forms[i]->name) == 0) {
                 return gPed_forms[i];
             }
         }
@@ -5348,7 +6596,8 @@ br_model* C2_HOOK_FASTCALL BonerCloneModel(br_model *pModel, int pIndex, int pUp
     }
     for (i = 0; i < pModel->nfaces; i++) {
         if (pModel->faces[i].material == original_material) {
-            pModel->faces[i].material = cloned_material;
+            /* Retail 0x40701a writes through the cloned model's face array. */
+            clone->faces[i].material = cloned_material;
         }
     }
     if (pUpdateable) {
@@ -5640,7 +6889,7 @@ undefined4 C2_HOOK_FASTCALL MakeCharacterRenderable2(tPed_character_instance* pC
     personality = pCharacter->personality;
     form = personality->form;
     actor_set = &form->actor_sets[pIndex];
-    if (gPed_676914 == 0) {
+    if (gAction_replay_mode == 0) {
         actor_set->field_0x0 = 1;
     }
     pCharacter->field_0x4 = pIndex;
@@ -5695,6 +6944,28 @@ undefined4 C2_HOOK_FASTCALL MakeCharacterRenderable(tPed_character_instance* pCh
     return MakeCharacterRenderable2(pCharacter, i);
 }
 
+// FUNCTION: CARMA2_HW 0x00408580
+tPhysics_object* C2_HOOK_FASTCALL MakeCharacterPhysicsForBone(tPed_character_instance* pCharacter, int pBone_index, undefined4 pArg3, undefined4 pArg4) {
+    tPed_form* form;
+    int iVar1;
+    int iVar2;
+
+    form = pCharacter->personality->form;
+    iVar1 = (int)form->boned_physicing + (tS8)pCharacter->field_0x6 * 8;
+    pBone_index *= 4;
+    iVar2 = *(int*)((int)form->actor_sets + 4 + (tS8)pCharacter->field_0x4 * 8);
+    iVar2 = *(int*)(iVar2 + pBone_index);
+    iVar2 = MakeCharacterPhysics(pCharacter,
+        (tPhysics_object*)*(int*)(pBone_index + *(int*)(iVar1 + 4)),
+        (br_actor*)iVar2,
+        (void*)(*(int*)(iVar2 + 0x18) + 0x34),
+        NULL, 3, pArg3, pArg4, 0, NULL, NULL);
+    if (iVar2 != 0) {
+        return (tPhysics_object*)*(int*)(pBone_index + *(int*)(iVar1 + 4));
+    }
+    return NULL;
+}
+
 // FUNCTION: CARMA2_HW 0x004085f0
 int C2_HOOK_FASTCALL MakeCharacterPhysics(tPed_character_instance* pCharacter, tPhysics_object* obj, br_actor* actor, void* frame, br_vector3* bone_pos, int kind, undefined4 pArg3, int flag, int bone_index, br_vector3* bone_vec, br_vector3* bone_ptr) {
 
@@ -5713,7 +6984,7 @@ int C2_HOOK_FASTCALL MakeCharacterPhysics(tPed_character_instance* pCharacter, t
     BrVector3SetFloat(&obj->rotate_omega, 0.f, 0.f, 0.f);
     BrVector3SetFloat(&obj->velocity_car_space, 0.f, 0.f, 0.f);
     obj->uid = (tU8)bone_index;
-    obj->M = 1.f;
+    obj->world_friction = 1.f; /* retail 0x4086bb: [esi+0x60]; the mass at +4 keeps the form's bone mass */
     obj->last_special_volume = NULL;
     obj->auto_special_volume = NULL;
     if (kind == 1 || kind == 2) {
@@ -5857,7 +7128,7 @@ void C2_HOOK_FASTCALL MakeCharacterPhysicsSetup(tPhysics_object* obj, br_bounds3
     }
 }
 #pragma auto_inline(on)
-
+// C2PORT-NONMATCHING: best 38.96% | difftest PASS 2000 trials (spec difftest/specs/00408c30_MakeCharacterCollideworthy2.json) | reason regalloc-loop-shape
 // FUNCTION: CARMA2_HW 0x00408c30
 int C2_HOOK_FASTCALL MakeCharacterCollideworthy2(tPed_character_instance* pCharacter, int pArg2, undefined4 pArg3, int pArg4) {
     tPed_personality* personality;
@@ -5881,10 +7152,8 @@ int C2_HOOK_FASTCALL MakeCharacterCollideworthy2(tPed_character_instance* pChara
     int flag2;
     float joint_len;
 
-    if ((pCharacter->field_0x14 & 1) && pArg2 == 0) {
-        return 0x17;
-    }
-    if ((pCharacter->field_0x14 & 2) && pArg2 != 0) {
+    if (((pCharacter->field_0x14 & 1) && pArg2 == 0)
+            || ((pCharacter->field_0x14 & 2) && pArg2 != 0)) {
         return 0x17;
     }
 
@@ -5924,8 +7193,6 @@ int C2_HOOK_FASTCALL MakeCharacterCollideworthy2(tPed_character_instance* pChara
         if (slot != count) {
             flag = 1;
             flag2 = 0;
-            joint_len = 0.f;
-            bone_ptr = NULL;
 
             pCharacter->field_0x14 = 2;
             pCharacter->field_0x5 = (tU8)slot;
@@ -5943,10 +7210,13 @@ int C2_HOOK_FASTCALL MakeCharacterCollideworthy2(tPed_character_instance* pChara
                         } else {
                             cinfos[i]->physics_joint1 = NULL;
                         }
-                        for (j = 0; j < form->count_bones; j++) {
-                            if (form->bones[j].indices[0] == i) {
-                                bone_ptr = &personality->bones[j].field_0x2c;
-                                break;
+                        {
+                            char* bone_data = (char*)form->bones + 0x28;
+                            for (j = 0; j < form->count_bones; j++, bone_data += 0x34) {
+                                if (*bone_data == i) {
+                                    bone_ptr = &personality->bones[j].field_0x2c;
+                                    break;
+                                }
                             }
                         }
                         actor = form->actor_sets[(tS8)pCharacter->field_0x4].actors[i];
@@ -6085,74 +7355,140 @@ void C2_HOOK_FASTCALL KillPedestrian(tPedestrian* pPed, tPhysics_object* pCollis
     ScoreForKilledPedestrian(pPed CARPOCALYPSE2_THISCALL_EDX, 0);
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004cc6e0
 void C2_HOOK_FASTCALL DoPostElectricution(tPedestrian* pPed, tU32 pTime, float pF1, float pF2) {
-    (void)pF1;
-    (void)pF2;
+    tPed_character_instance* character;
+    tPhysics_object* physics;
+    int head_bone;
+    int pose;
+
     if (pPed->hit_points > 0) {
         SetPedMove(pPed, 0x5d, -1, 0, 0, pTime, 5);
+        if (pPed->hit_points > 0 && pPed->field_0x0c != NULL) {
+            pPed->field_0x0c->field_0x1c = &gPed_anim_sequence_0065e4e0;
+            pPed->field_0x0c->field_0x78 = pTime;
+            pPed->field_0x0c->field_0x1a = 0;
+            character = pPed->character;
+            pose = pPed->field_0x0c->field_0x1c->poses[0];
+            head_bone = character->personality->form->index_head_bone;
+            if (character->field_0x4 >= 0) {
+                if (head_bone < 0) {
+                    PipeSinglePedModelChange(character->ped, head_bone, NULL, -1, GetCharacterModelSet(character), 0);
+                    SetCharacterAllBonesModel(character, pose, 0);
+                } else {
+                    PipeSinglePedModelChange(character->ped, head_bone, GetCharacterBoneModel(character, head_bone),
+                        pose, GetCharacterModelSet(character), 0);
+                    SetCharacterBoneModel(character, head_bone, pose, 0);
+                }
+            }
+        }
     } else {
         SetPedMove(pPed, 0x5e, -1, 0, 0, pTime, 5);
     }
-    return;
-}
-
-// FUNCTION: CARMA2_HW 0x004cd880
-void C2_HOOK_FASTCALL MakePedNoise(tPedestrian* pPed, int pArg2, int pArg3, tPhysics_object* pCollision_info) {
-
-    NOT_IMPLEMENTED();
-}
-
-#pragma auto_inline(off)
-// UNLABELED: CARMA2_HW 0x004c8c30
-void C2_HOOK_FASTCALL FUN_004c8c30(tPedestrian* pPed, float pSpeed, float pX) {
-    NOT_IMPLEMENTED();
-}
-
-// FUNCTION: CARMA2_HW 0x004d1c60
-void C2_HOOK_FASTCALL SetCharacterMoveAR(tPed_character_instance* pCharacter, int pMove_action, float pSpeed, undefined4 pArg4, undefined4 pArg5, tU32 pTime) {
-    br_matrix34* mat;
-    br_vector3 trans;
-    float speed;
-    int move_id;
-    int f1c;
-    int f1e;
-
-    if (gPed_676914 != 0) {
-        if (gBOOL_00744804 == 0) {
-            return;
-        }
+    if ((pPed->character->field_0x14 & 4) == 0) {
+        ((void (C2_HOOK_CDECL *)(tPed_character_instance*, int))SetCharacterPhysicsLevelAR)(pPed->character, 5);
     }
-    speed = pSpeed;
-    if (speed != 0.0f) {
-        goto SKIP_ZERO;
+    character = pPed->character;
+    physics = character->personality->form->simple_physicing[(tS8)character->field_0x5].collision_info;
+    if (physics != NULL) {
+        pF1 *= gPed_electrocution_velocity_scale;
+        physics->v.v[0] = SRandomPosNeg(pF1);
+        physics->v.v[1] = SRandomBetween(0.f, pF1);
+        physics->v.v[2] = SRandomPosNeg(pF1);
+        pF1 = pF2 * gPed_electrocution_spin_scale;
+        physics->omega.v[0] = SRandomPosNeg(pF1);
+        physics->omega.v[1] = SRandomPosNeg(pF1);
+        physics->omega.v[2] = SRandomPosNeg(pF1);
+        physics->disable_move_rotate = 0;
+        physics->field_0x49c = gPHIL_last_physics_tick + 0x28;
     }
-    speed = 0.0f;
-SKIP_ZERO:
-    mat = GetCharacterMatrixPtr(pCharacter);
-    trans.v[0] = mat->m[3][0];
-    trans.v[1] = mat->m[3][1];
-    trans.v[2] = mat->m[3][2];
-    move_id = pCharacter->personality->form->moves[(int)pCharacter->field_0x7].id;
-    f1c = (tS16)pCharacter->field_0x1c;
-    f1e = (tS16)pCharacter->field_0x1e;
-    SetCharacterMove(pCharacter, pMove_action, speed, pArg4, pArg5, pTime);
-    if (pMove_action != -1) {
-        goto SECOND_PATH;
-    }
-    FUN_004c8c30(pCharacter->ped, speed, (float)(int)pArg4);
-    return;
-SECOND_PATH:
-    PipeSinglePedMove(pCharacter->ped, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, 0, 0, NULL);
 }
 #pragma auto_inline(on)
 
 #pragma auto_inline(off)
+// FUNCTION: CARMA2_HW 0x004cd880
+void C2_HOOK_FASTCALL MakePedNoise(tPedestrian* pPed, int pArg2, int pArg3, tPhysics_object* pCollision_info) {
+    tU16* sound_group;
+    int sound_id;
+    int sound_index;
+    int sound_offset;
+
+    if (pPed->field_0x0c != NULL) {
+        if (pPed->field_0x0c->field_0x9c != 0 && pPed->field_0x0c->field_0xa0 >= 0
+                && DRS3SoundStillPlaying(pPed->field_0x0c->field_0x9c)) {
+            if (pPed->field_0x0c->field_0xa0 == pArg2) {
+                return;
+            }
+            if (gUNK_0065d758[pArg2] != 0) {
+                return;
+            }
+            if (gUNK_0065d758[pPed->field_0x0c->field_0xa0] == 0) {
+                return;
+            }
+            DRS3StopSound(pPed->field_0x0c->field_0x9c);
+            pPed->field_0x0c->field_0x9c = 0;
+        }
+        sound_offset = pArg2 * 3;
+        pPed->field_0x0c->field_0x20 = (tU8)pArg3;
+        pPed->field_0x0c->field_0xa0 = pArg2;
+        sound_group = (tU16*)pPed->character->personality->sounds->sounds + sound_offset * 2;
+        sound_index = IRandomBetween(0, sound_group[0] - 1);
+        sound_id = sound_group[sound_index + 1];
+        if (pCollision_info != NULL && pCollision_info->owner != NULL
+                && pCollision_info->flags_0x238 == 1
+                && *(int*)((tU8*)pCollision_info->owner + 0xc) == 8) {
+            pPed->field_0x0c->field_0x9c = DRS3StartSound2(gPedestrians_outlet, sound_id, pArg3 == 0, 0xff, 0xff,
+                    (int)(gConst_ped_sound_pitch / gAverage_ped_scale), 0x10000);
+        } else {
+            pPed->field_0x0c->field_0x9c = DRS3StartSound3D(gPedestrians_outlet, sound_id, &pPed->pos, &gZero_v__car,
+                    pArg3 == 0, 0xff, (int)(gConst_ped_sound_pitch / gAverage_ped_scale), 0x10000);
+        }
+    }
+}
+#pragma auto_inline(on)
+
+#pragma auto_inline(off)
+// FUNCTION: CARMA2_HW 0x004d1c60
+void C2_HOOK_FASTCALL SetCharacterMoveAR(tPed_character_instance* pCharacter, int pMove_action, float pSpeed, undefined4 pArg4, undefined4 pArg5, tU32 pTime) {
+    br_matrix34* character_matrix;
+    br_vector3 original_pos;
+    int original_frame;
+    float original_time;
+    int original_move_id;
+
+    if (gAction_replay_mode != 0 && gBOOL_00744804 == 0) {
+        return;
+    }
+    if (pSpeed == gConst_replay_rate_zero) {
+        pSpeed = 0.f;
+    }
+    character_matrix = GetCharacterMatrixPtr(pCharacter);
+    original_pos.v[0] = character_matrix->m[3][0];
+    original_pos.v[1] = character_matrix->m[3][1];
+    original_pos.v[2] = character_matrix->m[3][2];
+    original_move_id = pCharacter->personality->form->moves[pCharacter->field_0x7].id;
+    original_frame = (tS16)pCharacter->field_0x1c;
+    original_time = (tS16)pCharacter->field_0x1e;
+    SetCharacterMove(pCharacter, pMove_action, pSpeed, pArg4, pArg5, pTime);
+    if (pMove_action == -1) {
+        PipeSinglePedMoveStatus(pCharacter->ped, (float)(tS16)pCharacter->field_0x1e, pSpeed);
+    } else {
+        PipeSinglePedMove(pCharacter->ped, original_frame, original_move_id, pMove_action,
+            *(undefined4*)&original_time, *(undefined4*)&pSpeed, pArg5, pArg4, &original_pos, (br_vector3*)character_matrix->m[3],
+            -1, -1, &pCharacter->field_0x8c);
+    }
+
+}
+#pragma auto_inline(on)
+
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 81.69% | difftest PASS 2000 trials (spec difftest/specs/004ce050_DoPedAnnihilator.json) | reason VC5 register allocation and loop layout differ; NULL-car path not sampled
 // FUNCTION: CARMA2_HW 0x004ce050
 void C2_HOOK_FASTCALL DoPedAnnihilator(tPedestrian* pPed, tCar_spec* pCar, float pDist_sq, tU32 pNow, void* pData) {
+    int i;
 
     (void)pDist_sq;
-    (void)pNow;
     (void)pData;
     pPed->field_0x0c->field_0xc0 = pCar;
     if (pCar != NULL && pCar->driver == eDriver_local_human) {
@@ -6160,22 +7496,97 @@ void C2_HOOK_FASTCALL DoPedAnnihilator(tPedestrian* pPed, tCar_spec* pCar, float
     }
     if (!gImmortal_peds) {
         KillPedestrian(pPed, pCar->collision_info);
+        SetPedMove(pPed, 113, -1, 0, 1, pNow, 6);
     }
-    /* TODO: SetPedMove(113/113?), sounds, 0x694148 incident array */
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(gProximity_rays); i++) {
+        if (gProximity_rays[i].start_time == 0) {
+            break;
+        }
+    }
+    if (i == CARPOCALYPSE2_ASIZE(gProximity_rays)) {
+        return;
+    }
+    gProximity_rays[i].start_time = GetTotalTime();
+    gProximity_rays[i].car = pCar;
+    gProximity_rays[i].ped = pPed;
+    if (pCar != NULL && pCar->driver == eDriver_local_human) {
+        DRS3StartSound(gEffects_outlet, 0x157c);
+        return;
+    }
+    DRS3StartSound3D(gEffects_outlet, 0x157c, &pCar->pos, &gZero_v__car, 1, 0xff, 0x10000, 0x10000);
 }
 #pragma auto_inline(on)
 
 #pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 41.99% | difftest PASS 2000 trials (spec difftest/specs/004ce330_RepulseIt.json) | reason VC5 x87 scheduling and register allocation
 // FUNCTION: CARMA2_HW 0x004ce330
 void C2_HOOK_FASTCALL RepulseIt(tPedestrian* pPed, tCar_spec* pCar, float pDist_sq, tU32 pNow, void* pData) {
+    tPhysics_object* physics;
+    float dx;
+    float dy;
+    float dz;
+    float distance;
+    float inverse_distance;
+    float force;
+    float impulse;
+    float impulse_x;
+    float impulse_y;
+    float impulse_z;
+    float random_omega;
+    float random_x;
+    float random_y;
+    float random_z;
     int speed;
 
-    (void)pDist_sq;
-    (void)pNow;
-    (void)pData;
+    pPed->field_0x0c->field_0xc0 = pCar;
     speed = IRandomBetween(0x4b, 0xc8);
     SetPedFall(pPed, speed, 0x5b, 0x5b, NULL);
-    /* TODO: velocity push from pData (car-pos delta normalized, force params) + random omega, like RepulseOpponents2 */
+    if ((pPed->character->field_0x14 & 4) == 0) {
+        ((void (C2_HOOK_CDECL *)(tPed_character_instance*, int))SetCharacterPhysicsLevelAR)(pPed->character, 5);
+    }
+
+    dy = pPed->pos.v[1] - pCar->pos.v[1];
+    dx = pPed->pos.v[0] - pCar->pos.v[0];
+    dz = pPed->pos.v[2] - pCar->pos.v[2];
+    distance = sqrt(BR_ADD(BR_ADD(BR_SQR(dx), BR_SQR(dy)), BR_SQR(dz)));
+    physics = GET_PED_COLLISION_OBJECT(pPed);
+    force = BR_MUL((((float*)pData)[3] - pDist_sq) / ((float*)pData)[3], gPed_fall_speed_mass_scale) / physics->M;
+
+    if (distance <= gPed_direction_length_epsilon) {
+        dx = gFLOAT_0058a9d8;
+        dy = gConst_replay_rate_zero;
+        dz = gConst_replay_rate_zero;
+    } else {
+        inverse_distance = gPed_kill_min_height / distance;
+        dx = BR_MUL(inverse_distance, dx);
+        dy = BR_MUL(inverse_distance, dy);
+        dz = BR_MUL(inverse_distance, dz);
+    }
+    if (fabs((double)dy) < gPed_repulse_y_epsilon) {
+        dy = ((float*)pData)[2];
+    }
+
+    impulse = BR_MUL(force, ((float*)pData)[0]);
+    impulse_x = BR_MUL(dx, impulse);
+    impulse_y = BR_MUL(dy, impulse);
+    impulse_z = BR_MUL(dz, impulse);
+    physics->v.v[0] = BR_ADD(physics->v.v[0], impulse_x);
+    physics->v.v[1] = BR_ADD(physics->v.v[1], impulse_y);
+    physics->v.v[2] = BR_ADD(physics->v.v[2], impulse_z);
+    random_omega = BR_MUL(((float*)pData)[1], force);
+    random_x = FRandomPosNeg(random_omega);
+    random_y = FRandomPosNeg(random_omega);
+    random_z = FRandomPosNeg(random_omega);
+    physics->omega.v[0] = BR_ADD(physics->omega.v[0], random_x);
+    physics->omega.v[1] = BR_ADD(physics->omega.v[1], random_y);
+    physics->omega.v[2] = BR_ADD(physics->omega.v[2], random_z);
+    physics->disable_move_rotate = 0;
+    physics->field_0x49c = gPHIL_last_physics_tick + 0x28;
+    AddRepulseLink(pNow, pCar, 0, &pCar->pos, &pPed->pos, 0.03f, 0.05f);
+    pPed->field_0x0c->field_0x8c = pNow;
+    if (pCar != NULL && pCar->driver == 8) {
+        PipeSinglePedIncident(pPed, pCar->collision_info->actor);
+    }
 }
 #pragma auto_inline(on)
 
@@ -6214,87 +7625,416 @@ int C2_HOOK_FASTCALL FindPedestrianNearCar(tCar_spec* car, br_scalar radius) {
     return DoToPeds(car, 1, radius, 1, NULL, (tForEachPedestrian_cbfn*)DoPedAnnihilator);
 }
 
+// FUNCTION: CARMA2_HW 0x004ce7b0
+int C2_HOOK_CDECL ComparePedestrianDistances(const void* pA, const void* pB) {
+    return *(const float*)pA - *(const float*)pB;
+}
+
+// C2PORT-NONMATCHING: best 58.64% | difftest PASS 2000 trials (spec difftest/specs/004ce560_NapalmPedestrianNearCar.json) | reason VC5 stack layout and register allocation
 // FUNCTION: CARMA2_HW 0x004ce560
 int C2_HOOK_FASTCALL NapalmPedestrianNearCar(tCar_spec* car) {
+    tSpecial_volume* special_volume;
+    int result;
+    int i;
+    int bolt_index;
+    tNapalm_bolt* bolt;
+    tPedestrian* ped;
+    tPhysics_object* collision_info;
+    int local_distance_buffer[201];
+    tPedestrian_distances* distances;
 
-    NOT_IMPLEMENTED();
+    special_volume = car->collision_info->last_special_volume;
+    if (special_volume != NULL && special_volume->gravity_multiplier < gFLOAT_0058a9d8) {
+        return 0;
+    }
+    {
+        bolt_index = 0;
+        for (; bolt_index < CARPOCALYPSE2_ASIZE(gNapalm_bolts); bolt_index++) {
+            if (gNapalm_bolts[bolt_index].ped == NULL) {
+                break;
+            }
+        }
+        if (bolt_index < CARPOCALYPSE2_ASIZE(gNapalm_bolts)) {
+            distances = (tPedestrian_distances*)local_distance_buffer;
+            distances->count = 0;
+            result = DoToPeds(car, 1, 0.f, 1, distances, (tForEachPedestrian_cbfn*)AddPedToDistanceList);
+            ped = NULL;
+            if (result != 0) {
+                qsort(distances->entries, distances->count, sizeof(distances->entries[0]), ComparePedestrianDistances);
+                if (distances->count > 0) {
+                    for (i = 0; i < distances->count; i++) {
+                        ped = distances->entries[i].ped;
+                        collision_info = GET_PED_COLLISION_OBJECT(ped);
+                        if (collision_info->last_special_volume == NULL) {
+                            break;
+                        }
+                        collision_info = GET_PED_COLLISION_OBJECT(ped);
+                        if (gFLOAT_0058a9d8 <= collision_info->last_special_volume->gravity_multiplier) {
+                            break;
+                        }
+                        ped = NULL;
+                    }
+                }
+            }
+            if (ped != NULL) {
+                bolt = &gNapalm_bolts[bolt_index];
+                ped->field_0x0c->field_0x98 = ((int)&gNapalm_bolts - (int)bolt) / 0x6c - 1;
+                bolt->field_0x28 = GetTotalTime();
+                bolt->field_0x24 = 0;
+                bolt->field_0x20 = 1;
+                bolt->ped = ped;
+                bolt->field_0x68 = car;
+                bolt->field_0x2c[0].v[0] = 0.f;
+                bolt->field_0x2c[0].v[1] = 0.f;
+                bolt->field_0x2c[0].v[2] = 0.f;
+                bolt->actors[0]->t.t.translate.t.v[0] = car->pos.v[0];
+                bolt->actors[0]->t.t.translate.t.v[1] = car->pos.v[1];
+                bolt->actors[0]->t.t.translate.t.v[2] = car->pos.v[2];
+                if (car != NULL && car->driver == eDriver_local_human) {
+                    DRS3StartSound(gCar_outlet, 0xe75);
+                } else {
+                    DRS3StartSound3D(gCar_outlet, 0xe75, &car->pos, &gZero_v__car, 1, 0xff, 0x10000, 0x10000);
+                }
+                return 1;
+            }
+        }
+    }
     return 0;
 }
 
 // FUNCTION: CARMA2_HW 0x0045c6b0
-void C2_HOOK_FASTCALL TriggerPedestrianReaction(void* pData, int pArg2) {
+void C2_HOOK_FASTCALL TriggerPedestrianReaction(const char* pEffect_name, int pArg2) {
+    int effect_index;
+    void* effect;
 
-    NOT_IMPLEMENTED();
+    if (gForceFeedbackAvailable == 0) {
+        return;
+    }
+    effect_index = PDFindJoystickEffect(pEffect_name);
+    if (effect_index == -1) {
+        return;
+    }
+    if (gCurrent_joystick_effect_index != -1) {
+        if (gCurrent_joystick_effect_index != effect_index) {
+            StopDinputEffect(gCurrent_joystick_effect_index);
+            UnloadDinputFFBEffectAtIndex(gCurrent_joystick_effect_index);
+            gCurrent_joystick_effect_index = -1;
+        }
+        if (gCurrent_joystick_effect_index != -1) {
+            effect = FUN_00458430(gCurrent_joystick_effect_index);
+            if (pArg2 == 0 && effect != NULL && *(int*)((tU8*)effect + 8) == -1) {
+                return;
+            }
+        }
+    }
+    gCurrent_joystick_effect_index = effect_index;
+    StartDinputEffect(effect_index);
 }
 #pragma auto_inline(on)
 
+#pragma auto_inline(off)
+// FUNCTION: CARMA2_HW 0x004d2060
+void C2_HOOK_FASTCALL CachePedestrianFaces(tPedestrian* pPed, int pArg2, int pCache_key) {
+    tPed_face_bounds_context bounds_context;
+    br_matrix34* character_matrix;
+    tPed_face_cache_0x34* face_cache;
+    tPed_face_cache_0x34* head;
+    int* cache_size;
+    int face_count;
+    int cache_index;
+
+    C2_HOOK_BUG_ON(sizeof(tPed_face_cache_0x34) != 0x34);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tPed_face_bounds_context, bounds, 0x30);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tPed_face_cache_0x34, bounds, 0x18);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tPed_face_cache_0x34, field_0x30, 0x30);
+
+    if ((tS8)pPed->hit_points <= 0 && gBOOL_00744804 == 0) {
+        SetPedMove(pPed, 0x5e, -1, 0, 1, GetTotalTime(), 6);
+        return;
+    }
+
+    character_matrix = GetCharacterMatrixPtr(pPed->character);
+    bounds_context.matrix.m[0][0] = pPed->character->field_0x5c.m[0][0];
+    bounds_context.matrix.m[0][1] = pPed->character->field_0x5c.m[0][1];
+    bounds_context.matrix.m[0][2] = pPed->character->field_0x5c.m[0][2];
+    bounds_context.matrix.m[1][0] = pPed->character->field_0x5c.m[1][0];
+    bounds_context.matrix.m[1][1] = pPed->character->field_0x5c.m[1][1];
+    bounds_context.matrix.m[1][2] = pPed->character->field_0x5c.m[1][2];
+    bounds_context.matrix.m[2][0] = pPed->character->field_0x5c.m[2][0];
+    bounds_context.matrix.m[2][1] = pPed->character->field_0x5c.m[2][1];
+    bounds_context.matrix.m[2][2] = pPed->character->field_0x5c.m[2][2];
+    bounds_context.matrix.m[3][0] = character_matrix->m[3][0];
+    bounds_context.matrix.m[3][1] = character_matrix->m[3][1];
+    bounds_context.matrix.m[3][2] = character_matrix->m[3][2];
+
+    bounds_context.bounds.mat = &bounds_context.matrix;
+    bounds_context.bounds.original_bounds.min.v[0] = gPed_face_bounds_min_x;
+    bounds_context.bounds.original_bounds.min.v[1] = (br_scalar)(gPed_face_bounds_vertical_margin - pPed->character->personality->jump_height);
+    bounds_context.bounds.original_bounds.min.v[2] = gPed_face_bounds_min_z;
+    bounds_context.bounds.original_bounds.max.v[0] = gPed_face_bounds_max_x;
+    bounds_context.bounds.original_bounds.max.v[1] = (br_scalar)(pPed->character->personality->jump_height - gPed_face_bounds_vertical_margin);
+    bounds_context.bounds.original_bounds.max.v[2] = gPed_face_bounds_max_z;
+    FillInBounds(&bounds_context.bounds);
+
+    bounds_context.bounds.original_bounds.min.v[0] = bounds_context.bounds.real_bounds.min.v[0];
+    bounds_context.bounds.original_bounds.min.v[1] = bounds_context.bounds.real_bounds.min.v[1];
+    bounds_context.bounds.original_bounds.min.v[2] = bounds_context.bounds.real_bounds.min.v[2];
+    bounds_context.bounds.original_bounds.max.v[0] = bounds_context.bounds.real_bounds.max.v[0];
+    bounds_context.bounds.original_bounds.max.v[1] = bounds_context.bounds.real_bounds.max.v[1];
+    bounds_context.bounds.original_bounds.max.v[2] = bounds_context.bounds.real_bounds.max.v[2];
+    bounds_context.bounds.mat = (br_matrix34*)&gPed_face_bounds_identity;
+    face_count = FindFacesInBox(&bounds_context.bounds, gPed_face_cache, gPed_cache_sizes_2[3] + 1, &gWorld_callbacks);
+    if (face_count > gPed_cache_sizes_2[3]) {
+        gPed_face_cache_flags |= 2;
+        face_count = gPed_cache_sizes_2[3];
+    }
+
+    cache_index = 0;
+    cache_size = gPed_cache_sizes_2;
+    do {
+        if (face_count <= *cache_size) {
+            break;
+        }
+        cache_size++;
+        cache_index++;
+    } while (cache_size < &gPed_cache_sizes_2[3]);
+
+    face_cache = pPed->field_0x0c->field_0xb0;
+    if (face_cache == NULL || face_cache->count != gPed_cache_sizes_2[cache_index]) {
+        if (face_cache != NULL) {
+            face_cache->field_0x14 = NULL;
+        }
+        face_cache = gPed_face_caches[cache_index];
+        if (face_cache->field_0x14 != NULL) {
+            face_cache->field_0x14->field_0x0c->field_0xb0 = NULL;
+            if (face_cache->field_0x8 == pCache_key) {
+                gPed_face_cache_flags |= 1;
+            }
+        }
+    }
+
+    head = gPed_face_caches[cache_index];
+    if (face_cache == head) {
+        gPed_face_caches[cache_index] = head->next;
+    } else {
+        face_cache->next->prev = face_cache->prev;
+        face_cache->prev->next = face_cache->next;
+        face_cache->prev = head->prev;
+        face_cache->next = head;
+        head->prev->next = face_cache;
+        head->prev = face_cache;
+    }
+
+    memcpy(face_cache->field_0x0, gPed_face_cache, face_count * sizeof(tFace_ref));
+    face_cache->field_0x8 = pCache_key;
+    face_cache->field_0x14 = pPed;
+    face_cache->field_0x4 = (tU8)face_count;
+    face_cache->bounds = bounds_context.bounds.real_bounds;
+    pPed->field_0x0c->field_0xb0 = face_cache;
+
+    if (pPed->field_0x0c != NULL) {
+        face_cache = pPed->field_0x0c->field_0xb0;
+        character_matrix = GetCharacterMatrixPtr(pPed->character);
+        face_cache->field_0x30 = FUN_004618e0((br_vector3*)character_matrix->m[3], face_cache->field_0x0,
+                face_cache->field_0x4, GetClearanceFromCharacterInstance(pPed->character, 0), pArg2);
+    }
+}
+#pragma auto_inline(on)
+
+// GLOBAL: CARMA2_HW 0x0058aae0
+double gPed_face_cache_margin = -0.21739130434782608;
+
+// GLOBAL: CARMA2_HW 0x0058aae8
+double gPed_face_normal_threshold = 0.99;
+
+// C2PORT-NONMATCHING: best 29.91% | difftest PASS 2000 trials (spec difftest/specs/004d1d70_RecacheAndSetFace.json) | reason x87 polygon-test order and stack layout
 // FUNCTION: CARMA2_HW 0x004d1d70
 tPed_face_cache_0x34* C2_HOOK_FASTCALL RecacheAndSetFace(tPedestrian* pPed, int* pArg2, int* pArg3, br_vector3* pArg4, int pArg5, tU32 pTime) {
     br_matrix34* mat;
-    tPed_face_cache_0x34* face_cache;
     tPed_cache_006944c0* cache_slot;
+    tPed_face_cache_0x34* face_cache;
+    tFace_ref* face;
     br_vector3* pos;
-    float dx, dy, dz;
-    int i;
-
-    mat = GetCharacterMatrixPtr(pPed->character);
-    pos = (br_vector3*)mat->m[3];
-
-    cache_slot = (tPed_cache_006944c0*)pPed->field_0x0c;
-    face_cache = cache_slot ? cache_slot->field_0xb4 : NULL;
-
-    if (face_cache != NULL && face_cache->field_0x18 != NULL) {
-        dx = pos->v[0] - (face_cache->field_0x18->min.v[0] + face_cache->field_0x18->max.v[0]) * 0.5f;
-        dy = pos->v[1] - (face_cache->field_0x18->min.v[1] + face_cache->field_0x18->max.v[1]) * 0.5f;
-        dz = pos->v[2] - (face_cache->field_0x18->min.v[2] + face_cache->field_0x18->max.v[2]) * 0.5f;
-
-        if (dx > -0.217391f && dx < 0.217391f
-                && dy > -0.217391f && dy < 0.217391f
-                && dz > -0.217391f && dz < 0.217391f) {
-            return face_cache;
-        }
-    }
+    float f1;
+    float f2;
+    float f3;
+    float f4;
+    float f5;
+    float f6;
+    float f7;
+    float f8;
+    int inside;
 
     *pArg2 = 0;
     *pArg3 = 0;
+    mat = GetCharacterMatrixPtr(pPed->character);
+    pos = (br_vector3*)mat->m[3];
+    cache_slot = (tPed_cache_006944c0*)pPed->field_0x0c;
+    face_cache = cache_slot->field_0xb0;
 
-    if (pArg4 != NULL) {
-        BrVector3Copy(pArg4, pos);
-    }
-
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gPed_face_caches); i++) {
-        tPed_face_cache_0x34* head = gPed_face_caches[i];
-        if (head != NULL && head->field_0x14 == 0) {
-            face_cache = head;
-            gPed_face_caches[i] = head->next;
-            face_cache->next = NULL;
-            face_cache->prev = NULL;
-            face_cache->field_0x14 = (tPedestrian*)pPed;
-            face_cache->field_0x30 = NULL;
-            if (cache_slot != NULL) {
-                cache_slot->field_0xb4 = face_cache;
+    if (pArg5 != 0 || face_cache == NULL
+            || gPed_face_cache_margin < pos->v[0] - face_cache->bounds.max.v[0]
+            || gPed_face_cache_margin < pos->v[1] - face_cache->bounds.max.v[1]
+            || gPed_face_cache_margin < pos->v[2] - face_cache->bounds.max.v[2]
+            || gPed_face_cache_margin < face_cache->bounds.min.v[0] - pos->v[0]
+            || gPed_face_cache_margin < face_cache->bounds.min.v[1] - pos->v[1]
+            || gPed_face_cache_margin < face_cache->bounds.min.v[2] - pos->v[2]) {
+        CachePedestrianFaces(pPed, (int)pArg4, pTime);
+        face_cache = cache_slot->field_0xb0;
+        *pArg2 = face_cache != NULL;
+        *pArg3 = 1;
+    } else {
+        face = face_cache->field_0x30;
+        inside = 1;
+        if (face != NULL) {
+            f6 = face->v[1].v[0] - face->v[0].v[0];
+            f3 = face->v[1].v[2] - face->v[0].v[2];
+            f8 = face->v[2].v[2] - face->v[0].v[2];
+            f7 = face->v[2].v[0] - face->v[0].v[0];
+            f4 = pos->v[2] - face->v[0].v[2];
+            f5 = pos->v[0] - face->v[0].v[0];
+            if ((gConst_replay_rate_zero <= (f6 * f8 - f3 * f7) * (f6 * f4 - f3 * f5))
+                    && (gConst_replay_rate_zero <= (f7 * f3 - f8 * f6) * (f7 * f4 - f8 * f5))) {
+                f3 = face->v[2].v[0] - face->v[1].v[0];
+                f4 = face->v[2].v[2] - face->v[1].v[2];
+                inside = ((face->v[0].v[2] - face->v[1].v[2]) * f3
+                        - (face->v[0].v[0] - face->v[1].v[0]) * f4)
+                        * ((pos->v[2] - face->v[1].v[2]) * f3
+                        - (pos->v[0] - face->v[1].v[0]) * f4) < gConst_replay_rate_zero;
+            }
+        }
+        if (inside) {
+            if (pPed->field_0x0c != NULL) {
+                mat = GetCharacterMatrixPtr(pPed->character);
+                face_cache->field_0x30 = FUN_004618e0((br_vector3*)mat->m[3], face_cache->field_0x0,
+                        face_cache->field_0x4, GetClearanceFromCharacterInstance(pPed->character, 0), pArg4);
             }
             *pArg2 = 1;
-            return face_cache;
+            face = face_cache->field_0x30;
+            if (face == NULL
+                    || face->normal.v[0] * cache_slot->field_0x00.v[0]
+                        + cache_slot->field_0x00.v[2] * face->normal.v[2]
+                        + cache_slot->field_0x00.v[1] * face->normal.v[1] < gPed_face_normal_threshold) {
+                *pArg3 = 1;
+            }
         }
     }
-
-    face_cache = gPed_face_caches[0];
-    if (face_cache != NULL) {
-        gPed_face_caches[0] = face_cache->next;
-        face_cache->next = NULL;
-        face_cache->prev = NULL;
-        face_cache->field_0x14 = (tPedestrian*)pPed;
-        face_cache->field_0x30 = NULL;
-        if (cache_slot != NULL) {
-            cache_slot->field_0xb4 = face_cache;
-        }
-        *pArg2 = 1;
-    }
-
     return face_cache;
 }
 
+#pragma auto_inline(off)
+// FUNCTION: CARMA2_HW 0x0040b860
+int C2_HOOK_FASTCALL MakeCharacterBonePhysicworthy(tPed_character_instance* pCharacter, int pBone_index, br_vector3* pVelocity, br_vector3* pOmega) {
+    tPed_form* form;
+    tPed_form_boned_phys* boned_physicing;
+    tPed_form_actor_set* actor_set;
+    tPhysics_object* obj;
+    tPhysics_object* child;
+    br_actor* actor;
+    br_vector3 omega;
+    int i;
+
+    if ((pCharacter->field_0xc & gPow2_array[pBone_index]) == 0) {
+        if ((tS8)pCharacter->field_0x6 < 0) {
+            form = pCharacter->personality->form;
+            boned_physicing = form->boned_physicing;
+            for (i = 0; i < form->max_boned_physicing_at_once; i++, boned_physicing++) {
+                if (boned_physicing->field_0x0 == 0) {
+                    break;
+                }
+            }
+            if (i == form->max_boned_physicing_at_once) {
+                goto done;
+            }
+            pCharacter->field_0x6 = (tU8)i;
+            boned_physicing->field_0x0 = 1;
+        }
+
+        if (pOmega == NULL) {
+            omega.v[0] = SRandomPosNeg(1.f);
+            omega.v[1] = SRandomPosNeg(1.f);
+            omega.v[2] = SRandomPosNeg(1.f);
+        } else {
+            omega = *pOmega;
+        }
+
+        form = pCharacter->personality->form;
+        boned_physicing = &form->boned_physicing[(tS8)pCharacter->field_0x6];
+        actor_set = &form->actor_sets[(tS8)pCharacter->field_0x4];
+        actor = actor_set->actors[pBone_index];
+        if (MakeCharacterPhysics(pCharacter, boned_physicing->collision_infos[pBone_index], actor, (tU8*)actor->model + 0x34, NULL, 3, 1, 1, 0, NULL, NULL) != 0) {
+            obj = boned_physicing->collision_infos[pBone_index];
+        } else {
+            obj = NULL;
+        }
+        if (obj != NULL) {
+            pCharacter->field_0xc |= gPow2_array[pBone_index];
+            if (obj->parent != NULL) {
+                obj->parent->child = NULL;
+                obj->parent = NULL;
+            }
+            obj->child = NULL;
+            obj->physics_joint1 = NULL;
+
+            if (pCharacter->field_0x14 & 4) {
+                if (pVelocity == NULL) {
+                    pVelocity = &pCharacter->field_0xd8;
+                }
+                obj->disable_move_rotate = 0;
+                if (pVelocity != NULL) {
+                    obj->v.v[0] = pVelocity->v[0];
+                    obj->v.v[1] = pVelocity->v[1];
+                    obj->v.v[2] = pVelocity->v[2];
+                    for (child = obj->child; child != NULL; child = child->next) {
+                        SetObjectV(child, pVelocity);
+                    }
+                }
+                if (&omega != NULL) {
+                    obj->omega.v[0] = omega.v[0];
+                    obj->omega.v[1] = omega.v[1];
+                    obj->omega.v[2] = omega.v[2];
+                    for (child = obj->child; child != NULL; child = child->next) {
+                        SetPhysicsObjectOmegaRecursive(child, &omega);
+                    }
+                }
+                PHILMakeObjectActive(obj, NULL, NULL, 0);
+                obj->field_0xed = 1;
+                PHILSetObjectProperty(obj, 0, 1.0);
+                PHILSetObjectProperty(obj, 3, 0);
+                PHILSetObjectProperty(obj, 4, 0);
+                PHILSetObjectProperty(obj, 5, 0);
+            }
+            return 1;
+        }
+    }
+done:
+    return 0;
+}
+
+#pragma auto_inline(on)
+
+#pragma auto_inline(off)
+// FUNCTION: CARMA2_HW 0x0040ba80
+void C2_HOOK_FASTCALL SetPhysicsObjectOmegaRecursive(tPhysics_object* pObject, br_vector3* pOmega) {
+    tPhysics_object* child;
+
+    child = pObject->child;
+    pObject->omega.v[0] = pOmega->v[0];
+    pObject->omega.v[1] = pOmega->v[1];
+    pObject->omega.v[2] = pOmega->v[2];
+    for (; child != NULL; child = child->next) {
+        SetPhysicsObjectOmegaRecursive(child, pOmega);
+    }
+}
+#pragma auto_inline(on)
+
+// FUNCTION: CARMA2_HW 0x0040bac0
+int C2_HOOK_FASTCALL GetCharacterMoveIdPlusOne(tPed_character_instance* pCharacter) {
+
+    return pCharacter->personality->form->moves[pCharacter->field_0x7].id + 1;
+}
+
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x0040bae0
 float C2_HOOK_FASTCALL GetClearanceFromCharacterInstance(tPed_character_instance* pCharacter, int pMoveNum) {
 
@@ -6303,584 +8043,1236 @@ float C2_HOOK_FASTCALL GetClearanceFromCharacterInstance(tPed_character_instance
     }
     return pCharacter->personality->moves[pMoveNum].grounding_offset;
 }
+#pragma auto_inline(on)
 
+// C2PORT-NONMATCHING: best 34.16% | difftest PASS 2000 trials (spec difftest/specs/0040b0a0_SetCharacterPosition.json) | reason x87 order and register/stack allocation
 // FUNCTION: CARMA2_HW 0x0040b0a0
 void C2_HOOK_FASTCALL SetCharacterPosition(tPed_character_instance* pCharacter, br_vector3* pPos, int pArg3) {
+    register tPed_character_instance* character;
+    register br_vector3* position;
+    tPed_personality* personality;
+    tPed_move* move;
+    br_matrix34* character_matrix;
+    br_vector3 target;
+    float move_x;
+    float move_y;
+    float move_z;
+    int move_index;
+    int position_mode;
 
-    NOT_IMPLEMENTED();
+    character = pCharacter;
+    position = pPos;
+    if ((character->field_0x14 & 4) != 0 && gAction_replay_mode == 0) {
+        return;
+    }
+    personality = character->personality;
+    move_index = character->field_0x7;
+    move = NULL;
+    if (move_index >= 0) {
+        move = personality->form->moves[move_index].move;
+    }
+    position_mode = pArg3;
+    if ((tS16)character->field_0x1c < 0) {
+        position_mode = -1;
+    }
+    if (position_mode == -1) {
+        target.v[0] = position->v[0];
+        target.v[1] = position->v[1];
+        target.v[2] = position->v[2];
+    } else if (position_mode == 0) {
+        target.v[0] = position->v[0];
+        target.v[2] = position->v[2];
+        target.v[1] = personality->moves[move_index].grounding_offset + FindYVerticallyBelow2(position);
+    } else if (position_mode == 1) {
+        target.v[2] = position->v[2];
+        target.v[0] = position->v[0];
+        target.v[1] = personality->moves[move_index].grounding_offset + position->v[1];
+    }
+    if (character->field_0x4 < 0) {
+        character_matrix = &character->field_0x2c;
+    } else if (character->field_0xe8 != NULL) {
+        character_matrix = character->field_0xe8;
+    } else {
+        character_matrix = &personality->form->actor_sets[(tU8)pCharacter->field_0x4].actors[0]->t.t.mat;
+    }
+    move_x = 0.f;
+    move_y = 0.f;
+    move_z = gFloat_00589358;
+    if (move != NULL && move->field_0x2a == 0) {
+        int frame_index;
+        tPed_move_frame* frame;
+
+        frame_index = (tS16)character->field_0x1c;
+        if (frame_index > 0) {
+            frame = move->frames + frame_index;
+            do {
+                move_x += frame->mat.m[3][0];
+                move_y += frame->mat.m[3][1];
+                move_z += frame->mat.m[3][2];
+                frame--;
+                frame_index--;
+            } while (frame_index != 0);
+        }
+        if ((move->looping_reset_flags & 1) == 0) {
+            move_x = 0.f;
+        }
+        if ((move->looping_reset_flags & 2) == 0) {
+            move_y = gFloat_00589358;
+        }
+        if ((move->looping_reset_flags & 4) == 0) {
+            move_z = gFloat_00589358;
+        }
+    }
+    character_matrix->m[3][0] = target.v[0];
+    character_matrix->m[3][1] = target.v[1];
+    character_matrix->m[3][2] = target.v[2];
+    if (gAction_replay_mode == 0) {
+        character_matrix->m[3][1] = personality->moves[move_index].scale_factor * move_y + character_matrix->m[3][1];
+        character_matrix->m[3][2] = personality->moves[move_index].scale_factor * move_z + character_matrix->m[3][2];
+        character_matrix->m[3][0] = personality->moves[move_index].scale_factor * move_x + character_matrix->m[3][0];
+    }
+    if ((character->field_0x14 & 1) != 0 && gAction_replay_mode == 0) {
+        BrMatrix34Copy(
+            &personality->form->simple_physicing[(tU8)character->field_0x5].collision_info->transform_matrix,
+            character_matrix);
+    }
+    SetCharacterBonePositions(character, 0, 0);
 }
 
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 52.82% | difftest PASS 2000 trials (spec difftest/specs/004cc2c0_SetPedXZDirection.json) | reason x87-order/regalloc
 // FUNCTION: CARMA2_HW 0x004cc2c0
 void C2_HOOK_FASTCALL SetPedXZDirection(tPedestrian* pPed, br_vector3* pDir, float pArg3, tU32 pTime) {
+    tPed_cache_006944c0* ped_cache;
+    tPed_face_cache_0x34* face_cache;
+    tPed_character_instance* character;
+    tPhysics_object* collision_info;
+    br_vector3 direction_work[2];
+    float length;
+    float scale;
+    float turn_duration;
+    float turn_speed;
+    int row;
 
-    NOT_IMPLEMENTED();
+    face_cache = pPed->field_0x0c->field_0xb0;
+    if (face_cache == NULL) {
+        return;
+    }
+    if (face_cache->field_0x30 == NULL) {
+        return;
+    }
+
+    DRVector3SafeCross(&direction_work[0], &y_unit_vector, pDir);
+    DRVector3SafeCross(&direction_work[1], &direction_work[0], &face_cache->field_0x30->normal);
+    length = sqrtf(direction_work[1].v[0] * direction_work[1].v[0]
+            + direction_work[1].v[1] * direction_work[1].v[1]
+            + direction_work[1].v[2] * direction_work[1].v[2]);
+    if (length > gPed_direction_length_epsilon) {
+        scale = (float)(gPed_kill_min_height / length);
+        direction_work[0].v[0] = scale * direction_work[1].v[0];
+        direction_work[0].v[1] = scale * direction_work[1].v[1];
+        direction_work[0].v[2] = scale * direction_work[1].v[2];
+    } else {
+        direction_work[0].v[0] = 1.0f;
+        direction_work[0].v[1] = 0.0f;
+        direction_work[0].v[2] = 0.0f;
+    }
+
+    if (pPed->field_0x0c->field_0x6c != 0
+            && (pPed->field_0x0c->field_0x48.v[0] * direction_work[0].v[0]
+                + pPed->field_0x0c->field_0x48.v[1] * direction_work[0].v[1]
+                + pPed->field_0x0c->field_0x48.v[2] * direction_work[0].v[2]) > gPed_direction_hold_dot) {
+        return;
+    }
+
+    pPed->field_0x0c->field_0x48 = direction_work[0];
+    character = pPed->character;
+    ped_cache = pPed->field_0x0c;
+    if (pArg3 != gConst_replay_rate_zero) {
+        ped_cache->field_0x54 = ped_cache->field_0x48;
+        ped_cache->field_0x6c = pTime;
+        turn_speed = sqrtf(character->field_0xd8.v[0] * character->field_0xd8.v[0]
+                + character->field_0xd8.v[1] * character->field_0xd8.v[1]
+                + character->field_0xd8.v[2] * character->field_0xd8.v[2]);
+        turn_duration = (pArg3 / turn_speed) * (tS16)character->field_0x1e;
+        turn_duration *= gPed_turn_seconds_per_frame;
+        if (turn_duration > gPed_kill_relative_speed_ratio) {
+            turn_duration = gPed_kill_relative_speed_ratio;
+        }
+        ped_cache->field_0x70 = (tU32)((double)pTime - (double)(turn_duration * gPed_milliseconds_scale));
+        ped_cache->field_0x60 = character->field_0xc0;
+        return;
+    }
+
+    ped_cache->field_0x6c = 0;
+    if ((character->field_0x14 & 1) != 0) {
+        collision_info = character->personality->form->simple_physicing[(tU8)character->field_0x5].collision_info;
+    } else {
+        collision_info = GetRootObject(character);
+    }
+    if (gAction_replay_mode == 0 || gBOOL_00744804 != 0) {
+        if ((character->field_0x14 & 4) == 0 && gProgram_state.racing != 0) {
+            PipeSinglePedDir((character->ped->field_0x06 << 16) | (character->ped - gPedestrian_array),
+                    &ped_cache->field_0x48);
+        }
+        SetCharacterDirection(character, &ped_cache->field_0x48, &character->field_0xcc);
+        if (gProgram_state.racing != 0
+                && (collision_info->transform_matrix.m[0][0] * collision_info->actor->t.t.mat.m[0][0]
+                        + collision_info->transform_matrix.m[0][1] * collision_info->actor->t.t.mat.m[0][1]
+                        + collision_info->transform_matrix.m[0][2] * collision_info->actor->t.t.mat.m[0][2]
+                            < gPed_matrix_orientation_threshold
+                    || collision_info->transform_matrix.m[1][0] * collision_info->actor->t.t.mat.m[1][0]
+                        + collision_info->transform_matrix.m[1][1] * collision_info->actor->t.t.mat.m[1][1]
+                        + collision_info->transform_matrix.m[1][2] * collision_info->actor->t.t.mat.m[1][2]
+                            < gPed_matrix_orientation_threshold
+                    || collision_info->transform_matrix.m[2][0] * collision_info->actor->t.t.mat.m[2][0]
+                        + collision_info->transform_matrix.m[2][1] * collision_info->actor->t.t.mat.m[2][1]
+                        + collision_info->transform_matrix.m[2][2] * collision_info->actor->t.t.mat.m[2][2]
+                            < gPed_matrix_orientation_threshold)) {
+            for (row = 0; row < 9; row++) {
+                ((float*)collision_info->transform_matrix.m)[row] = ((float*)collision_info->actor->t.t.mat.m)[row];
+            }
+            collision_info->flags |= 0x100;
+        }
+    }
 }
+#pragma auto_inline(on)
 
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 25.18% | difftest PASS 2000 trials (spec difftest/specs/004cfab0_RescanPedProximity.json) | reason regalloc-and-vector-stack-layout
 // FUNCTION: CARMA2_HW 0x004cfab0
 float C2_HOOK_FASTCALL RescanPedProximity(tPedestrian* pPed, br_vector3* pArg2) {
-    tPed_cache_006944c0* cache;
-    tPed_face_cache_0x34* head;
-    tFace_ref* face;
-    br_vector3 dir;
-    float best;
-    float result;
-    float len;
-    float nx;
-    float nz;
-    br_matrix34* mat;
-    br_vector3* pMatVec;
-    tPed_face_cache_0x50* entry;
-    int i;
-    int matched;
-    int use_cache;
-    br_vector3 cross;
-    br_vector3 norm;
-    br_vector3 neg;
-    br_vector3 plane;
-    float pd;
-    br_vector3 v;
-    float dot1;
-    br_vector3 dirCopy;
-    float d0;
-    br_vector3 negN;
-    float d1;
-    float dot2;
-    int r;
-    tPed_face_adjacency* adj;
-    int idx;
-    tPed_face_adjacency* adj2;
-    void* key0;
-    int key1;
-    int idx0;
-    int idx1;
-    int idx2;
-    int cell_count;
-    tPed_flag_cell* cell;
-    union {
-        double d;
-        int i;
-    } u;
-    int flag;
-    int is_running;
+    int* volatile param_1 = (int*)pPed;
+    float* param_2 = (float*)pArg2;
 
-    cache = pPed->field_0x0c;
-    head = cache->field_0xb0;
-    if (head == NULL) {
-        return 10000.0f;
-    }
-    face = head->field_0x30;
-    if (face == NULL) {
-        return 10000.0f;
-    }
-    cache->field_0x00.v[0] = face->normal.v[0];
-    cache->field_0x00.v[1] = face->normal.v[1];
-    cache->field_0x00.v[2] = face->normal.v[2];
-    if (pArg2 != NULL) {
-        BrVector3Normalise(&dir, pArg2);
-    } else {
-        BrVector3Normalise(&dir, &pPed->character->field_0xc0);
-    }
-    best = 10000.0f;
-    cache->field_0x0c = dir;
-    len = sqrtf(dir.v[2] * dir.v[2] + dir.v[0] * dir.v[0]);
-    nz = dir.v[2] / len;
-    nx = dir.v[0] / len;
-    is_running = (pPed->action == ePed_action_running);
-    cache->field_0x18 &= ~0xb;
-    mat = GetCharacterMatrixPtr(pPed->character);
-    entry = head->field_0x0;
-    pMatVec = (br_vector3*)mat->m[3];
-    cell_count = 0;
-    u.i = 0;
-    if (head->field_0x4 == 0) {
-        return best;
-    }
-    for (i = 0; i < head->field_0x4; i++, entry++) {
-        matched = 0;
-        if (entry->plane.v[1] > gPed_cos_max_slope) {
-            int j;
-            int n;
-            tRace_ped_exclusion_spec* spec;
+  float *pfVar1;
+  tU16 uVar2;
+  tU16 uVar3;
+  tU16 uVar4;
+  undefined4 *puVar5;
+  tU8 *pbVar6;
+  float fVar7;
+  float fVar8;
+  float fVar9;
+  float fVar10;
+  float fVar11;
+  float fVar12;
+  int bVar13;
+  float fVar14;
+  float fVar15;
+  float fVar16;
+  float fVar17;
+  int bVar18;
+  int bVar19;
+  int iVar20;
+  char *pcVar21;
+  tU16 *puVar22;
+  int iVar23;
+  tU32 uVar24;
+  tU32 uVar25;
+  tU32 uVar26;
+  int iVar27;
+  tU8 bVar28;
+  tU32 uVar29;
+  int iVar30;
+  int *piVar31;
+  float *pfVar32;
+  int *piVar33;
+  float *pfVar34;
+  int *piVar35;
+  float *pfVar36;
+  undefined4 *puVar37;
+  float local_d8;
+  float local_d4;
+  float local_d0;
+  float local_cc;
+  float local_c4;
+  float local_b8;
+  float local_a8;
+  br_vector3 plane_normal;
+  float plane_distance;
+  br_vector3 cross_vector;
+  float local_58;
+  br_vector3 opposite_plane;
+  float local_48;
+  br_vector3 direction_plane;
+  float local_38;
+  br_vector3 backface_plane;
+  float local_28;
+  br_vector3 cross_input;
+  tU32 local_14;
+  int local_10;
+  int local_c;
 
-            if (gPeds_suicidal) {
-                continue;
-            }
-            spec = pPed->exclusion_spec;
-            if (spec == NULL) {
-                continue;
-            }
-            if (is_running && spec->exclusions_ok_when_scared) {
-                continue;
-            }
-            n = spec->count_exclusion_materials;
-            for (j = 0; j < n; j++) {
-                if (spec->exclusion_materials[j].material == entry->material
-                    && (!is_running || spec->exclusion_materials[j].flags == 0)) {
-                    matched = 1;
-                    break;
-                }
-            }
-            if (j == n) {
-                continue;
-            }
-        } else {
-            int j;
-            int n;
-            tRace_ped_exclusion_spec* spec;
-
-            spec = pPed->exclusion_spec;
-            if (spec != NULL) {
-                n = spec->count_exception_materials;
-                for (j = 0; j < n; j++) {
-                    if (spec->exception_materials[j] == entry->material) {
-                        break;
-                    }
-                }
-                if (j != n) {
-                    continue;
-                }
-            }
+  puVar5 = (undefined4 *)((undefined4 *)param_1[3])[0x2c];
+  if ((puVar5 == (undefined4 *)0x0) || (puVar5[0xc] == 0)) {
+    return (float)gPedProximity_no_hit_distance;
+  }
+  *(undefined4 *)param_1[3] = *(undefined4 *)(puVar5[0xc] + 0x34);
+  *(undefined4 *)(param_1[3] + 4) = *(undefined4 *)(puVar5[0xc] + 0x38);
+  *(undefined4 *)(param_1[3] + 8) = *(undefined4 *)(puVar5[0xc] + 0x3c);
+  if (param_2 == (float *)0x0) {
+    iVar20 = *param_1;
+    local_cc = sqrtf(*(float *)(iVar20 + 200) * *(float *)(iVar20 + 200) +
+                    *(float *)(iVar20 + 0xc4) * *(float *)(iVar20 + 0xc4) +
+                    *(float *)(iVar20 + 0xc0) * *(float *)(iVar20 + 0xc0));
+    if (gPed_direction_length_epsilon < local_cc) {
+      local_cc = (float)gPed_kill_min_height / local_cc;
+      local_d4 = *(float *)(iVar20 + 0xc0) * local_cc;
+      local_d0 = *(float *)(iVar20 + 0xc4) * local_cc;
+      local_cc = *(float *)(iVar20 + 200) * local_cc;
+      goto LAB_004cfc0e;
+    }
+  }
+  else {
+    local_cc = sqrtf(*param_2 * *param_2 + param_2[2] * param_2[2] + param_2[1] * param_2[1]);
+    if (gPed_direction_length_epsilon < local_cc) {
+      local_cc = (float)gPed_kill_min_height / local_cc;
+      local_d4 = *param_2 * local_cc;
+      local_d0 = param_2[1] * local_cc;
+      local_cc = param_2[2] * local_cc;
+      goto LAB_004cfc0e;
+    }
+  }
+  local_d4 = 1.0;
+  local_d0 = 0.0;
+  local_cc = 0.0;
+LAB_004cfc0e:
+  local_d8 = 10000.0;
+  *(float *)(param_1[3] + 0xc) = local_d4;
+  *(float *)(param_1[3] + 0x10) = local_d0;
+  local_c = 0;
+  bVar19 = 0;
+  *(float *)(param_1[3] + 0x14) = local_cc;
+  fVar7 = sqrtf(local_cc * local_cc + local_d4 * local_d4);
+  local_14 = (tU32)(param_1[4] == 1);
+  *(tU8 *)(param_1[3] + 0x18) = *(tU8 *)(param_1[3] + 0x18) & 0xf4;
+  fVar8 = local_d4 / fVar7;
+  fVar7 = local_cc / fVar7;
+  iVar20 = GetCharacterMatrixPtr(*param_1);
+  piVar33 = (int *)*puVar5;
+  pfVar1 = (float *)(iVar20 + 0x24);
+  local_10 = 0;
+  if (*(char *)(puVar5 + 1) != '\0') {
+    do {
+      bVar18 = 0;
+      if ((float)piVar33[0xe] <= gPed_cos_max_slope) {
+        iVar27 = param_1[6];
+        if (iVar27 != 0) {
+          uVar29 = 0;
+          uVar26 = (tU32)*(tU8 *)(iVar27 + 1);
+          if (uVar26 != 0) {
+            piVar35 = *(int **)(iVar27 + 8);
+            do {
+              if (*piVar35 == *piVar33) break;
+              uVar29 = uVar29 + 1;
+              piVar35 = piVar35 + 1;
+            } while ((int)uVar29 < (int)uVar26);
+          }
+          if (uVar29 != uVar26) goto LAB_004d0fda;
         }
-        if (!matched) {
-            float denom;
-
-            denom = BrVector3Dot(&dir, &entry->plane);
-            if (fabsf(denom) < 0.001) {
-                result = 20.0f;
-            } else {
-                result = (entry->d - BrVector3Dot(pMatVec, &entry->plane)) / denom;
-            }
-            if (result < gConst_replay_rate_zero || result > 20.0f || result > best) {
-                continue;
-            }
+LAB_004cfda5:
+        if (!bVar18) {
+          fVar9 = local_cc * (float)piVar33[0xf] +
+                  local_d4 * (float)piVar33[0xd] + local_d0 * (float)piVar33[0xe];
+          if ((float)gPedProximity_parallel_epsilon <= fabsf(fVar9)) {
+            local_c4 = ((((float)piVar33[0x11] - *pfVar1 * (float)piVar33[0xd]) -
+                        *(float *)(iVar20 + 0x28) * (float)piVar33[0xe]) -
+                       *(float *)(iVar20 + 0x2c) * (float)piVar33[0xf]) / fVar9;
+          }
+          else {
+            local_c4 = 20.0;
+          }
+          if (((local_c4 < gConst_replay_rate_zero) || (gPedProximity_max_distance < local_c4)) ||
+             (local_d8 < local_c4)) goto LAB_004d0fda;
         }
-        if (!u.i) {
-            face = head->field_0x30;
-            DRVector3SafeCross(&cross, &y_unit_vector, &dir);
-            plane = face->normal;
-            pd = face->d;
-            BrVector3Normalise(&norm, &cross);
-            neg.v[0] = -norm.v[0];
-            neg.v[1] = -norm.v[1];
-            neg.v[2] = -norm.v[2];
-            u.d = (double)pPed->character->personality->bb.max.v[0] * 1.3;
-            v.v[0] = neg.v[0] * u.d + pMatVec->v[0];
-            v.v[1] = neg.v[1] * u.d + pMatVec->v[1];
-            v.v[2] = neg.v[2] * u.d + pMatVec->v[2];
-            dot1 = BrVector3Dot(&v, &norm);
-            dirCopy = dir;
-            d0 = BrVector3Dot(pMatVec, &dir);
-            negN.v[0] = -face->normal.v[0];
-            negN.v[1] = -face->normal.v[1];
-            negN.v[2] = -face->normal.v[2];
-            dot2 = BrVector3Dot(&v, &neg);
-            d1 = BrVector3Dot(pMatVec, &negN);
-            u.i = 1;
+        if (!bVar19) {
+          plane_normal.v[0] = *(undefined4 *)(puVar5[0xc] + 0x34);
+          plane_normal.v[1] = *(undefined4 *)(puVar5[0xc] + 0x38);
+          plane_normal.v[2] = *(undefined4 *)(puVar5[0xc] + 0x3c);
+          plane_distance = *(undefined4 *)(puVar5[0xc] + 0x44);
+          cross_input.v[0] = local_d4;
+          cross_input.v[1] = local_d0;
+          cross_input.v[2] = local_cc;
+          DRVector3SafeCross(&cross_vector, &y_unit_vector, &cross_input);
+          fVar9 = sqrtf(cross_vector.v[2] * cross_vector.v[2] + cross_vector.v[1] * cross_vector.v[1] + cross_vector.v[0] * cross_vector.v[0]);
+          if (fVar9 <= gPed_direction_length_epsilon) {
+            cross_vector.v[0] = 1.0;
+            cross_vector.v[1] = 0.0;
+            cross_vector.v[2] = 0.0;
+          }
+          else {
+            fVar9 = (float)gPed_kill_min_height / fVar9;
+            cross_vector.v[0] = fVar9 * cross_vector.v[0];
+            cross_vector.v[1] = fVar9 * cross_vector.v[1];
+            cross_vector.v[2] = fVar9 * cross_vector.v[2];
+          }
+          opposite_plane.v[0] = -cross_vector.v[0];
+          opposite_plane.v[1] = -cross_vector.v[1];
+          opposite_plane.v[2] = -cross_vector.v[2];
+          fVar9 = *(float *)(*(int *)*param_1 + 0x40) * (float)gPedProximity_probe_scale;
+          local_58 = (opposite_plane.v[2] * fVar9 + *(float *)(iVar20 + 0x2c)) * cross_vector.v[2] +
+                     (opposite_plane.v[1] * fVar9 + *(float *)(iVar20 + 0x28)) * cross_vector.v[1] +
+                     (opposite_plane.v[0] * fVar9 + *pfVar1) * cross_vector.v[0];
+          fVar9 = *(float *)(*(int *)*param_1 + 0x40) * (float)gPedProximity_probe_scale;
+          direction_plane.v[0] = local_d4;
+          local_48 = (cross_vector.v[2] * fVar9 + *(float *)(iVar20 + 0x2c)) * opposite_plane.v[2] +
+                     (cross_vector.v[1] * fVar9 + *(float *)(iVar20 + 0x28)) * opposite_plane.v[1] +
+                     (cross_vector.v[0] * fVar9 + *pfVar1) * opposite_plane.v[0];
+          direction_plane.v[1] = local_d0;
+          direction_plane.v[2] = local_cc;
+          local_38 = local_d4 * *pfVar1 +
+                     *(float *)(iVar20 + 0x2c) * local_cc + *(float *)(iVar20 + 0x28) * local_d0;
+          bVar19 = 1;
+          backface_plane.v[0] = -*(float *)(puVar5[0xc] + 0x34);
+          backface_plane.v[1] = -*(float *)(puVar5[0xc] + 0x38);
+          backface_plane.v[2] = -*(float *)(puVar5[0xc] + 0x3c);
+          local_28 = backface_plane.v[0] * *pfVar1 +
+                     *(float *)(iVar20 + 0x28) * backface_plane.v[1] + *(float *)(iVar20 + 0x2c) * backface_plane.v[2];
         }
-            adj = entry->field_0x48;
-            idx = entry->field_0x4c;
-            adj2 = adj->field_0x18;
-            key1 = idx;
-            key0 = adj2;
-            if (idx < 0) {
-                tU16 id;
-                tU16 *rec;
+        iVar30 = (int)(short)piVar33[0x13];
+        iVar27 = *(int *)(piVar33[0x12] + 0x18);
+        if (iVar30 < 0) {
+          if (*(tU16 *)((int)piVar33 + 0x4e) < *(tU16 *)(iVar27 + 0x12)) {
+            puVar22 = (tU16 *)
+                      (*(int *)(iVar27 + 0xc) + (tU32)*(tU16 *)((int)piVar33 + 0x4e) * 0x28);
+LAB_004d01e0:
+            uVar2 = *puVar22;
+            uVar25 = (tU32)uVar2;
+            uVar3 = puVar22[1];
+            uVar26 = (tU32)uVar3;
+            uVar29 = (tU32)puVar22[2];
+            piVar35 = (int *)0x0;
+            iVar23 = 0;
+            if (0 < local_c) {
+              piVar31 = (int*)&gPed_proximity_side_cache[0].face_index;
+              do {
+                if ((iVar27 == piVar31[-1]) && (iVar30 == *piVar31)) {
+                  piVar35 = (int*)&gPed_proximity_side_cache[iVar23];
+                  break;
+                }
+                iVar23 = iVar23 + 1;
+                piVar31 = piVar31 + 0x102;
+              } while (iVar23 < local_c);
+            }
+            if (piVar35 == (int *)0x0) {
+              if (local_c < 0x10) {
+                piVar35 = (int*)&gPed_proximity_side_cache[local_c];
+                puVar37 = (undefined4*)gPed_proximity_side_cache[local_c].vertex_side_flags;
+                for (iVar23 = 0x100; iVar23 != 0; iVar23 = iVar23 + -1) {
+                  *puVar37 = 0;
+                  puVar37 = puVar37 + 1;
+                }
+                *piVar35 = iVar27;
+                gPed_proximity_side_cache[local_c].face_index = iVar30;
+                local_c = local_c + 1;
+              }
+              if (piVar35 != (int *)0x0) goto LAB_004d0271;
+LAB_004d0280:
+              bVar13 = 0;
+LAB_004d02ab:
+              uVar24 = NormalSideOfPlane(piVar33 + 1,&direction_plane,local_38);
+              if (!bVar13) goto LAB_004d02ee;
+              puVar22 = (tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+              *puVar22 = *puVar22 | gPedProximity_side_masks[3];
+              if (uVar24 != 0) {
+                *(tU16 *)((int)piVar35 + uVar25 * 2 + 8) =
+                     gPedProximity_side_masks[11] | *(tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+                goto LAB_004d02ee;
+              }
+LAB_004d02f6:
+              if ((piVar35 == (int *)0x0) || (0x1ff < uVar3)) {
+                bVar13 = 0;
+LAB_004d0333:
+                uVar24 = NormalSideOfPlane(piVar33 + 4,&direction_plane,local_38);
+                if (!bVar13) goto LAB_004d0376;
+                puVar22 = (tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                *puVar22 = *puVar22 | gPedProximity_side_masks[3];
+                if (uVar24 != 0) {
+                  *(tU16 *)((int)piVar35 + uVar26 * 2 + 8) =
+                       gPedProximity_side_masks[11] | *(tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                  goto LAB_004d0376;
+                }
+              }
+              else {
+                bVar13 = 1;
+                uVar4 = *(tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                if ((gPedProximity_side_masks[3] & uVar4) == 0) goto LAB_004d0333;
+                uVar24 = (tU32)(gPedProximity_side_masks[11] & uVar4);
+LAB_004d0376:
+                if (uVar24 != 0) goto LAB_004d0415;
+              }
+              if ((piVar35 == (int *)0x0) || (0x1ff < uVar29)) {
+                bVar13 = 0;
+LAB_004d03c2:
+                uVar24 = NormalSideOfPlane(piVar33 + 7,&direction_plane,local_38);
+                if (bVar13) {
+                  puVar22 = (tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                  *puVar22 = *puVar22 | gPedProximity_side_masks[3];
+                  if (uVar24 == 0) goto LAB_004d0fda;
+                  *(tU16 *)((int)piVar35 + uVar29 * 2 + 8) =
+                       gPedProximity_side_masks[11] | *(tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                }
+              }
+              else {
+                bVar13 = 1;
+                uVar4 = *(tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                if ((gPedProximity_side_masks[3] & uVar4) == 0) goto LAB_004d03c2;
+                uVar24 = (tU32)(gPedProximity_side_masks[11] & uVar4);
+              }
+              if (uVar24 == 0) goto LAB_004d0fda;
+            }
+            else {
+LAB_004d0271:
+              if (0x1ff < uVar2) goto LAB_004d0280;
+              bVar13 = 1;
+              uVar4 = *(tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+              if ((gPedProximity_side_masks[3] & uVar4) == 0) goto LAB_004d02ab;
+              uVar24 = (tU32)(gPedProximity_side_masks[11] & uVar4);
+LAB_004d02ee:
+              if (uVar24 == 0) goto LAB_004d02f6;
+            }
+LAB_004d0415:
+            if ((piVar35 == (int *)0x0) || (0x1ff < uVar2)) {
+              bVar13 = 0;
+LAB_004d0453:
+              uVar24 = NormalSideOfPlane(piVar33 + 1,&cross_vector,local_58);
+              if (!bVar13) goto LAB_004d0496;
+              puVar22 = (tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+              *puVar22 = *puVar22 | gPedProximity_side_masks[1];
+              if (uVar24 != 0) {
+                *(tU16 *)((int)piVar35 + uVar25 * 2 + 8) =
+                     gPedProximity_side_masks[9] | *(tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+                goto LAB_004d0496;
+              }
+LAB_004d049e:
+              if ((piVar35 == (int *)0x0) || (0x1ff < uVar3)) {
+                bVar13 = 0;
+LAB_004d04db:
+                uVar24 = NormalSideOfPlane(piVar33 + 4,&cross_vector,local_58);
+                if (!bVar13) goto LAB_004d051e;
+                puVar22 = (tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                *puVar22 = *puVar22 | gPedProximity_side_masks[1];
+                if (uVar24 != 0) {
+                  *(tU16 *)((int)piVar35 + uVar26 * 2 + 8) =
+                       gPedProximity_side_masks[9] | *(tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                  goto LAB_004d051e;
+                }
+              }
+              else {
+                bVar13 = 1;
+                uVar4 = *(tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                if ((gPedProximity_side_masks[1] & uVar4) == 0) goto LAB_004d04db;
+                uVar24 = (tU32)(gPedProximity_side_masks[9] & uVar4);
+LAB_004d051e:
+                if (uVar24 != 0) goto LAB_004d05bd;
+              }
+              if ((piVar35 == (int *)0x0) || (0x1ff < uVar29)) {
+                bVar13 = 0;
+LAB_004d056a:
+                uVar24 = NormalSideOfPlane(piVar33 + 7,&cross_vector,local_58);
+                if (bVar13) {
+                  puVar22 = (tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                  *puVar22 = *puVar22 | gPedProximity_side_masks[1];
+                  if (uVar24 == 0) goto LAB_004d0fda;
+                  *(tU16 *)((int)piVar35 + uVar29 * 2 + 8) =
+                       gPedProximity_side_masks[9] | *(tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                }
+              }
+              else {
+                bVar13 = 1;
+                uVar4 = *(tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                if ((gPedProximity_side_masks[1] & uVar4) == 0) goto LAB_004d056a;
+                uVar24 = (tU32)(gPedProximity_side_masks[9] & uVar4);
+              }
+              if (uVar24 == 0) goto LAB_004d0fda;
+            }
+            else {
+              bVar13 = 1;
+              uVar4 = *(tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+              if ((gPedProximity_side_masks[1] & uVar4) == 0) goto LAB_004d0453;
+              uVar24 = (tU32)(gPedProximity_side_masks[9] & uVar4);
+LAB_004d0496:
+              if (uVar24 == 0) goto LAB_004d049e;
+            }
+LAB_004d05bd:
+            if ((piVar35 == (int *)0x0) || (0x1ff < uVar2)) {
+              bVar13 = 0;
+LAB_004d05fc:
+              uVar24 = NormalSideOfPlane(piVar33 + 1,&opposite_plane,local_48);
+              if (!bVar13) goto LAB_004d063d;
+              puVar22 = (tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+              *puVar22 = *puVar22 | gPedProximity_side_masks[2];
+              if (uVar24 != 0) {
+                *(tU16 *)((int)piVar35 + uVar25 * 2 + 8) =
+                     gPedProximity_side_masks[10] | *(tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+                goto LAB_004d063d;
+              }
+LAB_004d0645:
+              if ((piVar35 == (int *)0x0) || (0x1ff < uVar3)) {
+                bVar13 = 0;
+LAB_004d0683:
+                uVar24 = NormalSideOfPlane(piVar33 + 4,&opposite_plane,local_48);
+                if (!bVar13) goto LAB_004d06c4;
+                puVar22 = (tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                *puVar22 = *puVar22 | gPedProximity_side_masks[2];
+                if (uVar24 != 0) {
+                  *(tU16 *)((int)piVar35 + uVar26 * 2 + 8) =
+                       gPedProximity_side_masks[10] | *(tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                  goto LAB_004d06c4;
+                }
+              }
+              else {
+                bVar13 = 1;
+                uVar4 = *(tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                if ((gPedProximity_side_masks[2] & uVar4) == 0) goto LAB_004d0683;
+                uVar24 = gPedProximity_side_masks[10] & (tU32)uVar4;
+LAB_004d06c4:
+                if (uVar24 != 0) goto LAB_004d0756;
+              }
+              if ((piVar35 == (int *)0x0) || (0x1ff < uVar29)) {
+                bVar13 = 0;
+              }
+              else {
+                bVar13 = 1;
+                uVar4 = *(tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                if ((gPedProximity_side_masks[2] & uVar4) != 0) {
+                  uVar24 = gPedProximity_side_masks[10] & (tU32)uVar4;
+                  goto LAB_004d0756;
+                }
+              }
+              uVar24 = NormalSideOfPlane(piVar33 + 7,&opposite_plane,local_48);
+              if (bVar13) {
+                puVar22 = (tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                *puVar22 = *puVar22 | gPedProximity_side_masks[2];
+                if (uVar24 != 0) {
+                  *(tU16 *)((int)piVar35 + uVar29 * 2 + 8) =
+                       gPedProximity_side_masks[10] | *(tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                }
+              }
+            }
+            else {
+              bVar13 = 1;
+              uVar4 = *(tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+              if ((gPedProximity_side_masks[2] & uVar4) == 0) goto LAB_004d05fc;
+              uVar24 = gPedProximity_side_masks[10] & (tU32)uVar4;
+LAB_004d063d:
+              if (uVar24 == 0) goto LAB_004d0645;
+            }
+LAB_004d0756:
+            if (uVar24 != 0) {
+              if (bVar18) {
+                iVar27 = *(int *)(*(int *)(*(int *)(iVar27 + 0x4c) + 0x18) + 0x10 + iVar30 * 0x24);
+                pfVar32 = (float *)(uVar26 * 0x20 + iVar27);
+                pfVar34 = (float *)(uVar25 * 0x20 + iVar27);
+                pfVar36 = (float *)(uVar29 * 0x20 + iVar27);
+                fVar14 = *pfVar32 - *pfVar34;
+                fVar17 = pfVar32[2] - pfVar34[2];
+                fVar15 = fVar17 * fVar8 - fVar14 * fVar7;
+                fVar9 = *pfVar36 - *pfVar32;
+                fVar12 = pfVar36[2] - pfVar32[2];
+                fVar10 = *pfVar34 - *pfVar36;
+                fVar11 = pfVar34[2] - pfVar36[2];
+                fVar16 = gPedProximity_max_float;
+                if (((float)gPedProximity_edge_epsilon < fabsf(fVar15)) &&
+                   (fVar16 = ((*pfVar34 * pfVar32[2] +
+                              (*(float *)(iVar20 + 0x2c) * fVar14 - fVar17 * *pfVar1)) -
+                             *pfVar32 * pfVar34[2]) / fVar15, fVar16 < gConst_replay_rate_zero)) {
+                  fVar16 = gPedProximity_max_float;
+                }
+                local_b8 = fVar12 * fVar8 - fVar9 * fVar7;
+                if ((fabsf(local_b8) <= (float)gPedProximity_edge_epsilon) ||
+                   (local_b8 = ((*pfVar34 * pfVar32[2] +
+                                (*(float *)(iVar20 + 0x2c) * fVar9 - fVar12 * *pfVar1)) -
+                               *pfVar32 * pfVar34[2]) / local_b8,
+                   local_b8 < gConst_replay_rate_zero)) {
+                  local_b8 = 3.4028235e+38;
+                }
+                local_a8 = fVar11 * fVar8 - fVar10 * fVar7;
+                if ((fabsf(local_a8) <= (float)gPedProximity_edge_epsilon) ||
+                   (local_a8 = ((*pfVar34 * pfVar32[2] +
+                                (*(float *)(iVar20 + 0x2c) * fVar10 - fVar11 * *pfVar1)) -
+                               *pfVar32 * pfVar34[2]) / local_a8,
+                   local_a8 < gConst_replay_rate_zero)) {
+                  local_a8 = 3.4028235e+38;
+                }
+                if ((local_b8 <= fVar16) || (local_a8 <= fVar16)) {
+                  if ((fVar16 <= local_b8) || (local_a8 <= local_b8)) {
+                    if (local_a8 < local_d8) {
+                      local_d8 = local_a8;
+                      *(float *)(param_1[3] + 0xa4) = fVar10;
+                      *(undefined4 *)(param_1[3] + 0xa8) = 0;
+                      goto LAB_004d0a17;
+                    }
+                  }
+                  else if (local_b8 < local_d8) {
+                    local_d8 = local_b8;
+                    *(float *)(param_1[3] + 0xa4) = fVar9;
+                    *(undefined4 *)(param_1[3] + 0xa8) = 0;
+                    fVar11 = fVar12;
+LAB_004d0a17:
+                    *(float *)(param_1[3] + 0xac) = -fVar11;
+                    if (local_d8 <= gPedProximity_max_distance) {
+                      *(float *)(param_1[3] + 0xbc) = local_d8 * local_d8;
+                      *(undefined4 *)(param_1[3] + 0x30) = 0;
+                      *(undefined4 *)(param_1[3] + 0x34) = 0;
+                      *(undefined4 *)(param_1[3] + 0x38) = 0;
+                      *(float *)(param_1[3] + 0x3c) = fVar8 * local_d8 + *pfVar1;
+                      *(undefined4 *)(param_1[3] + 0x40) = *(undefined4 *)(iVar20 + 0x28);
+                      *(float *)(param_1[3] + 0x44) = fVar7 * local_d8 + *(float *)(iVar20 + 0x2c);
+                      iVar27 = param_1[3];
+                      fVar9 = sqrtf(*(float *)(iVar27 + 0xac) * *(float *)(iVar27 + 0xac) +
+                                   *(float *)(iVar27 + 0xa8) * *(float *)(iVar27 + 0xa8) +
+                                   *(float *)(iVar27 + 0xa4) * *(float *)(iVar27 + 0xa4));
+                      if (fVar9 <= gPed_direction_length_epsilon) {
+                        *(undefined4 *)(iVar27 + 0xa4) = 0x3f800000;
+                        *(undefined4 *)(param_1[3] + 0xa8) = 0;
+                        *(undefined4 *)(param_1[3] + 0xac) = 0;
+                        *(tU8 *)(param_1[3] + 0x18) = *(tU8 *)(param_1[3] + 0x18) | 8;
+                      }
+                      else {
+                        fVar9 = (float)gPed_kill_min_height / fVar9;
+                        *(float *)(iVar27 + 0xa4) = *(float *)(iVar27 + 0xa4) * fVar9;
+                        *(float *)(param_1[3] + 0xa8) = *(float *)(param_1[3] + 0xa8) * fVar9;
+                        *(float *)(param_1[3] + 0xac) = *(float *)(param_1[3] + 0xac) * fVar9;
+                        *(tU8 *)(param_1[3] + 0x18) = *(tU8 *)(param_1[3] + 0x18) | 8;
+                      }
+                    }
+                  }
+                }
+                else if (fVar16 < local_d8) {
+                  *(float *)(param_1[3] + 0xa4) = fVar14;
+                  *(undefined4 *)(param_1[3] + 0xa8) = 0;
+                  fVar11 = fVar17;
+                  local_d8 = fVar16;
+                  goto LAB_004d0a17;
+                }
+              }
+              else {
+                if ((float)piVar33[0xf] * local_cc +
+                    (float)piVar33[0xd] * local_d4 + (float)piVar33[0xe] * local_d0 <=
+                    gConst_replay_rate_zero) {
+LAB_004d0d7a:
+                  if ((piVar35 == (int *)0x0) || (0x1ff < uVar2)) {
+                    bVar18 = 0;
+LAB_004d0db9:
+                    uVar24 = NormalSideOfPlane(piVar33 + 1,&plane_normal,plane_distance);
+                    if (!bVar18) goto LAB_004d0dfa;
+                    puVar22 = (tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+                    *puVar22 = *puVar22 | gPedProximity_side_masks[0];
+                    if (uVar24 != 0) {
+                      *(tU16 *)((int)piVar35 + uVar25 * 2 + 8) =
+                           gPedProximity_side_masks[8] | *(tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+                      goto LAB_004d0dfa;
+                    }
+LAB_004d0e02:
+                    if ((piVar35 == (int *)0x0) || (0x1ff < uVar3)) {
+                      bVar18 = 0;
+LAB_004d0e40:
+                      uVar25 = NormalSideOfPlane(piVar33 + 4,&plane_normal,plane_distance);
+                      if (!bVar18) goto LAB_004d0e81;
+                      puVar22 = (tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                      *puVar22 = *puVar22 | gPedProximity_side_masks[0];
+                      if (uVar25 != 0) {
+                        *(tU16 *)((int)piVar35 + uVar26 * 2 + 8) =
+                             gPedProximity_side_masks[8] | *(tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                        goto LAB_004d0e81;
+                      }
+                    }
+                    else {
+                      bVar18 = 1;
+                      uVar2 = *(tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                      if ((gPedProximity_side_masks[0] & uVar2) == 0) goto LAB_004d0e40;
+                      uVar25 = gPedProximity_side_masks[8] & (tU32)uVar2;
+LAB_004d0e81:
+                      if (uVar25 != 0) goto LAB_004d0f10;
+                    }
+                    if ((piVar35 == (int *)0x0) || (0x1ff < uVar29)) {
+                      bVar18 = 0;
+LAB_004d0ecb:
+                      uVar26 = NormalSideOfPlane(piVar33 + 7,&plane_normal,plane_distance);
+                      if (bVar18) {
+                        puVar22 = (tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                        *puVar22 = *puVar22 | gPedProximity_side_masks[0];
+                        if (uVar26 == 0) goto LAB_004d0f20;
+                        *(tU16 *)((int)piVar35 + uVar29 * 2 + 8) =
+                             gPedProximity_side_masks[8] | *(tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                      }
+                    }
+                    else {
+                      bVar18 = 1;
+                      uVar2 = *(tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                      if ((gPedProximity_side_masks[0] & uVar2) == 0) goto LAB_004d0ecb;
+                      uVar26 = gPedProximity_side_masks[8] & (tU32)uVar2;
+                    }
+                    if (uVar26 == 0) goto LAB_004d0f20;
+                  }
+                  else {
+                    bVar18 = 1;
+                    uVar2 = *(tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+                    if ((gPedProximity_side_masks[0] & uVar2) == 0) goto LAB_004d0db9;
+                    uVar24 = gPedProximity_side_masks[8] & (tU32)uVar2;
+LAB_004d0dfa:
+                    if (uVar24 == 0) goto LAB_004d0e02;
+                  }
+LAB_004d0f10:
+                  iVar27 = param_1[3];
+                  bVar28 = *(tU8 *)(iVar27 + 0x18) | 2;
+LAB_004d0f1d:
+                  *(tU8 *)(iVar27 + 0x18) = bVar28;
+                }
+                else {
+                  if ((*(tU8 *)(*piVar33 + 0x21) & 0x10) != 0) {
+                    fVar9 = (float)piVar33[0xe] * gFLOAT_0058a9c8;
+                    fVar10 = (float)piVar33[0xf] * gFLOAT_0058a9c8;
+                    piVar33[0xd] = (int)((float)piVar33[0xd] * gFLOAT_0058a9c8);
+                    piVar33[0xe] = (int)fVar9;
+                    piVar33[0xf] = (int)fVar10;
+                    piVar33[0x11] = (int)-(float)piVar33[0x11];
+                    goto LAB_004d0d7a;
+                  }
+                  if ((piVar35 != (int *)0x0) && (uVar2 < 0x200)) {
+                    bVar18 = 1;
+                    uVar2 = *(tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+                    if ((gPedProximity_side_masks[4] & uVar2) == 0) goto LAB_004d0c09;
+                    uVar24 = gPedProximity_side_masks[12] & (tU32)uVar2;
+LAB_004d0c4a:
+                    if (uVar24 == 0) goto LAB_004d0c52;
+LAB_004d0d68:
+                    iVar27 = param_1[3];
+                    bVar28 = *(tU8 *)(iVar27 + 0x18) | 1;
+                    goto LAB_004d0f1d;
+                  }
+                  bVar18 = 0;
+LAB_004d0c09:
+                  uVar24 = NormalSideOfPlane(piVar33 + 1,&backface_plane,local_28);
+                  if (!bVar18) goto LAB_004d0c4a;
+                  puVar22 = (tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+                  *puVar22 = *puVar22 | gPedProximity_side_masks[4];
+                  if (uVar24 != 0) {
+                    *(tU16 *)((int)piVar35 + uVar25 * 2 + 8) =
+                         gPedProximity_side_masks[12] | *(tU16 *)((int)piVar35 + uVar25 * 2 + 8);
+                    goto LAB_004d0c4a;
+                  }
+LAB_004d0c52:
+                  if ((piVar35 == (int *)0x0) || (0x1ff < uVar3)) {
+                    bVar18 = 0;
+LAB_004d0c90:
+                    uVar25 = NormalSideOfPlane(piVar33 + 4,&backface_plane,local_28);
+                    if (!bVar18) goto LAB_004d0cd1;
+                    puVar22 = (tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                    *puVar22 = *puVar22 | gPedProximity_side_masks[4];
+                    if (uVar25 != 0) {
+                      *(tU16 *)((int)piVar35 + uVar26 * 2 + 8) =
+                           gPedProximity_side_masks[12] | *(tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                      goto LAB_004d0cd1;
+                    }
+                  }
+                  else {
+                    bVar18 = 1;
+                    uVar2 = *(tU16 *)((int)piVar35 + uVar26 * 2 + 8);
+                    if ((gPedProximity_side_masks[4] & uVar2) == 0) goto LAB_004d0c90;
+                    uVar25 = gPedProximity_side_masks[12] & (tU32)uVar2;
+LAB_004d0cd1:
+                    if (uVar25 != 0) goto LAB_004d0d68;
+                  }
+                  if ((piVar35 == (int *)0x0) || (0x1ff < uVar29)) {
+                    bVar18 = 0;
+LAB_004d0d1b:
+                    uVar26 = NormalSideOfPlane(piVar33 + 7,&backface_plane,local_28);
+                    if (!bVar18) goto LAB_004d0d60;
+                    puVar22 = (tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                    *puVar22 = *puVar22 | gPedProximity_side_masks[4];
+                    if (uVar26 != 0) {
+                      *(tU16 *)((int)piVar35 + uVar29 * 2 + 8) =
+                           gPedProximity_side_masks[12] | *(tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                      goto LAB_004d0d60;
+                    }
+                  }
+                  else {
+                    bVar18 = 1;
+                    uVar2 = *(tU16 *)((int)piVar35 + uVar29 * 2 + 8);
+                    if ((gPedProximity_side_masks[4] & uVar2) == 0) goto LAB_004d0d1b;
+                    uVar26 = gPedProximity_side_masks[12] & (tU32)uVar2;
+LAB_004d0d60:
+                    if (uVar26 != 0) goto LAB_004d0d68;
+                  }
+                }
+LAB_004d0f20:
+                if (*(char *)(param_1[3] + 0x18) != '\0') {
+                  *(float *)(param_1[3] + 0xbc) = local_c4 * local_c4;
+                  *(undefined4 *)(param_1[3] + 0x30) = 0;
+                  *(undefined4 *)(param_1[3] + 0x34) = 0;
+                  *(undefined4 *)(param_1[3] + 0x38) = 0;
+                  *(float *)(param_1[3] + 0x3c) = local_c4 * local_d4 + *pfVar1;
+                  local_d8 = local_c4;
+                  *(float *)(param_1[3] + 0x40) = *(float *)(iVar20 + 0x28) + local_c4 * local_d0;
+                  *(float *)(param_1[3] + 0x44) = *(float *)(iVar20 + 0x2c) + local_c4 * local_cc;
+                  *(int *)(param_1[3] + 0xa4) = piVar33[0xd];
+                  *(int *)(param_1[3] + 0xa8) = piVar33[0xe];
+                  *(int *)(param_1[3] + 0xac) = piVar33[0xf];
+                }
+              }
+            }
+          }
+        }
+        else if (iVar30 < (int)(tU32)*(tU16 *)(*(int *)(iVar27 + 0x4c) + 8)) {
+          iVar23 = *(int *)(*(int *)(iVar27 + 0x4c) + 0x18);
+          if (*(tU16 *)((int)piVar33 + 0x4e) < *(tU16 *)(iVar23 + 0x1c + iVar30 * 0x24)) {
+            puVar22 = (tU16 *)
+                      (*(int *)(iVar23 + iVar30 * 0x24 + 4) +
+                      (tU32)*(tU16 *)((int)piVar33 + 0x4e) * 0x1c);
+            goto LAB_004d01e0;
+          }
+        }
+      }
+      else if (((gPeds_suicidal == 0) && (pbVar6 = (tU8 *)param_1[6], pbVar6 != (tU8 *)0x0)) &&
+              ((local_14 == 0 || (pbVar6[2] == 0)))) {
+        uVar29 = 0;
+        uVar26 = (tU32)*pbVar6;
+        if (uVar26 != 0) {
+          pcVar21 = *(char **)(pbVar6 + 4);
+          do {
+            if ((*(int *)(pcVar21 + 4) == *piVar33) && ((local_14 == 0 || (*pcVar21 == '\0')))) {
+              bVar18 = 1;
+              break;
+            }
+            uVar29 = uVar29 + 1;
+            pcVar21 = pcVar21 + 8;
+          } while ((int)uVar29 < (int)uVar26);
+        }
+        if (uVar29 != uVar26) goto LAB_004cfda5;
+      }
+LAB_004d0fda:
+      local_10 = local_10 + 1;
+      piVar33 = piVar33 + 0x14;
+    } while (local_10 < (int)(tU32)*(tU8 *)(puVar5 + 1));
+  }
+  return (float)local_d8;
 
-                id = entry->field_0x4e;
-                if (id >= adj2->field_0x12) {
-                    continue;
-                }
-                rec = adj2->field_0x0c[(id & 0xffff) * 5];
-                idx0 = rec[0];
-                idx1 = rec[1];
-                idx2 = rec[2];
-            } else {
-                tPed_face_adjacency* level;
-                tU16 id;
-                tMeshRow* rows;
-                tMeshRow* row;
-                tU16 *rec;
-
-                level = adj2->field_0x4c;
-                if (idx >= level->field_0x8) {
-                    continue;
-                }
-                rows = (tMeshRow*)level->field_0x18;
-                id = entry->field_0x4e;
-                row = &rows[idx];
-                if (id >= row->field_0x1c) {
-                    continue;
-                }
-                rec = (tU16*)&row->field_0x4[(id & 0xffff) * 7];
-                idx0 = rec[0];
-                idx1 = rec[1];
-                idx2 = rec[2];
-            }
-            cell = NULL;
-            if (cell_count > 0) {
-                int ci;
-
-                for (ci = 0; ci < cell_count; ci++) {
-                    if (gPed_flag_cells[ci].key0 == key0 && gPed_flag_cells[ci].key1 == key1) {
-                        cell = &gPed_flag_cells[ci];
-                        break;
-                    }
-                }
-            }
-            if (cell == NULL && cell_count < 0x10) {
-                cell = &gPed_flag_cells[cell_count];
-                cell_count++;
-                memset(&cell->flags[0], 0, sizeof(cell->flags));
-                cell->key0 = key0;
-                cell->key1 = key1;
-            }
-            use_cache = (cell != NULL && idx0 < 0x200);
-            if (use_cache && (cell->flags[idx0] & gPow2_word_array[3])) {
-                r = cell->flags[idx0] & gPow2_word_array[11];
-            } else {
-                r = NormalSideOfPlane((br_vector3*)&dirCopy.v[1], &entry->normal1, d0);
-                if (use_cache) {
-                    cell->flags[idx0] |= gPow2_word_array[3];
-                    if (r) {
-                        cell->flags[idx0] |= gPow2_word_array[11];
-                    }
-                }
-            }
-            if (r) {
-                goto PHASE_B;
-            }
-            use_cache = (cell != NULL && idx1 < 0x200);
-            if (use_cache && (cell->flags[idx1] & gPow2_word_array[3])) {
-                r = cell->flags[idx1] & gPow2_word_array[11];
-            } else {
-                r = NormalSideOfPlane((br_vector3*)&dirCopy.v[1], &entry->normal2, d0);
-                if (use_cache) {
-                    cell->flags[idx1] |= gPow2_word_array[3];
-                    if (r) {
-                        cell->flags[idx1] |= gPow2_word_array[11];
-                    }
-                }
-            }
-            if (r) {
-                goto PHASE_B;
-            }
-            use_cache = (cell != NULL && idx2 < 0x200);
-            if (use_cache && (cell->flags[idx2] & gPow2_word_array[3])) {
-                r = cell->flags[idx2] & gPow2_word_array[11];
-            } else {
-                r = NormalSideOfPlane((br_vector3*)&dirCopy.v[1], &entry->normal3, d0);
-                if (use_cache) {
-                    cell->flags[idx2] |= gPow2_word_array[3];
-                    if (r) {
-                        cell->flags[idx2] |= gPow2_word_array[11];
-                    }
-                }
-            }
-            if (!r) {
-                continue;
-            }
-        PHASE_B:
-            use_cache = (cell != NULL && idx0 < 0x200);
-            if (use_cache && (cell->flags[idx0] & gPow2_word_array[1])) {
-                r = cell->flags[idx0] & gPow2_word_array[9];
-            } else {
-                r = NormalSideOfPlane((br_vector3*)&norm.v[1], &entry->normal1, dot1);
-                if (use_cache) {
-                    cell->flags[idx0] |= gPow2_word_array[1];
-                    if (r) {
-                        cell->flags[idx0] |= gPow2_word_array[9];
-                    }
-                }
-            }
-            if (r) {
-                goto PHASE_C;
-            }
-            use_cache = (cell != NULL && idx1 < 0x200);
-            if (use_cache && (cell->flags[idx1] & gPow2_word_array[1])) {
-                r = cell->flags[idx1] & gPow2_word_array[9];
-            } else {
-                r = NormalSideOfPlane((br_vector3*)&norm.v[1], &entry->normal2, dot1);
-                if (use_cache) {
-                    cell->flags[idx1] |= gPow2_word_array[1];
-                    if (r) {
-                        cell->flags[idx1] |= gPow2_word_array[9];
-                    }
-                }
-            }
-            if (r) {
-                goto PHASE_C;
-            }
-            use_cache = (cell != NULL && idx2 < 0x200);
-            if (use_cache && (cell->flags[idx2] & gPow2_word_array[1])) {
-                r = cell->flags[idx2] & gPow2_word_array[9];
-            } else {
-                r = NormalSideOfPlane((br_vector3*)&norm.v[1], &entry->normal3, dot1);
-                if (use_cache) {
-                    cell->flags[idx2] |= gPow2_word_array[1];
-                    if (r) {
-                        cell->flags[idx2] |= gPow2_word_array[9];
-                    }
-                }
-            }
-            if (!r) {
-                continue;
-            }
-        PHASE_C:
-            use_cache = (cell != NULL && idx0 < 0x200);
-            if (use_cache && (cell->flags[idx0] & gPow2_word_array[2])) {
-                r = cell->flags[idx0] & gPow2_word_array[10];
-            } else {
-                r = NormalSideOfPlane((br_vector3*)&neg.v[1], &entry->normal1, dot2);
-                if (use_cache) {
-                    cell->flags[idx0] |= gPow2_word_array[2];
-                    if (r) {
-                        cell->flags[idx0] |= gPow2_word_array[10];
-                    }
-                }
-            }
-            if (r) {
-                goto PHASE_FINAL;
-            }
-            use_cache = (cell != NULL && idx1 < 0x200);
-            if (use_cache && (cell->flags[idx1] & gPow2_word_array[2])) {
-                r = cell->flags[idx1] & gPow2_word_array[10];
-            } else {
-                r = NormalSideOfPlane((br_vector3*)&neg.v[1], &entry->normal2, dot2);
-                if (use_cache) {
-                    cell->flags[idx1] |= gPow2_word_array[2];
-                    if (r) {
-                        cell->flags[idx1] |= gPow2_word_array[10];
-                    }
-                }
-            }
-            if (r) {
-                goto PHASE_FINAL;
-            }
-            use_cache = (cell != NULL && idx2 < 0x200);
-            if (use_cache && (cell->flags[idx2] & gPow2_word_array[2])) {
-                r = cell->flags[idx2] & gPow2_word_array[10];
-            } else {
-                r = NormalSideOfPlane((br_vector3*)&neg.v[1], &entry->normal3, dot2);
-                if (use_cache) {
-                    cell->flags[idx2] |= gPow2_word_array[2];
-                    if (r) {
-                        cell->flags[idx2] |= gPow2_word_array[10];
-                    }
-                }
-            }
-        PHASE_FINAL:
-            if (r == 0) {
-                continue;
-            }
-            if (matched == 0) {
-                goto PHASE_D;
-            }
-            {
-                tPed_face_adjacency* tri_level;
-                int* tri_base;
-                int tri_block;
-                br_vector3* vv0;
-                br_vector3* vv1;
-                br_vector3* vv2;
-                float e1x;
-                float e1z;
-                float cross1;
-                float t1;
-                float e2x;
-                float e2z;
-                float cross2;
-                float t2;
-                float e3x;
-                float e3z;
-                float cross3;
-                float t3;
-
-                tri_level = ((tPed_face_adjacency*)key0)->field_0x4c;
-                tri_base = (int*)tri_level->field_0x18;
-                tri_block = tri_base[key1 * 9 + 4];
-                vv1 = (br_vector3*)(tri_block + idx1 * 32);
-                vv0 = (br_vector3*)(tri_block + idx0 * 32);
-                vv2 = (br_vector3*)(tri_block + idx2 * 32);
-                e1x = vv1->v[0] - vv0->v[0];
-                e1z = vv1->v[2] - vv0->v[2];
-                cross1 = e1z * nz - e1x * nx;
-                if (fabsf(cross1) <= 0.0001) {
-                    t1 = 3.402823466e+38f;
-                } else {
-                    float rx;
-                    float rz;
-
-                    rx = vv0->v[0] - pMatVec->v[0];
-                    rz = vv0->v[2] - pMatVec->v[2];
-                    t1 = (rx * e1z - rz * e1x) / cross1;
-                    if (t1 < 0.0f) {
-                        t1 = 3.402823466e+38f;
-                    }
-                }
-                e2x = vv2->v[0] - vv0->v[0];
-                e2z = vv2->v[2] - vv0->v[2];
-                cross2 = e2z * nz - e2x * nx;
-                if (fabsf(cross2) <= 0.0001) {
-                    t2 = 3.402823466e+38f;
-                } else {
-                    float rx;
-                    float rz;
-
-                    rx = vv0->v[0] - pMatVec->v[0];
-                    rz = vv0->v[2] - pMatVec->v[2];
-                    t2 = (rx * e2z - rz * e2x) / cross2;
-                    if (t2 < 0.0f) {
-                        t2 = 3.402823466e+38f;
-                    }
-                }
-                e3x = vv2->v[0] - vv1->v[0];
-                e3z = vv2->v[2] - vv1->v[2];
-                cross3 = e3z * nz - e3x * nx;
-                if (fabsf(cross3) <= 0.0001) {
-                    t3 = 3.402823466e+38f;
-                } else {
-                    float rx;
-                    float rz;
-
-                    rx = vv1->v[0] - pMatVec->v[0];
-                    rz = vv1->v[2] - pMatVec->v[2];
-                    t3 = (rx * e3z - rz * e3x) / cross3;
-                    if (t3 < 0.0f) {
-                        t3 = 3.402823466e+38f;
-                    }
-                }
-                {
-                    float edge_x;
-                    float edge_z;
-                    int found;
-
-                    found = 0;
-                    if (t1 < t2 && t1 < t3 && t1 < best) {
-                        best = t1;
-                        edge_x = e1x;
-                        edge_z = e1z;
-                        found = 1;
-                    } else if (t2 < t3 && t2 < best) {
-                        best = t2;
-                        edge_x = e2x;
-                        edge_z = e2z;
-                        found = 1;
-                    } else if (t3 < best) {
-                        best = t3;
-                        edge_x = e3x;
-                        edge_z = e3z;
-                        found = 1;
-                    }
-                    if (!found) {
-                        continue;
-                    }
-                    cache->field_0xa4.v[0] = edge_x;
-                    cache->field_0xa4.v[1] = 0.0f;
-                    cache->field_0xa4.v[2] = -edge_z;
-                    cache->field_0x30.v[0] = 0.0f;
-                    cache->field_0x30.v[1] = 0.0f;
-                    cache->field_0x30.v[2] = 0.0f;
-                    BrVector3Normalise(&cache->field_0xa4, &cache->field_0xa4);
-                    cache->field_0x18 |= 8;
-                }
-                continue;
-            }
-        PHASE_D:
-            {
-                float dot;
-
-                dot = entry->plane.v[1] * dir.v[1] + entry->plane.v[0] * dir.v[0] + entry->plane.v[2] * dir.v[2];
-                if (dot > 0.0f) {
-                    if (((unsigned char*)&entry->material->flags)[1] & 0x10) {
-                        entry->plane.v[0] *= -1.0f;
-                        entry->plane.v[1] *= -1.0f;
-                        entry->plane.v[2] *= -1.0f;
-                        entry->d = -entry->d;
-                    }
-                }
-            }
-            use_cache = (cell != NULL && idx0 < 0x200);
-            if (use_cache && (cell->flags[idx0] & gPow2_word_array[4])) {
-                r = cell->flags[idx0] & gPow2_word_array[12];
-            } else {
-                r = NormalSideOfPlane((br_vector3*)&negN.v[1], &entry->normal1, d1);
-                if (use_cache) {
-                    cell->flags[idx0] |= gPow2_word_array[4];
-                    if (r) {
-                        cell->flags[idx0] |= gPow2_word_array[12];
-                    }
-                }
-            }
-            if (r) {
-                goto PHASE_E;
-            }
-            use_cache = (cell != NULL && idx1 < 0x200);
-            if (use_cache && (cell->flags[idx1] & gPow2_word_array[4])) {
-                r = cell->flags[idx1] & gPow2_word_array[12];
-            } else {
-                r = NormalSideOfPlane((br_vector3*)&negN.v[1], &entry->normal2, d1);
-                if (use_cache) {
-                    cell->flags[idx1] |= gPow2_word_array[4];
-                    if (r) {
-                        cell->flags[idx1] |= gPow2_word_array[12];
-                    }
-                }
-            }
-            if (r) {
-                goto PHASE_E;
-            }
-            use_cache = (cell != NULL && idx2 < 0x200);
-            if (use_cache && (cell->flags[idx2] & gPow2_word_array[4])) {
-                r = cell->flags[idx2] & gPow2_word_array[12];
-            } else {
-                r = NormalSideOfPlane((br_vector3*)&negN.v[1], &entry->normal3, d1);
-                if (use_cache) {
-                    cell->flags[idx2] |= gPow2_word_array[4];
-                    if (r) {
-                        cell->flags[idx2] |= gPow2_word_array[12];
-                    }
-                }
-            }
-            if (!r) {
-                continue;
-            }
-        PHASE_E:
-            if (cache->field_0x18 == 0) {
-                continue;
-            }
-            best = result;
-            cache->field_0xbc = result * result;
-            cache->field_0x30.v[0] = 0.0f;
-            cache->field_0x30.v[1] = 0.0f;
-            cache->field_0x30.v[2] = 0.0f;
-            cache->field_0x3c.v[0] = pMatVec->v[0] + result * dir.v[0];
-            cache->field_0x3c.v[1] = pMatVec->v[1] + result * dir.v[1];
-            cache->field_0x3c.v[2] = pMatVec->v[2] + result * dir.v[2];
-            cache->field_0xa4 = entry->plane;
-            continue;
-    }
-    return best;
 }
+#pragma auto_inline(on)
 
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 38.65% | difftest PASS 2000 trials (spec difftest/specs/004cef80_PedScanForObjects.json) | reason regalloc-stack-layout/x87-order
 // FUNCTION: CARMA2_HW 0x004cef80
 void C2_HOOK_FASTCALL PedScanForObjects(tPedestrian* pPed, tU32 pTime) {
+    tPed_cache_006944c0* ped_cache;
+    tPhysics_object* object;
+    tPhysics_object* best_object;
+    tPhysics_object* player_object;
+    tCar_spec* car;
+    br_actor* actor;
+    const br_vector3* object_pos;
+    br_vector3 target_pos;
+    br_matrix34 rotation;
+    float search_distance;
+    float best_distance;
+    float delta_x;
+    float delta_y;
+    float delta_z;
+    float relative_x;
+    float relative_z;
+    float distance;
+    float projection;
+    int move;
 
-    NOT_IMPLEMENTED();
+    if (pPed->field_0x0c == NULL) {
+        return;
+    }
+    pPed->field_0x0c->field_0x18 &= ~4;
+    srand((tU32)pPed);
+    search_distance = SRandomBetween(0.8f, 1.2f) * gPed_scan_distance_scale;
+    best_distance = gPedProximity_max_float;
+    best_object = NULL;
+    object = PHILGetFirstObject();
+    player_object = gProgram_state.current_car.collision_info;
+    ped_cache = pPed->field_0x0c;
+
+    if (gProgram_state.current_car.keys.horn) {
+        best_object = player_object;
+        actor = best_object->actor;
+        object_pos = &actor->t.t.translate.t;
+        delta_x = object_pos->v[0] - pPed->pos.v[0];
+        delta_y = object_pos->v[1] - pPed->pos.v[1];
+        delta_z = object_pos->v[2] - pPed->pos.v[2];
+        if (fabsf(delta_x) < gPed_kill_motion_speed_threshold
+                && fabsf(delta_y) < gPed_kill_motion_speed_threshold
+                && fabsf(delta_z) < gPed_kill_motion_speed_threshold) {
+            target_pos = *object_pos;
+            best_distance = 0.f;
+            goto found_target;
+        }
+    }
+
+    while (object != NULL) {
+        car = (tCar_spec*)object->owner;
+        if (car == NULL || ((object->flags_0x238 < 2 || object->flags_0x238 > 4)
+                && (car == NULL || (tS8)object->flags_0x238 != 5))) {
+            actor = object->actor;
+            object_pos = &actor->t.t.translate.t;
+            delta_x = object_pos->v[0] - pPed->pos.v[0];
+            delta_y = object_pos->v[1] - pPed->pos.v[1];
+            delta_z = object_pos->v[2] - pPed->pos.v[2];
+            if (fabsf(delta_x) < gPed_kill_motion_speed_threshold
+                    && fabsf(delta_y) < gPed_kill_motion_speed_threshold
+                    && fabsf(delta_z) < gPed_kill_motion_speed_threshold) {
+                relative_x = object->v.v[0] - pPed->character->field_0xd8.v[0];
+                relative_z = object->v.v[2] - pPed->character->field_0xd8.v[2];
+                if (gPeds_suicidal) {
+                    distance = delta_x * delta_x + delta_y * delta_y + delta_z * delta_z;
+                    if (!gEthereal_pedestrians && car != NULL && object->flags_0x238 == 1
+                            && car != NULL && car->driver > 5 && distance < car->proxy_ray_distance) {
+                        DoPedAnnihilator(pPed, car, distance, pTime, NULL);
+                        goto calm_down;
+                    }
+                    if (distance < best_distance) {
+                        best_distance = distance;
+                        best_object = object;
+                        target_pos = *object_pos;
+                    }
+                } else if (relative_x != gConst_replay_rate_zero || relative_z != gConst_replay_rate_zero
+                        || (car != NULL && ((tS8)object->flags_0x238 == 1
+                            && car != NULL && car->driver > 5
+                            && car->proxy_ray_distance != gConst_replay_rate_zero))) {
+                    if (relative_x == gConst_replay_rate_zero && relative_z == gConst_replay_rate_zero) {
+                        distance = delta_x * delta_x + delta_z * delta_z;
+                    } else {
+                        float cross;
+
+                        cross = relative_z * delta_x - relative_x * delta_z;
+                        distance = (cross * cross) / (relative_x * relative_x + relative_z * relative_z);
+                    }
+                    if (!gEthereal_pedestrians && car != NULL && (tS8)object->flags_0x238 == 1
+                            && car != NULL && car->driver > 5 && distance < car->proxy_ray_distance) {
+                        DoPedAnnihilator(pPed, car, distance, pTime, NULL);
+                        goto calm_down;
+                    }
+                    if (distance < object->radius + object->radius) {
+                        projection = -((relative_z * delta_z + relative_x * delta_x)
+                                / (relative_x * relative_x + relative_z * relative_z));
+                        if (projection >= gConst_replay_rate_zero && projection < search_distance) {
+                            best_distance = distance;
+                            best_object = object;
+                            target_pos = *object_pos;
+                            if (object->flags_0x238 == 16) {
+                                DroneNoOp();
+                            }
+                            srand(pTime ^ (tU32)pPed);
+                            goto found_target;
+                        }
+                    }
+                }
+            }
+        }
+        object = PHILGetNextObject(object);
+    }
+
+    srand(pTime ^ (tU32)pPed);
+    if (!gPeds_suicidal || best_distance == gPedProximity_max_float) {
+        goto calm_down;
+    }
+
+found_target:
+    if ((gBlind_pedestrians != 0 || gPed_valium_left != 0) && !gProgram_state.current_car.keys.horn) {
+        goto calm_down;
+    }
+    if ((ped_cache->field_0x18 & 2) != 0
+            && !(best_distance / ped_cache->field_0xbc < gPed_medium_blood_cloud_force_threshold)) {
+        goto calm_down;
+    }
+    ped_cache->field_0x18 |= 4;
+    if (gPeds_suicidal) {
+        target_pos.v[0] -= pPed->pos.v[0];
+        target_pos.v[1] -= pPed->pos.v[1];
+        target_pos.v[2] -= pPed->pos.v[2];
+        SetPedXZDirection(pPed, &target_pos, 0.f, pTime);
+        RescanPedProximity(pPed, NULL);
+        return;
+    }
+
+    ped_cache->field_0x30 = best_object->v;
+    ped_cache->field_0x3c = target_pos;
+    target_pos.v[0] = pPed->pos.v[0] - target_pos.v[0];
+    target_pos.v[1] = pPed->pos.v[1] - target_pos.v[1];
+    target_pos.v[2] = pPed->pos.v[2] - target_pos.v[2];
+    distance = sqrtf(target_pos.v[0] * target_pos.v[0] + target_pos.v[1] * target_pos.v[1] + target_pos.v[2] * target_pos.v[2]);
+    if (distance <= gPed_direction_length_epsilon) {
+        ped_cache->field_0xa4.v[0] = 1.f;
+        ped_cache->field_0xa4.v[1] = 0.f;
+        ped_cache->field_0xa4.v[2] = 0.f;
+    } else {
+        float scale;
+
+        scale = (float)(gPed_kill_min_height / distance);
+        ped_cache->field_0xa4.v[0] = scale * target_pos.v[0];
+        ped_cache->field_0xa4.v[1] = scale * target_pos.v[1];
+        ped_cache->field_0xa4.v[2] = scale * target_pos.v[2];
+    }
+    BrMatrix34Rotate(&rotation, IRandomPosNeg(0x2aa8), &y_unit_vector);
+    if (best_object->v.v[0] * best_object->v.v[0]
+            + best_object->v.v[1] * best_object->v.v[1]
+            + best_object->v.v[2] * best_object->v.v[2] <= gPed_kill_min_height) {
+        if (!gProgram_state.current_car.keys.horn || best_object != player_object) {
+            return;
+        }
+    }
+    if (pPed->action == ePed_action_walking) {
+        target_pos.v[0] = -ped_cache->field_0xa4.v[0];
+        target_pos.v[1] = -ped_cache->field_0xa4.v[1];
+        target_pos.v[2] = -ped_cache->field_0xa4.v[2];
+        SetPedXZDirection(pPed, &target_pos, 0.f, pTime);
+        RescanPedProximity(pPed, NULL);
+        if (pPed->action != ePed_action_running && pPed->action != ePed_action_panicking
+                && pPed->action != ePed_action_getting_up) {
+            SetPedMove(pPed, gPed_move_fsm[114][IRandomBetween(0, 7)], -1, 0, 1, pTime, 2);
+            MakePedNoise(pPed, 6, 0, NULL);
+            if (pPed->hit_points > 0 && pPed->field_0x0c != NULL) {
+                pPed->field_0x0c->field_0x1c = &gScare_ped_anim_sequence;
+                pPed->field_0x0c->field_0x78 = pTime;
+                pPed->field_0x0c->field_0x1a = 0;
+                SetCharacterBoneModelAR(pPed->character,
+                    pPed->character->personality->form->index_head_bone,
+                    pPed->field_0x0c->field_0x1c->poses[0],
+                    0);
+            }
+        }
+        pPed->field_0x28 = pTime;
+        *(tU32*)((char*)pPed + 0x2c) = pTime;
+        return;
+    }
+
+    if (pTime - *(tU32*)((char*)pPed + 0x2c) > 9999 && ped_cache->field_0x98 < 1) {
+        if (pPed->hit_points > 0 && pPed->field_0x0c != NULL) {
+            int bone_index;
+            int model_set;
+            int pose;
+
+            ped_cache->field_0x1c = &gPed_anim_sequence_0065e4e0;
+            ped_cache->field_0x78 = pTime;
+            ped_cache->field_0x1a = 0;
+            bone_index = pPed->character->personality->form->index_head_bone;
+            pose = ped_cache->field_0x1c->poses[0];
+            if (pPed->character->field_0x4 >= 0) {
+                model_set = GetCharacterModelSet(pPed->character);
+                if (bone_index < 0) {
+                    PipeSinglePedModelChange(pPed, bone_index, NULL, -1, model_set, 0);
+                    SetCharacterAllBonesModel(pPed->character, pose, 0);
+                } else {
+                    PipeSinglePedModelChange(pPed, bone_index,
+                        GetCharacterBoneModel(pPed->character, bone_index), pose, model_set, 0);
+                    SetCharacterBoneModel(pPed->character, bone_index, pose, 0);
+                }
+            }
+        }
+        move = ((int*)((char*)gPed_move_fsm + 0xc98))[IRandomBetween(0, 8)];
+        if (move < 0) {
+            move = -move;
+            SetPedMove(pPed, move, -1, 0, 1, pTime, 1);
+        } else {
+            SetPedMove(pPed, move, -1, 0, 1, pTime, 2);
+        }
+        if (move == 2) {
+            MakePedNoise(pPed, 6, 0, NULL);
+        } else if (move == 10 || move == 11) {
+            MakePedNoise(pPed, 8, 0, NULL);
+        } else if (move == 13) {
+            MakePedNoise(pPed, 10, 1, NULL);
+        }
+    }
+    if (pPed->action != ePed_action_running && pPed->action != ePed_action_panicking
+            && pPed->action != ePed_action_getting_up) {
+        SetPedMove(pPed, gPed_move_fsm[114][IRandomBetween(0, 7)], -1, 0, 1, pTime, 2);
+        MakePedNoise(pPed, 6, 0, NULL);
+        if (pPed->hit_points > 0 && pPed->field_0x0c != NULL) {
+            ped_cache->field_0x1c = &gScare_ped_anim_sequence;
+            ped_cache->field_0x78 = pTime;
+            ped_cache->field_0x1a = 0;
+            SetCharacterBoneModelAR(pPed->character,
+                pPed->character->personality->form->index_head_bone,
+                ped_cache->field_0x1c->poses[0],
+                0);
+        }
+    }
+    pPed->field_0x28 = pTime;
+    return;
+
+calm_down:
+    if (pPed->hit_points > 0 && pPed->action == ePed_action_running
+            && ped_cache->field_0x18 == 0 && pTime - pPed->field_0x28 > 9999
+            && pPed->character->field_0xc == 0 && ped_cache->field_0x98 < 1) {
+        int bone_index;
+        int model_set;
+        int pose;
+
+        move = IRandomBetween(*(int*)((char*)pPed->movement_spec + 8), *(int*)((char*)pPed->movement_spec + 0xc));
+        SetPedMove(pPed, 30, move, 0, 1, pTime, 0);
+        if (pPed->hit_points > 0 && pPed->field_0x0c != NULL) {
+            ped_cache->field_0x1c = &gCalm_ped_anim_sequence;
+            ped_cache->field_0x78 = pTime;
+            ped_cache->field_0x1a = 0;
+            bone_index = pPed->character->personality->form->index_head_bone;
+            pose = ped_cache->field_0x1c->poses[0];
+            if (pPed->character->field_0x4 >= 0) {
+                model_set = GetCharacterModelSet(pPed->character);
+                if (bone_index < 0) {
+                    PipeSinglePedModelChange(pPed, bone_index, NULL, -1, model_set, 0);
+                    SetCharacterAllBonesModel(pPed->character, pose, 0);
+                    return;
+                }
+                PipeSinglePedModelChange(pPed, bone_index,
+                    GetCharacterBoneModel(pPed->character, bone_index), pose, model_set, 0);
+                SetCharacterBoneModel(pPed->character, bone_index, pose, 0);
+            }
+        }
+    }
+}
+#pragma auto_inline(on)
+
+// FUNCTION: CARMA2_HW 0x00409c20
+int C2_HOOK_FASTCALL FUN_00409c20(tPed_character_instance* pCharacter, undefined4 pTime) {
+    int moved;
+
+    moved = 0;
+    pCharacter->field_0x1c = pCharacter->personality->form->moves[pCharacter->field_0x7].move->count_frames - 1;
+    if ((pCharacter->field_0x9 & 0x2) != 0) {
+        pCharacter->field_0x9 &= 0xfd;
+        moved = gPed_vtable->move_completed(pCharacter);
+    }
+    if ((tS8)pCharacter->field_0x8 >= 0) {
+        SetCharacterMove(pCharacter,
+            pCharacter->field_0x8,
+            (float)(tS32)(tS16)pCharacter->field_0x20,
+            0,
+            (pCharacter->field_0x9 & 0x4) >> 2,
+            pTime);
+        return 1;
+    }
+    pCharacter->field_0x1c = 0;
+    return moved;
 }
 
 // FUNCTION: CARMA2_HW 0x00409ca0
 void C2_HOOK_FASTCALL MungeCharacterAnimation(tPed_character_instance* pCharacter, tU32 pTime, undefined4 pArg3) {
-    tPed_personality* personality;
-    tPed_form* form;
-    tPed_move* model;
+    /* volatile keeps loop_count in its stack slot ([esp+0x10]) as in the original; plain int is enregistered by VC5 */
+    volatile tS32 loop_count = 0;
     br_matrix34* work;
+    tPed_move* model;
+    double t;
     float kx;
     float ky;
     float kz;
-    double t;
-    tS32 loop_count = 0;
-    tU32 frame_or_time;
     int i;
+    int moved;
+
+#ifndef CARPOCALYPSE2_MATCHING
+    if ((pCharacter->field_0x14 & 4) || gAction_replay_mode) {
+        tPed_animation_velocity* state = PedAnimationVelocityState(pCharacter);
+        if (state != NULL) {
+            state->valid = 0;
+        }
+    }
+#endif
 
     if (pCharacter->field_0x7 < 0) {
         return;
@@ -6894,142 +9286,131 @@ void C2_HOOK_FASTCALL MungeCharacterAnimation(tPed_character_instance* pCharacte
             pCharacter->field_0x24 = pTime;
             return;
         }
-        pCharacter->field_0x24 = pTime - pCharacter->field_0x1e;
+        pCharacter->field_0x24 = pTime - (tS16)pCharacter->field_0x1e;
     }
 
-    personality = pCharacter->personality;
-    form = personality->form;
-    model = form->moves[pCharacter->field_0x7].move;
+    model = pCharacter->personality->form->moves[pCharacter->field_0x7].move;
 
     if (pCharacter->field_0x4 < 0) {
         work = &pCharacter->field_0x2c;
     } else if (pCharacter->field_0xe8 != NULL) {
         work = pCharacter->field_0xe8;
     } else {
-        work = &form->actor_sets[pCharacter->field_0x4].actors[0]->t.t.mat;
+        work = &pCharacter->personality->form->actor_sets[pCharacter->field_0x4].actors[0]->t.t.mat;
     }
     kx = work->m[3][0];
     ky = work->m[3][1];
     kz = work->m[3][2];
 
-    frame_or_time = pTime;
-
-    if (pCharacter->field_0x1e != 0) {
+    if ((tS16)pCharacter->field_0x1e != 0) {
         if (pCharacter->field_0x24 == 0) {
             SetCharacterBonePositions(pCharacter, 0, 0);
         } else {
-tS32 delta;
             float rate;
 
-            delta = (tS32)(pTime - pCharacter->field_0x24);
-            rate = (float)delta / (tS32)(tS16)pCharacter->field_0x1e;
+            rate = (float)(tS32)(pTime - pCharacter->field_0x24) / (tS32)(tS16)pCharacter->field_0x1e;
             if (rate > 10.0f) {
                 rate = 10.0f;
             } else if (rate < -10.0f) {
                 rate = -10.0f;
             }
-            frame_or_time = (tU32)(tS32)(tS16)pCharacter->field_0x1c;
-            t = rate + (double)*(float*)&pCharacter->field_0x18 + frame_or_time;
+            t = rate + *(float*)&pCharacter->field_0x18 + (tS32)(tS16)pCharacter->field_0x1c;
             *(float*)&pCharacter->field_0x18 = (float)(t - floor(t));
-            loop_count = (tS32)(floor(t) - (double)(tS32)frame_or_time);
+            loop_count = (tS32)(floor(t) - (tS32)(tS16)pCharacter->field_0x1c);
 
             if (loop_count > 0) {
                 for (i = 0; i < loop_count; i++) {
                     pCharacter->field_0x1c++;
-                    if ((tS32)(tS16)pCharacter->field_0x1c >= model->count_frames) {
-                        if (gPed_676914 == 0) {
-                            pCharacter->field_0x1c = (tS16)(model->count_frames - 1);
+                    if ((tS16)pCharacter->field_0x1c >= pCharacter->personality->form->moves[pCharacter->field_0x7].move->count_frames) {
+                        if (gAction_replay_mode != 0) {
+                            if (model->move_flags & 0x1) {
+                                pCharacter->field_0x1c--;
+                                i = loop_count - 1;
+                            } else {
+                                pCharacter->field_0x1c = 0;
+                            }
+                        } else {
+                            moved = 0;
+                            pCharacter->field_0x1c = (tS16)(pCharacter->personality->form->moves[pCharacter->field_0x7].move->count_frames - 1);
                             if (pCharacter->field_0x9 & 0x2) {
                                 pCharacter->field_0x9 &= (tU8)~0x2;
-                                gPed_67697c->field_0xc(pCharacter);
+                                moved = gPed_vtable->move_completed(pCharacter);
                             }
-                            if ((tS32)(tS8)pCharacter->field_0x8 >= 0) {
+                            if (pCharacter->field_0x8 >= 0) {
                                 SetCharacterMove(pCharacter,
-                                    (tS32)(tS8)pCharacter->field_0x8,
+                                    pCharacter->field_0x8,
                                     (float)(tS32)(tS16)pCharacter->field_0x20,
                                     0,
-                                    (pCharacter->field_0x9 & 0x4) >> 2,
-                                    frame_or_time);
+                                    (((tS8)pCharacter->field_0x9 & 0x4) >> 2),
+                                    pTime);
+                                moved = 1;
+                            } else {
+                                pCharacter->field_0x1c = 0;
+                            }
+                            if (moved) {
                                 SetCharacterBonePositions(pCharacter, 0, 0);
                                 break;
                             }
-                            pCharacter->field_0x1c = 0;
-                        } else if (model->move_flags & 0x1) {
-                            pCharacter->field_0x1c--;
-                            i = loop_count - 1;
-                        } else {
-                            pCharacter->field_0x1c = 0;
                         }
                     }
                     SetCharacterBonePositions(pCharacter, i != loop_count - 1 ? 2 : 0, 1);
                 }
-            }
-
-            if (loop_count == 0) {
-                if (pCharacter->field_0x14 & 0x4 || gPed_676914 != 0) {
-                    SetCharacterBonePositions(pCharacter, 0, 0);
-                }
-            }
-
-            if (loop_count < 0) {
+            } else if (loop_count < 0) {
                 for (i = loop_count; i < 0; i++) {
                     SetCharacterBonePositions(pCharacter, i < -1 ? 2 : 0, 1);
                     pCharacter->field_0x1c--;
-                    if ((tS32)(tS16)pCharacter->field_0x1c < 0) {
+                    if ((tS16)pCharacter->field_0x1c < 0) {
                         if (model->move_flags & 0x1) {
                             pCharacter->field_0x1c++;
                             SetCharacterBonePositions(pCharacter, 3, 1);
                             i = 0;
                         } else {
-                            pCharacter->field_0x1c = (tS16)(model->count_frames - 1);
+                            pCharacter->field_0x1c = (tS16)(pCharacter->personality->form->moves[pCharacter->field_0x7].move->count_frames - 1);
                         }
                     }
                 }
             }
-
-            pCharacter->field_0x24 = frame_or_time;
-
-            if (loop_count != 0) {
-                float dx;
-                float dy;
-                float dz;
-                double x;
-
-                dx = work->m[3][0] - kx;
-                dy = work->m[3][1] - ky;
-                dz = work->m[3][2] - kz;
-                x = (double)dx * (double)loop_count * 0.001;
-                pCharacter->field_0xd8.v[0] = (float)((double)dy * (double)dy / x);
-                pCharacter->field_0xd8.v[1] = dz;
-                pCharacter->field_0xd8.v[2] = dy;
+            if (loop_count == 0) {
+                if ((pCharacter->field_0x14 & 0x4) || gAction_replay_mode != 0) {
+                    SetCharacterBonePositions(pCharacter, 0, 0);
+                }
             }
         }
     }
 
-    pCharacter->field_0x24 = frame_or_time;
+    pCharacter->field_0x24 = pTime;
 
-    if (loop_count == 0) {
-        if (pCharacter->field_0x1e == 0) {
-            pCharacter->field_0xd8.v[0] = 0.0f;
-            pCharacter->field_0xd8.v[1] = 0.0f;
-            pCharacter->field_0xd8.v[2] = 0.0f;
+    if (loop_count != 0) {
+        pCharacter->field_0xd8.v[0] = work->m[3][0] - kx;
+        pCharacter->field_0xd8.v[1] = work->m[3][1] - ky;
+        pCharacter->field_0xd8.v[2] = work->m[3][2] - kz;
+        t = (double)loop_count * (double)(tS16)pCharacter->field_0x1e * 0.001;
+        pCharacter->field_0xd8.v[0] /= t;
+        pCharacter->field_0xd8.v[1] /= t;
+        pCharacter->field_0xd8.v[2] /= t;
+    } else if ((tS16)pCharacter->field_0x1e == 0) {
+        pCharacter->field_0xd8.v[0] = 0.0f;
+        pCharacter->field_0xd8.v[1] = 0.0f;
+        pCharacter->field_0xd8.v[2] = 0.0f;
+    }
+#ifndef CARPOCALYPSE2_MATCHING
+    if (!(pCharacter->field_0x14 & 4) && !gAction_replay_mode
+            && (loop_count != 0 || (tS16)pCharacter->field_0x1e == 0)) {
+        tPed_animation_velocity* state = PedAnimationVelocityState(pCharacter);
+        if (state != NULL) {
+            state->velocity = pCharacter->field_0xd8;
+            state->valid = 1;
         }
     }
+#endif
+
 }
 
 // FUNCTION: CARMA2_HW 0x004cfa30
 void C2_HOOK_FASTCALL SetCharacterBoneModelAR(tPed_character_instance* pCharacter, int pArg2, undefined4 pArg3, int pArg4) {
 
     if (pCharacter->field_0x4 >= 0) {
-        if (pArg2 >= 0) {
-            PipeSinglePedModelChange(pCharacter->ped,
-                pArg2,
-                GetCharacterBoneModel(pCharacter, pArg2),
-                pArg3,
-                GetCharacterModelSet(pCharacter),
-                pArg4);
-            SetCharacterBoneModel(pCharacter, pArg2, pArg3, pArg4);
-        } else {
+        if (pArg2 < 0) {
             PipeSinglePedModelChange(pCharacter->ped,
                 pArg2,
                 0,
@@ -7037,6 +9418,14 @@ void C2_HOOK_FASTCALL SetCharacterBoneModelAR(tPed_character_instance* pCharacte
                 GetCharacterModelSet(pCharacter),
                 pArg4);
             SetCharacterAllBonesModel(pCharacter, pArg3, pArg4);
+        } else {
+            PipeSinglePedModelChange(pCharacter->ped,
+                pArg2,
+                GetCharacterBoneModel(pCharacter, pArg2),
+                pArg3,
+                GetCharacterModelSet(pCharacter),
+                pArg4);
+            SetCharacterBoneModel(pCharacter, pArg2, pArg3, pArg4);
         }
     }
 }
@@ -7052,111 +9441,147 @@ br_matrix34* C2_HOOK_FASTCALL GetBoneMatrixPtr(tPed_character_instance* pCharact
     return &pCharacter->personality->form->actor_sets[pCharacter->field_0x4].actors[pBone_index]->t.t.mat;
 }
 
-// UNLABELED: CARMA2_HW 0x004ccb10
-void C2_HOOK_FASTCALL DoGibShower(int pId, int pTime, int pSeed, float pForce, int pSize_index, br_vector3* pArg6, br_vector3* pArg7, br_vector3* pArg8) {
-    int old_rand;
-    int i;
-    int j;
-    int max_instances;
-    tPed_giblet_size_spec* spec;
+// C2PORT-NONMATCHING: best 63.76% | difftest PASS 2000 trials (spec difftest/specs/004ccb10_FUN_004ccb10.json) | reason regalloc-stack-layout
+// FUNCTION: CARMA2_HW 0x004ccb10
+void C2_HOOK_FASTCALL FUN_004ccb10(tU32 pFragment_owner, tU32 pTime, tU32 pSeed, float pForce, int pStarting_size, br_vector3* pInitial_position, br_vector3* pInitial_velocity, br_vector3* volatile pDirection) {
+    int saved_random_seed;
+    int size_index;
+    int fragment_count;
+    int fragment_index;
+    tPed_giblet_size_spec* size_spec;
+    tSmash_vertex* fragment;
+    float scale;
+    volatile tU32 saved_time_arg;
 
-    old_rand = rand();
+    saved_time_arg = pTime;
+    saved_random_seed = rand();
     srand(pSeed);
-    spec = &gGiblet_sizes[pSize_index];
-    for (i = pSize_index; i < gGiblet_size_count; i++, spec++) {
-        if (pForce < spec->min_force) {
-            continue;
-        }
-        max_instances = (int)((pForce - spec->min_force) / spec->instance_force + 1.0f);
-        if (max_instances > spec->max_count) {
-            max_instances = spec->max_count;
-        }
-        for (j = 0; j < max_instances; j++) {
-            tSmash_vertex* fragment;
-
-            fragment = AllocateFragment(spec->models[IRandomBetween(0, spec->model_count - 1)], pId, 2);
-            if (fragment != NULL) {
-                float v;
-
-                v = PositionFragment(fragment->actor, &gGiblet_initial_position, 0, 0, 0, pArg6, pArg7, 0);
-                InitFragmentSpeed(fragment, &gGiblet_initial_speed, pArg8, v, gGiblet_min_max_time, pTime, &gZero_vector__smash, 0, 0);
+    size_index = pStarting_size;
+    size_spec = gGiblet_sizes + size_index;
+    if (size_index < gGiblet_size_count) {
+        do {
+            if (pForce >= size_spec->min_force) {
+                fragment_count = (int)((pForce - size_spec->min_force) / size_spec->instance_force + 1.f);
+                if (fragment_count > size_spec->max_count) {
+                    fragment_count = size_spec->max_count;
+                }
+                fragment_index = 0;
+                if (fragment_count > 0) {
+                    do {
+                        fragment = AcquireGlassFragment(size_spec->models[IRandomBetween(0, size_spec->model_count - 1)], pFragment_owner, 2);
+                        if (fragment == NULL) {
+                            break;
+                        }
+                        scale = FUN_004eb4a0(fragment->actor, &gGiblet_initial_position, 0, pInitial_position, pInitial_velocity, 0, NULL, 0);
+                        FUN_004eb120(fragment, &gGiblet_initial_speed, pDirection, scale, gGiblet_min_max_time, saved_time_arg, &gZero_vector__smash, NULL, NULL);
+                        fragment_index++;
+                    } while (fragment_index < fragment_count);
+                }
             }
-        }
+            size_index++;
+            size_spec++;
+        } while (size_index < gGiblet_size_count);
     }
-    srand(old_rand);
+    srand(saved_random_seed);
 }
 
-#pragma auto_inline(off)
-#pragma inline_depth(0)
+// FUNCTION: CARMA2_HW 0x004ccc40
+void C2_HOOK_FASTCALL FUN_004ccc40(int pCurrent_time, tU32 pOwner, int pSpurt_time, tU32 pSeed, float pForce, int pStarting_size, br_vector3* pInitial_position, br_vector3* pInitial_velocity, br_vector3* pDirection) {
+    int i;
+    float time_since_spurt;
+    tSmash_vertex* fragment;
+
+    FUN_004ccb10(pOwner, pSpurt_time, pSeed, pForce, pStarting_size, pInitial_position, pInitial_velocity, pDirection);
+    time_since_spurt = (float)(pCurrent_time - pSpurt_time);
+    fragment = gSmash_glass_fragments;
+    i = CARPOCALYPSE2_ASIZE(gSmash_glass_fragments);
+    do {
+        if (fragment->end_time != 0 && fragment->field_0x18 == pOwner) {
+            fragment->field_0x34 = 0;
+            FUN_004eff30(fragment, GetTotalTime(), time_since_spurt);
+            fragment->field_0x34 = 1;
+        }
+        fragment++;
+        i--;
+    } while (i != 0);
+}
+
+// C2PORT-NONMATCHING: best 85.23% | difftest PASS 2000 trials (spec difftest/specs/004ccff0_DoGiblets.json) | reason x87-order
 // FUNCTION: CARMA2_HW 0x004ccff0
-void C2_HOOK_FASTCALL DoGiblets(tPedestrian* pPed, tPhysics_object* pObject, tPhysics_object* pOpt_speed_object, float pArg4, br_vector3* pArg5, int pArg6) {
+void C2_HOOK_FASTCALL DoGiblets(tPedestrian* pPed, tPhysics_object* pObject, tPhysics_object* pOptional_speed_object, float pForce, br_vector3* pInitial_velocity, int pStarting_size) {
     tU32 time;
     int seed;
-    br_vector3 vec;
+    br_vector3 direction;
+    tPhysics_object* velocity_object;
 
     if (gGoreLevel <= 0) {
         return;
     }
+
     time = GetTotalTime();
-    if (pArg4 > 0.5) {
+    if (pForce > gPed_kill_relative_speed_ratio) {
         Explode(&gPed_large_blood_cloud, GetCharacterActorPtr(pPed->character), &pPed->character->personality->bb, &pObject->cmpos);
-    } else if (pArg4 > 0.25) {
+    } else if (pForce > gPed_medium_blood_cloud_force_threshold) {
         Explode(&gPed_medium_blood_cloud, GetCharacterActorPtr(pPed->character), &pPed->character->personality->bb, &pObject->cmpos);
-    } else if (pArg4 > 0.05) {
+    } else if (pForce > gPed_small_blood_cloud_force_threshold) {
         Explode(&gPed_explosion_small_blood_cloud, GetCharacterActorPtr(pPed->character), &pPed->character->personality->bb, &pObject->cmpos);
     }
-    seed = (int)pArg5->v[2] ^ (int)pArg5->v[1] ^ time ^ (int)pOpt_speed_object ^ (int)pPed ^ (int)pArg5->v[0];
-    if (pOpt_speed_object == NULL) {
-        pOpt_speed_object = pObject;
-    }
-    vec.v[0] = pOpt_speed_object->v.v[0] * 6.9;
-    vec.v[1] = pOpt_speed_object->v.v[1] * 6.9;
-    vec.v[2] = pOpt_speed_object->v.v[2] * 6.9;
-    DoGibShower(gGib_shower_id, time, seed, pArg4, pArg6, &pPed->pos, pArg5, &vec);
-    PipeSingleGibShower(gGib_shower_id, time, seed, *(int*)&pArg4, pArg6, &pPed->pos, pArg5, &vec);
-    gGib_shower_id--;
+
+    seed = (int)pInitial_velocity->v[2];
+    seed ^= (int)pInitial_velocity->v[1];
+    seed ^= time;
+    seed ^= (int)(uintptr_t)pOptional_speed_object;
+    seed ^= (int)(uintptr_t)pPed;
+    seed ^= (int)pInitial_velocity->v[0];
+
+    velocity_object = pOptional_speed_object != NULL ? pOptional_speed_object : pObject;
+    BrVector3Scale(&direction, &velocity_object->v, gPed_spurt_seed_scale);
+    FUN_004ccb10(gPed_giblet_owner_id, time, seed, pForce, pStarting_size, &pPed->pos, pInitial_velocity, &direction);
+    PipeSingleGibShower(gPed_giblet_owner_id, time, seed, *(tU32*)&pForce, pStarting_size, &pPed->pos, pInitial_velocity, &direction);
+    gPed_giblet_owner_id--;
 }
-#pragma inline_depth()
-#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x004d5820
-void C2_HOOK_FASTCALL DoSpurt(br_matrix34* pArg1, br_vector3* pArg2, br_vector3* pArg3, br_vector3* pArg4) {
+void C2_HOOK_FASTCALL DoSpurt(br_matrix34* pTransform, br_vector3* pPosition, br_vector3* pDirection, br_vector3* pRandom_direction) {
     tU32 time;
-    br_vector3 tmp;
-    br_vector3 scaled;
-    int s0;
-    int s1;
-    int s2;
-    int seed;
-    int old_rand;
+    uintptr_t spurt_id;
+    int saved_random_seed;
+    int random_seed_x;
+    int random_seed_y;
+    int random_seed_z;
     int i;
+    float scale;
+    br_vector3 scaled_random_direction;
+    br_vector3 world_position;
+    br_vector3 world_direction;
+    tSmash_vertex* fragment;
 
     time = GetTotalTime();
-    BrMatrix34ApplyP(&tmp, pArg2, pArg1);
-    BrMatrix34ApplyV(&tmp, pArg3, pArg1);
-    scaled.v[0] = pArg4->v[0] * 6.9f;
-    scaled.v[1] = pArg4->v[1] * 6.9f;
-    scaled.v[2] = pArg4->v[2] * 6.9f;
-    s0 = (int)tmp.v[0];
-    s1 = (int)tmp.v[1];
-    s2 = (int)tmp.v[2];
-    seed = s0 ^ s1 ^ s2 ^ (int)time;
-    old_rand = rand();
-    srand(seed);
+    BrMatrix34ApplyP(&world_position, pPosition, pTransform);
+    BrMatrix34ApplyV(&world_direction, pDirection, pTransform);
+    scaled_random_direction.v[0] = pRandom_direction->v[0] * gPed_spurt_seed_scale;
+    scaled_random_direction.v[1] = pRandom_direction->v[1] * gPed_spurt_seed_scale;
+    scaled_random_direction.v[2] = pRandom_direction->v[2] * gPed_spurt_seed_scale;
+    random_seed_x = (int)scaled_random_direction.v[0];
+    random_seed_y = (int)scaled_random_direction.v[1];
+    random_seed_z = (int)scaled_random_direction.v[2];
+    spurt_id = gPed_spurt_id;
+    saved_random_seed = rand();
+    srand(random_seed_x ^ random_seed_y ^ random_seed_z ^ time);
     for (i = 0; i < gPed_spurty_lumps_count; i++) {
-        tSmash_vertex* fragment;
-
-        fragment = AllocateFragment(gPed_spurt_model, seed, 1);
-        if (fragment != NULL) {
-            float v;
-
-            v = PositionFragment(fragment->actor, &gPed_spurt_initial_position, 0, 0, 0, pArg3, pArg3, 0);
-            InitFragmentSpeed(fragment, &gPed_spurt_initial_speed, pArg3, v, gPed_spurt_min_max_time, time, pArg3, 0, 0);
+        fragment = AcquireGlassFragment(gPed_spurt_model, spurt_id, 1);
+        if (fragment == NULL) {
+            break;
         }
+        scale = FUN_004eb4a0(fragment->actor, &gPed_spurt_initial_position, 0, &world_position, &world_position, 0, NULL, 0);
+        FUN_004eb120(fragment, &gPed_spurt_initial_speed, &scaled_random_direction, scale, gPed_spurt_min_max_time, time, &world_direction, NULL, NULL);
     }
-    srand(old_rand);
+    srand(saved_random_seed);
+    PipeSingleBloodSpurt(gPed_spurt_id, time, saved_random_seed, &world_position, &scaled_random_direction, &world_direction);
+    gPed_spurt_id--;
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x0040b570
 br_model* C2_HOOK_FASTCALL GetCharacterBoneModel(tPed_character_instance* pCharacter, int pBone_index) {
 
@@ -7169,6 +9594,26 @@ int C2_HOOK_FASTCALL GetCharacterModelSet(tPed_character_instance* pCharacter) {
     return (signed char)pCharacter->field_0xa;
 }
 
+#pragma auto_inline(on)
+// FUNCTION: CARMA2_HW 0x0040b5a0
+int C2_HOOK_FASTCALL GetCharacterBoneIndexByName(tPed_character_instance* pCharacter, const char* pBone_name) {
+    int bone_index;
+    int count_bones;
+
+    bone_index = 0;
+    count_bones = pCharacter->personality->form->count_bones;
+    if (count_bones <= 0) {
+        return -1;
+    }
+    for (; bone_index < count_bones; bone_index++) {
+        if (strcmp(pBone_name, pCharacter->personality->form->bones[bone_index].name) == 0) {
+            return bone_index;
+        }
+    }
+    return -1;
+}
+
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x0040b420
 int C2_HOOK_FASTCALL SetCharacterBoneModel(tPed_character_instance* pCharacter, int pArg2, int pArg3, int pArg4) {
 
@@ -7205,7 +9650,18 @@ int C2_HOOK_FASTCALL SetCharacterBoneModel(tPed_character_instance* pCharacter, 
     }
     return 1;
 }
+#pragma auto_inline(on)
 
+// FUNCTION: CARMA2_HW 0x0040b500
+void C2_HOOK_FASTCALL FUN_0040b500(tPed_character_instance* pCharacter, int pBone_index, br_model* pModel, tS8 pModel_set) {
+
+    if (pCharacter->field_0x4 >= 0) {
+        pCharacter->field_0xa = pModel_set;
+        pCharacter->personality->form->actor_sets[pCharacter->field_0x4].actors[pBone_index]->model = pModel;
+    }
+}
+
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x0040b530
 void C2_HOOK_FASTCALL SetCharacterAllBonesModel(tPed_character_instance* pCharacter, int pArg2, int pArg3) {
     int i;
@@ -7214,6 +9670,7 @@ void C2_HOOK_FASTCALL SetCharacterAllBonesModel(tPed_character_instance* pCharac
         SetCharacterBoneModel(pCharacter, i, pArg2, pArg3);
     }
 }
+#pragma auto_inline(on)
 
 void C2_HOOK_FASTCALL SetPedStartRun(tPedestrian* pPed) {
 
@@ -7235,6 +9692,7 @@ void C2_HOOK_FASTCALL StartPedRunning(tPedestrian* pPed, tU32 pTime, int pArg3) 
     }
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x00407b10
 br_actor* C2_HOOK_FASTCALL GetCharacterActorPtr(tPed_character_instance* pCharacter) {
 
@@ -7242,6 +9700,12 @@ br_actor* C2_HOOK_FASTCALL GetCharacterActorPtr(tPed_character_instance* pCharac
         return NULL;
     }
     return pCharacter->personality->form->actor_sets[pCharacter->field_0x4].actors[0];
+}
+#pragma auto_inline(on)
+
+// FUNCTION: CARMA2_HW 0x004d3600
+void C2_HOOK_FASTCALL FUN_004d3600(void) {
+
 }
 
 // FUNCTION: CARMA2_HW 0x004d3610
@@ -7277,20 +9741,40 @@ void C2_HOOK_FASTCALL RenderLollipops(br_pixelmap* pRender_buffer, br_pixelmap* 
     // Empty
 }
 
+// FUNCTION: CARMA2_HW 0x004d6d90
+void C2_HOOK_FASTCALL PedNoOp2(void) {
+}
+
+// FUNCTION: CARMA2_HW 0x004d6da0
+void C2_HOOK_FASTCALL FUN_004d6da0(void) {
+
+}
+
+// FUNCTION: CARMA2_HW 0x004d6db0
+void C2_HOOK_FASTCALL FUN_004d6db0(void* pOpponent, void* pField_0x4, void* pField_0x58, void* pField_0x144) {
+
+    // empty
+}
+
 // FUNCTION: CARMA2_HW 0x004d6dc0
 int C2_HOOK_FASTCALL CalmDownAllPeds(void) {
-    tU32 now;
     int i;
+    tPedestrian* ped;
+    tU32 now;
 
     now = GetTotalTime();
+    ped = gPedestrian_array;
 
-    for (i = 0; i < gPed_count; i++) {
-        tPedestrian* ped = &gPedestrian_array[i];
-
-        if (ped->field_0x0c != NULL && ped->hit_points > 0 && ped->action == ePed_action_running) {
-            SetPedMove(ped, 30, IRandomBetween((int)ped->movement_spec->min_walk_speed_factor, (int)ped->movement_spec->max_walk_speed_factor), 0, 1, now, ePed_action_walking);
-            SetPedHeadAnim(ped, &gCalm_ped_anim_sequence, now);
-        }
+    i = 0;
+    if (i < gPed_count) {
+        do {
+            if (ped->field_0x0c != NULL && ped->hit_points > 0 && ped->action == ePed_action_running) {
+                SetPedMove(ped, 30, IRandomBetween(ped->movement_spec->min_walk_speed_factor, ped->movement_spec->max_walk_speed_factor), 0, 1, now, ePed_action_walking);
+                SetPedHeadAnim(ped, &gCalm_ped_anim_sequence, now);
+            }
+            i++;
+            ped++;
+        } while (i < gPed_count);
     }
     gPed_valium_left = 5000;
     return 1;
@@ -7362,27 +9846,190 @@ int C2_HOOK_FASTCALL CalmDownAllPeds(void) {
 
 // InitNapalmNolts
 
+#pragma inline_depth(0)
 // FUNCTION: CARMA2_HW 0x004cadc0
 void C2_HOOK_FASTCALL InitPolyPedSystem(void) {
 
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("peds-startup");
+#endif
+    tPath_name the_path;
+    FILE* file;
+    int i;
+    int j;
+    float v;
+
     if (gPedsFolder == NULL) {
-        SetDefaultPedFolderNames();
+        gPedsFolder = "PEDS";
+        SetDefaultSoundFolderName();
+        SetDefaultPowerupFilename();
+        SetDefaultTextFileName();
+        SetDefaultPixelmapFolderName();
+    }
+    InitBoner(&gPed_forms_vtable);
+    PathCat(the_path, gApplication_path, gPedsFolder);
+    PathCat(the_path, the_path, "SETTINGS.TXT");
+    file = DRfopen(the_path, "rt");
+    if (file == NULL) {
+        FatalError(kFatalError_CannotOpenPedFile_S, "SETTINGS.TXT");
+    }
+    /* ***************************
+     *        GENERAL STUFF
+     * ***************************
+     */
+
+    /* Max distance from camera that peds are processed within */
+    gPed_process_distance = GetAScalar(file);
+    gPed_process_distance_inner = 0.6 * gPed_process_distance;
+    /* Min distance from camera that peds can suddenly pop up at */
+    gPed_popup_distance = GetAScalar(file);
+    gPed_popup_distance_inner = 0.6 * gPed_popup_distance;
+    /* Maximum slope that peds will walk on (in degreesm) */
+    gPed_cos_max_slope = cos((double)BR_ANGLE_DEG(GetAScalar(file)) * (PI / 32768.0));
+
+    /* Nearest distance to obstacles that ped should ideally reach */
+    v = GetAScalar(file);
+    gPed_reach_squared = v * v;
+
+    /* Distance from which turning to avoid obstacles is a possibility */
+    v = GetAScalar(file);
+    gPed_min_dist_avoid_collisions_squared = v * v;
+    /* Buoyancy factor */
+    gPed_buoyancy_factor = GetAScalar(file);
+    /* Points score per ped (each level) */
+    GetThreeInts(file, &gPed_points[0], &gPed_points[1], &gPed_points[2]);
+    /* Time score per ped (each level) */
+    GetThreeInts(file, &gPed_times[0], &gPed_times[1], &gPed_times[2]);
+    /* HP damage required per severing */
+    gPed_severing_damage = GetAnInt(file);
+    /* % chance of severing occurring */
+    gPed_severing_chance = GetAnInt(file);
+    /* Maximum survivable initial impact force */
+    gPed_max_survivable_impact = GetAScalar(file);
+    /* HP Damage per unit force */
+    gPed_damage_per_force = GetAScalar(file);
+    ReadPedGiblets(file);
+    VITA_PED_CHECKPOINT("InitPolyPedSystem: giblets complete");
+
+    /* NAPALMED PED SPEC */
+    ReadExplosion(file, &gNapalmed_ped_animation);
+
+    /*
+     * ***************************
+     *       MOVEMENT STUFF
+     * ***************************
+     */
+
+    C2_HOOK_BUG_ON(sizeof(tPed_movement_spec) != 20);
+
+    /* Number of movements */
+    gPed_movements_count = GetAnInt(file);
+    gPed_movements = BrMemAllocate(gPed_movements_count * sizeof(tPed_movement_spec), kMem_misc_poly_ped);
+
+    for (i = 0; i < gPed_movements_count; i++) {
+        /* Min time between random turns */
+        gPed_movements[i].min_time_between = (int)(1000.f * GetAScalar(file));
+        /* Max time between random turns */
+        gPed_movements[i].max_time_between = (int)(1000.f * GetAScalar(file));
+        /* Max angle of random turn */
+        gPed_movements[i].max_random_angle = BR_ANGLE_DEG(GetAScalar(file));
+        /* Min walk speed multiplier */
+        gPed_movements[i].min_walk_speed_factor = (int)(1000.0 / (GetAScalar(file) * 30.0));
+        /* Max walk speed multiplier */
+        gPed_movements[i].max_walk_speed_factor = (int)(1000.0 / (GetAScalar(file) * 30.0));
     }
 
-    InitBoner(&gPed_forms_vtable);
-    ReadSettingsFile();
-    InitFaceCaches();
+    /*
+     * ***************************
+     *       PED GROUPS
+     * ***************************
+     */
+
+    C2_HOOK_BUG_ON(sizeof(tPed_group_spec) != 8);
+
+    /* Number of groups
+     * (Remember that it starts at 0, so this no. is one more than last group no.)(honest this time ;o) */
+    gPed_groups_count = GetAnInt(file);
+    gPed_groups = BrMemAllocate(gPed_groups_count * sizeof(tPed_group_spec), kMem_misc_poly_ped);
+
+    for (i = 0; i < gPed_groups_count; i++) {
+        C2_HOOK_BUG_ON(sizeof(tPed_group_member_spec) != 16);
+
+        /* Number of peds types in this group */
+        gPed_groups[i].count = GetAnInt(file);
+        gPed_groups[i].members = BrMemAllocate(gPed_groups[i].count * sizeof(tPed_group_member_spec), kMem_misc_poly_ped);
+
+        for (j = 0; j < gPed_groups[i].count; j++) {
+            /* Name of ped */
+            GetAString(file, gPed_groups[i].members[j].name);
+        }
+    }
+
+    /*
+     * ***************************
+     *       GORE LEVEL
+     * ***************************
+     */
+
+    /* Number of peds to be considered "animals" */
+    gPed_animal_count = GetAnInt(file);
+    for (i = 0; i < gPed_animal_count; i++) {
+        GetAString(file, (char*)(gPed_animal_names[i]));
+    }
+
+    PFfclose(file);
+
+    C2_HOOK_BUG_ON(sizeof(tPed_face_cache_0x34) != 52);
+    VITA_PED_CHECKPOINT("InitPolyPedSystem: settings complete, allocating face cache");
+    C2_HOOK_BUG_ON(sizeof(tFace_ref) != 80);
+
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gPed_cache_sizes_1); i++) {
+        gPed_face_cache_heads[i] = BrMemAllocate(gPed_cache_sizes_1[i] * sizeof(tPed_face_cache_0x34), kMem_ped_face_cache);
+        for (j = 0; j < gPed_cache_sizes_1[i]; j++) {
+            gPed_face_cache_heads[i][j].field_0x0 = BrMemAllocate(gPed_cache_sizes_2[i] * sizeof(tFace_ref), kMem_ped_face_cache);
+            gPed_face_cache_heads[i][j].count = gPed_cache_sizes_2[i];
+        }
+    }
+    gPed_face_cache = BrMemAllocate((gPed_cache_sizes_2[3] + 1) * sizeof(tFace_ref), kMem_ped_face_cache);
+
     InitNapalmNolts();
-    InitOtherPedStuff();
+
+    VITA_PED_CHECKPOINT("InitPolyPedSystem: napalm complete, shade table");
+    gSelected_ped = 0;
+    gProx_ray_shade_table = GenerateShadeTable(8, gRender_palette, 0xd7, 0xff, 0xe9, .5f, .75f, .9f);
+    VITA_PED_CHECKPOINT("InitPolyPedSystem: complete");
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
 }
+#pragma inline_depth()
 
 // DisposePedSpawnSpec
 
 #pragma auto_inline(off)
+// FUNCTION: CARMA2_HW 0x00406a00
+void C2_HOOK_FASTCALL DisposePedForms(void) {
+    int i;
+
+    for (i = 0; i < 20; i++) {
+        if (gPed_forms[i] != NULL) {
+            DisposePedForm(gPed_forms[i]);
+            gPed_forms[i] = NULL;
+        }
+    }
+}
+
 // FUNCTION: CARMA2_HW 0x00406a30
 void C2_HOOK_FASTCALL DisposeCharacterInstance(tPed_character_instance* pCharacter) {
 
     if (pCharacter != NULL) {
+#ifndef CARPOCALYPSE2_MATCHING
+        tPed_animation_velocity* state = PedAnimationVelocityState(pCharacter);
+        if (state != NULL) {
+            state->character = NULL;
+            state->valid = 0;
+        }
+#endif
         BrMemFree(pCharacter);
     }
 }
@@ -7468,11 +10115,15 @@ void C2_HOOK_FASTCALL DisposePedForm(tPed_form* pForm) {
     }
 }
 
+// C2PORT-NONMATCHING: best 38.50% | difftest PASS 2000 trials (spec difftest/specs/004077f0_DisposePedPersonality.json) | reason VC5 nested-loop stack layout
 // FUNCTION: CARMA2_HW 0x004077f0
 void C2_HOOK_FASTCALL DisposePedPersonality(tPed_personality* pPersonality) {
-    int i;
-    int j;
-    int k;
+    volatile struct {
+        int model_offset;
+        int bone_offset;
+        int model_count;
+        int bone_count;
+    } loop;
 
     if (gPed_vtable->dispose_personality != NULL) {
         gPed_vtable->dispose_personality(pPersonality);
@@ -7480,18 +10131,29 @@ void C2_HOOK_FASTCALL DisposePedPersonality(tPed_personality* pPersonality) {
     if (pPersonality->moves != NULL) {
         BrMemFree(pPersonality->moves);
     }
-    for (i = 0; i < pPersonality->form->count_bones; i++) {
-        int peep_idx;
-
-        for (peep_idx = 0; peep_idx < 4; peep_idx++) {
-            if (pPersonality->bones[i].models[peep_idx].models[0] != NULL) {
-                BrModelRemove(pPersonality->bones[i].models[peep_idx].models[1]);
-                BrModelFree(pPersonality->bones[i].models[peep_idx].models[1]);
+    loop.bone_count = 0;
+    loop.bone_offset = 0;
+    if (loop.bone_count < pPersonality->form->count_bones) {
+        do {
+            loop.model_count = 0;
+            loop.model_offset = loop.bone_offset;
+            do {
+                br_model** model;
+                model = (br_model**)((char*)pPersonality->bones + loop.model_offset);
+                if (*model == NULL) {
+                    break;
+                }
+                BrModelRemove(model[1]);
+                BrModelFree(model[1]);
+                loop.model_count++;
+                loop.model_offset += 8;
+            } while (loop.model_count < 4);
+            if (*(tPhysics_joint**)((char*)pPersonality->bones + loop.bone_offset + 0x38) != NULL) {
+                FreePhysicsJoint(*(tPhysics_joint**)((char*)pPersonality->bones + loop.bone_offset + 0x38));
             }
-        }
-        if (pPersonality->bones[i].hinge != NULL) {
-            FreePhysicsJoint(pPersonality->bones[i].hinge);
-        }
+            loop.bone_count++;
+            loop.bone_offset += 0x3c;
+        } while (loop.bone_count < pPersonality->form->count_bones);
     }
     if (pPersonality->bones != NULL) {
         BrMemFree(pPersonality->bones);
@@ -7499,6 +10161,20 @@ void C2_HOOK_FASTCALL DisposePedPersonality(tPed_personality* pPersonality) {
     if (pPersonality != NULL) {
         BrMemFree(pPersonality);
     }
+}
+
+// FUNCTION: CARMA2_HW 0x00407900
+void C2_HOOK_FASTCALL DisposeAllPedPersonalities(void) {
+    tPed_personality** p;
+
+    p = gPed_personalities;
+    do {
+        if (*p != NULL) {
+            DisposePedPersonality(*p);
+            *p = NULL;
+        }
+        p++;
+    } while ((int)p < (int)&gPed_personalities[CARPOCALYPSE2_ASIZE(gPed_personalities)]);
 }
 
 // FUNCTION: CARMA2_HW 0x0040b2e0
@@ -7661,9 +10337,13 @@ int C2_HOOK_FASTCALL IsActorRenderworthy(br_actor* pActor) {
 
 // CBFillInObject
 
+// DoGibShower
+
 // PedApplyGibShower
 
 // PedUndoGibShower
+
+// DoGiblets
 
 // DoBloodSpurt
 
@@ -7674,6 +10354,8 @@ int C2_HOOK_FASTCALL IsActorRenderworthy(br_actor* pActor) {
 // PedUndoBloodSpurt
 
 // OneLessPed
+
+// ScoreForKilledPedestrian
 
 // KillPedestrian
 
@@ -7795,21 +10477,7 @@ int C2_HOOK_FASTCALL IsActorRenderworthy(br_actor* pActor) {
 
 // ARResetNapalmBolts
 
-// FUNCTION: CARMA2_HW 0x004d5b40
-void C2_HOOK_FASTCALL AdjustNapalmBolt(int pIndex, tPedestrian* pPed, br_vector3* pPositions) {
-    int i;
-
-    gNapalm_bolts[pIndex].ped = pPed;
-    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gNapalm_bolts[pIndex].actors); i++) {
-        if (pPositions[i].v[0] == 0.f && pPositions[i].v[1] == 0.f && pPositions[i].v[2] == 0.f) {
-            break;
-        }
-        gNapalm_bolts[pIndex].actors[i]->t.t.translate.t.v[0] = pPositions[i].v[0];
-        gNapalm_bolts[pIndex].actors[i]->t.t.translate.t.v[1] = pPositions[i].v[1];
-        gNapalm_bolts[pIndex].actors[i]->t.t.translate.t.v[2] = pPositions[i].v[2];
-        gNapalm_bolts[pIndex].actors[i]->render_style = BR_RSTYLE_FACES;
-    }
-}
+// AdjustNapalmBolt
 
 // InitPedsForRace
 
@@ -7872,7 +10540,12 @@ void C2_HOOK_FASTCALL SetDefaultPedFolderNames(void) {
     SetDefaultPixelmapFolderName();
 }
 
-// AddChangedPoint
+// FUNCTION: CARMA2_HW 0x004d6f90
+void C2_HOOK_FASTCALL AddChangedPoint(const br_vector3* pPoint) {
+
+    BrVector3Copy(&gChanged_points[gCount_changed_points], pPoint);
+    gCount_changed_points++;
+}
 
 // FUNCTION: CARMA2_HW 0x004d6fc0
 int C2_HOOK_FASTCALL GetHowMuchBloodAndSnotToSmearAbout(void) {
@@ -8094,8 +10767,77 @@ void C2_HOOK_FASTCALL SetObjectV(tPhysics_object* pObject, br_vector3* pV) {
 
 // MakeCharacterPhysicworthy
 
-// RecalculateOrientationOfRoot
+// FUNCTION: CARMA2_HW 0x004091e0
+int C2_HOOK_FASTCALL MakeCharacterPhysicworthy(tPed_character_instance* pCharacter) {
+    tPed_form* form;
+    tPhysics_object* obj;
+    tPhysics_object** objects;
+    tPhysics_object** current_object;
+    tPhysics_object* child;
+    br_vector3* velocity;
+    tU32 flags;
+    tS8 form_index;
+    int i;
 
+    flags = pCharacter->field_0x14;
+    if (flags & 4) {
+        return 0x17;
+    }
+    if (flags == 0) {
+        return 0x15;
+    }
+    form_index = pCharacter->field_0x5;
+    form = pCharacter->personality->form;
+    if (flags & 1) {
+        obj = form->simple_physicing[form_index].collision_info;
+    } else {
+        i = 0;
+        if (form->count_bones != 0) {
+            objects = form->boned_physicing[form_index].collision_infos;
+            current_object = objects;
+            do {
+                if ((*current_object)->shape != NULL) {
+                    obj = objects[i];
+                    goto found_object;
+                }
+                i++;
+                current_object++;
+            } while (i < form->count_bones);
+        }
+        obj = NULL;
+    }
+found_object:
+    obj->disable_move_rotate = 0;
+    velocity = &pCharacter->field_0xd8;
+    if (velocity != NULL) {
+        obj->v.v[0] = velocity->v[0];
+        obj->v.v[1] = velocity->v[1];
+        obj->v.v[2] = velocity->v[2];
+        for (child = obj->child; child != NULL; child = child->next) {
+            SetObjectV(child, velocity);
+        }
+    }
+    PHILMakeObjectActive(obj, NULL, NULL, 1);
+    obj->field_0xed = 1;
+    PHILSetObjectProperty(obj, 0, 1.0);
+    PHILSetObjectProperty(obj, 3, 0);
+    PHILSetObjectProperty(obj, 4, 0);
+    PHILSetObjectProperty(obj, 5, 0);
+    pCharacter->field_0x14 |= 4;
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x004093e0
+int C2_HOOK_FASTCALL FUN_004093e0(tPed_character_instance* pCharacter) {
+
+    if ((pCharacter->field_0x14 & 4) == 0) {
+        return 0x1f;
+    }
+    BonerActiveHalted2(pCharacter, 1);
+    return 0;
+}
+
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x00409400
 int C2_HOOK_FASTCALL BonerActiveHalted2(tPed_character_instance* pCharacter, undefined4 pArg2) {
     tPhysics_object* obj;
@@ -8127,8 +10869,8 @@ int C2_HOOK_FASTCALL BonerActiveHalted2(tPed_character_instance* pCharacter, und
     SetCharacterBonePositions(pCharacter, 3, 0);
     pCharacter->field_0x14 &= ~4;
 
-    if (gPed_67697c->field_0x4 != NULL
-            && ((int(C2_HOOK_FASTCALL*)(tPed_character_instance*, tPhysics_object*))gPed_67697c->field_0x4)(pCharacter, obj) == 0) {
+    if (gPed_vtable->active_halted != NULL
+            && ((int(C2_HOOK_FASTCALL*)(tPed_character_instance*, tPhysics_object*))gPed_vtable->active_halted)(pCharacter, obj) == 0) {
         pCharacter->field_0x14 |= 4;
         return 0;
     }
@@ -8142,6 +10884,7 @@ int C2_HOOK_FASTCALL BonerActiveHalted2(tPed_character_instance* pCharacter, und
     PHILSetObjectProperty(obj, 5, 1);
     return 1;
 }
+#pragma auto_inline(on)
 
 // CharacterNoLongerPhysicworthy
 
@@ -8184,7 +10927,7 @@ int C2_HOOK_FASTCALL BonerActiveHalted2(tPed_character_instance* pCharacter, und
 // GetCharacterModelSet
 
 // FUNCTION: CARMA2_HW 0x0040b620
-int C2_HOOK_FASTCALL BonerPassiveCollision(tPed_character_instance* pCharacter, undefined4 pArg2) {
+int C2_HOOK_FASTCALL BonerPassiveCollision(tPed_character_instance* pCharacter, tPhysics_object* pArg2) {
     tPhysics_object* obj;
 
     if (pCharacter->field_0x14 == 0) {
@@ -8234,8 +10977,8 @@ int C2_HOOK_FASTCALL BonerPassiveCollision(tPed_character_instance* pCharacter, 
         pCharacter->field_0x14 |= 4;
     }
     pCharacter->field_0x14 |= 4;
-    if (gPed_67697c->field_0x0 != NULL) {
-        ((void(C2_HOOK_FASTCALL*)(tPed_character_instance*, tPhysics_object*, undefined4))gPed_67697c->field_0x0)(pCharacter, obj, pArg2);
+    if (gPed_vtable->passive_collision != NULL) {
+        ((void(C2_HOOK_FASTCALL*)(tPed_character_instance*, tPhysics_object*, tPhysics_object*))gPed_vtable->passive_collision)(pCharacter, obj, pArg2);
     }
     return 0;
 }
@@ -8283,7 +11026,7 @@ void C2_HOOK_FASTCALL BonerPedMovedByPhysics(tPed_character_instance* pCharacter
     {
         void(C2_HOOK_FASTCALL* callback)(tPed_character_instance*, tPhysics_object*, undefined4);
 
-        callback = (void(C2_HOOK_FASTCALL*)(tPed_character_instance*, tPhysics_object*, undefined4))gPed_67697c->field_0x8;
+        callback = (void(C2_HOOK_FASTCALL*)(tPed_character_instance*, tPhysics_object*, undefined4))gPed_vtable->moved_by_physics;
         if (callback != NULL) {
             callback(pCharacter, obj, pArg2);
         }
@@ -8301,6 +11044,13 @@ void C2_HOOK_FASTCALL CBFillInObject(undefined4* pArg1, undefined4 pArg2) {
         *(int*)(base + 0x1a4) = 0x50000;
     }
 }
+
+// FUNCTION: CARMA2_HW 0x004ccae0
+void C2_HOOK_FASTCALL FUN_004ccae0(tU32 pFragment_owner, tU32 pTime, tU32 pSeed, float pForce, int pStarting_size, br_vector3* pInitial_position, br_vector3* pInitial_velocity, br_vector3* pDirection) {
+    FUN_004ccb10(pFragment_owner, pTime, pSeed, pForce, pStarting_size, pInitial_position, pInitial_velocity, pDirection);
+}
+
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004cc860
 void C2_HOOK_CDECL SetCharacterPhysicsLevelAR(tPed_character_instance* pCharacter, tU32 pLevel, undefined4 pArg3) {
     tU32 old_flags;
@@ -8336,6 +11086,7 @@ void C2_HOOK_CDECL SetCharacterPhysicsLevelAR(tPed_character_instance* pCharacte
         pCharacter->ped->field_0x06++;
     }
 }
+#pragma auto_inline(on)
 
 // DismemberCharacter
 
@@ -8364,3 +11115,189 @@ void C2_HOOK_CDECL SetCharacterPhysicsLevelAR(tPed_character_instance* pCharacte
 // EnableRetainRootMode
 
 // DisableRetainRootMode
+
+// C2PORT-NONMATCHING: best 45.62% | difftest PASS 2000 trials (spec difftest/specs/004d2320_FUN_004d2320.json) | reason x87-order-regalloc
+// FUNCTION: CARMA2_HW 0x004d2320
+void C2_HOOK_FASTCALL FUN_004d2320(tPhysics_object* pObject1, tPhysics_object* pObject2, void* pCollision_data, float pImpact, br_vector3* pPosition) {
+    tPedestrian* ped;
+    tPed_cache_006944c0* ped_cache;
+    tPhysics_object* player_collision;
+    void* collision_owner;
+    char* collision_name;
+    float* collision_vector;
+    float* smear_normal;
+    float velocity_length;
+    float velocity_scale;
+    float velocity_x;
+    float velocity_y;
+    float velocity_z;
+    float smear_value;
+    float mass_scale;
+    int damage;
+    int starting_size;
+
+    if (gAction_replay_mode != 0) {
+        return;
+    }
+
+    ped = ((tPed_character_instance*)pObject1->owner)->ped;
+    PedProcessContact(ped, pObject2);
+
+    if ((pObject2 != NULL && pObject2->owner != NULL
+                && pObject2->flags_0x238 == 0x20
+                && pObject2->M == gMass_mutant_tail_ball)
+            || pObject1->v.v[1] < gPed_mutant_tail_speed_threshold) {
+        pImpact *= gPed_mutant_tail_impact_multiplier;
+    }
+
+    if (gExploding_pedestrians != 0) {
+        damage = ped->character->personality->form->count_bones * gPed_severing_damage;
+    } else if (pObject2 == NULL) {
+        damage = (int)(gPed_impact_base * (pImpact * gPed_damage_per_force));
+    } else {
+        damage = (int)(gPed_kill_min_height * (pImpact * gPed_damage_per_force));
+    }
+
+    if (damage == 0) {
+        return;
+    }
+
+    SetPedFall(ped, damage, -1, 0x5e, pObject2);
+
+    if (ped->hit_points > 0 && pObject2 != NULL && pObject2->owner != NULL
+            && pObject2->flags_0x238 == 1) {
+        player_collision = gProgram_state.current_car.collision_info;
+        if (pObject2 == player_collision && (ped_cache = ped->field_0x0c) != NULL
+                && (ped_cache->field_0x2e & 4) == 0
+                && gPedProximity_parallel_epsilon
+                    < player_collision->v.v[2] * player_collision->v.v[2]
+                        + player_collision->v.v[1] * player_collision->v.v[1]
+                        + player_collision->v.v[0] * player_collision->v.v[0]) {
+            ped_cache->field_0x21++;
+            if (0x4f < ped_cache->field_0x21
+                    && ped_cache->field_0xc0 == &gProgram_state.current_car
+                    && (ped_cache->field_0x2e & 4) == 0) {
+                ped_cache->field_0x2e |= 4;
+                EarnCredits(gPed_points[gProgram_state.skill_level]);
+                DoFancyHeadup(4);
+            }
+        }
+    }
+
+    if (gPed_impact_minimum <= pImpact) {
+        if (pObject2 == NULL) {
+            if (pCollision_data != NULL
+                    && *(float*)((char*)pCollision_data + 0x38) < gPed_smear_direction_minimum) {
+                ped->flags |= 2;
+            }
+        } else {
+            ped->flags |= 4;
+        }
+
+        if ((ped->flags & 4) != 0 && (ped->flags & 2) != 0 && (ped->flags & 8) == 0) {
+            SetPedMove(ped, 0x60, -1, 0, 1, GetTotalTime(), 5);
+            ped->flags |= 8;
+            if (gPed_recent_points != 0 && gPed_last_scored_pedestrian == ped
+                    && ped->hit_points < 1
+                    && (tU32)(GetTotalTime() - ped->field_0x30) < 0x2ee) {
+                DoFancyHeadup(1);
+                PratcamEvent(0x1e);
+                EarnCredits(gPed_recent_points);
+                gPed_recent_points = 0;
+            }
+        }
+    }
+
+    if ((pObject1->last_special_volume == NULL
+                || gFLOAT_0058a9d8 <= *(float*)((char*)pObject1->last_special_volume + 0x88))
+            && gGoreLevel > 0) {
+        mass_scale = gPed_fall_speed_mass_scale
+            / ped->character->personality->form->simple_physicing[(tS8)ped->character->field_0x5].collision_info->M;
+        starting_size = (int)gGiblet_scrape_start;
+        DoGiblets(ped, pObject1, pObject2, mass_scale * mass_scale * pImpact, pPosition, starting_size);
+
+        if (pObject2 == NULL && pCollision_data != NULL && ped->hit_points < 1) {
+            collision_owner = *(void**)pCollision_data;
+            if (collision_owner != NULL) {
+                void* collision_type_owner = *(void**)((char*)collision_owner + 0x40);
+
+                if (collision_type_owner != NULL && *((tU8*)collision_type_owner + 0x2c) == 0x12) {
+                    return;
+                }
+                collision_name = *(char**)((char*)collision_owner + 4);
+                if (collision_name != NULL && strlen(collision_name) == 0xb && collision_name[5] == '|') {
+                    return;
+                }
+            }
+
+            ped_cache = ped->field_0x0c;
+            if (ped_cache == NULL) {
+                dr_dprintf(gPed_smear_missing_cache_message);
+                return;
+            }
+
+            collision_vector = (float*)((char*)pCollision_data + 0x34);
+            smear_normal = (float*)((char*)ped_cache + 0x114);
+            if ((ped_cache->field_0xc4 & 2) == 0) {
+                ped_cache->field_0xc4 |= 2;
+                ped_cache->field_0xca = 1;
+                ped_cache->field_0xe4 = *pPosition;
+                ped_cache->field_0xf0.v[0] = collision_vector[0];
+                ped_cache->field_0xf0.v[1] = collision_vector[1];
+                ped_cache->field_0xf0.v[2] = collision_vector[2];
+
+                velocity_length = sqrtf(pObject1->v.v[0] * pObject1->v.v[0]
+                        + pObject1->v.v[1] * pObject1->v.v[1]
+                        + pObject1->v.v[2] * pObject1->v.v[2]);
+                velocity_x = gFLOAT_0058a9d8;
+                velocity_y = gConst_replay_rate_zero;
+                velocity_z = gConst_replay_rate_zero;
+                if (gPed_direction_length_epsilon < velocity_length) {
+                    velocity_scale = gPed_kill_min_height / velocity_length;
+                    velocity_x = pObject1->v.v[0] * velocity_scale;
+                    velocity_y = pObject1->v.v[1] * velocity_scale;
+                    velocity_z = pObject1->v.v[2] * velocity_scale;
+                }
+
+                smear_normal[0] = collision_vector[1] * velocity_z - collision_vector[2] * velocity_y;
+                smear_normal[1] = collision_vector[2] * velocity_x - collision_vector[0] * velocity_z;
+                smear_normal[2] = collision_vector[0] * velocity_y - collision_vector[1] * velocity_x;
+                smear_value = smear_normal[2] * pPosition->v[2]
+                    + smear_normal[1] * pPosition->v[1]
+                    + smear_normal[0] * pPosition->v[0];
+                ped_cache->field_0x124 = smear_value;
+                ped_cache->field_0x128 = smear_value;
+                return;
+            }
+
+            if (gPed_smear_normal_minimum
+                    < collision_vector[2] * ped_cache->field_0xf0.v[2]
+                        + ped_cache->field_0xf0.v[1] * collision_vector[1]
+                        + ped_cache->field_0xf0.v[0] * collision_vector[0]) {
+                if (fabsf((ped_cache->field_0xf0.v[2] * ped_cache->field_0xe4.v[2]
+                                + ped_cache->field_0xe4.v[1] * ped_cache->field_0xf0.v[1]
+                                + ped_cache->field_0xe4.v[0] * ped_cache->field_0xf0.v[0])
+                                / (float)ped_cache->field_0xca
+                            - (ped_cache->field_0xf0.v[1] * pPosition->v[1]
+                                + pPosition->v[2] * ped_cache->field_0xf0.v[2]
+                                + ped_cache->field_0xf0.v[0] * pPosition->v[0]))
+                        < gPed_smear_position_tolerance) {
+                    smear_value = smear_normal[1] * pPosition->v[1]
+                        + pPosition->v[2] * smear_normal[2]
+                        + smear_normal[0] * pPosition->v[0];
+                    if (ped_cache->field_0x124 < smear_value) {
+                        ped_cache->field_0x124 = smear_value;
+                    }
+                    if (smear_value < ped_cache->field_0x128) {
+                        ped_cache->field_0x128 = smear_value;
+                    }
+                    ped_cache->field_0xe4.v[0] = pPosition->v[0] + ped_cache->field_0xe4.v[0];
+                    ped_cache->field_0xe4.v[1] = ped_cache->field_0xe4.v[1] + pPosition->v[1];
+                    ped_cache->field_0xca++;
+                    ped_cache->field_0xe4.v[2] = ped_cache->field_0xe4.v[2] + pPosition->v[2];
+                }
+            }
+        }
+    }
+}
+

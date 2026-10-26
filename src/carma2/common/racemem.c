@@ -12,39 +12,34 @@ void C2_HOOK_FASTCALL ClearAllRuntimeVariables(void) {
     memset(gRace_memory, 0, sizeof(gRace_memory));
 }
 
+// C2PORT-NONMATCHING: best 100% | difftest PASS 2000 trials (spec difftest/specs/004e7440_GetRuntimeVariable.json) | reason signed byte result and invalid-path EAX preservation
 // FUNCTION: CARMA2_HW 0x004e7440
 int C2_HOOK_FASTCALL GetRuntimeVariable(int pAddress) {
-    if (pAddress >= 0 && pAddress < 1000) {
-        return gRace_memory[pAddress];
+
+    if (pAddress >= 0 && pAddress < (int)CARPOCALYPSE2_ASIZE(gRace_memory)) {
+        return (tS8)gRace_memory[pAddress];
     }
-    return 0;
-}
-
-// FUNCTION: CARMA2_HW 0x004e7460
-int C2_HOOK_FASTCALL AccumulateRuntimeVariable(int pAddress, int pAmount) {
-
-    if (pAddress >= 0 && pAddress < CARPOCALYPSE2_ASIZE(gRace_memory)) {
-        tS8 value;
-        tS8 delta;
-
-        value = (tS8)gRace_memory[pAddress];
-        delta = (tS8)pAmount;
-        value = (tS8)(value + delta);
-        gRace_memory[pAddress] = (tU8)value;
-        return value;
-    }
-    return 0;
 }
 
 // FUNCTION: CARMA2_HW 0x004e7480
 int C2_HOOK_FASTCALL ToggleRuntimeVariable(int pAddress) {
-    int value;
 
-    if (pAddress < 0 || pAddress >= 1000) {
-        return 0;
+    if (pAddress >= 0 && pAddress < (int)CARPOCALYPSE2_ASIZE(gRace_memory)) {
+        if (gRace_memory[pAddress]) {
+            gRace_memory[pAddress] = 0;
+            return 0;
+        }
+        gRace_memory[pAddress] = 1;
+        return 1;
     }
+}
 
-    value = !gRace_memory[pAddress];
-    gRace_memory[pAddress] = (tU8)(tS8)value;
-    return value;
+// C2PORT-NONMATCHING: best 26.67% | difftest PASS 2000 trials (spec difftest/specs/004e7460_SetRuntimeVariable.json) | reason VC5 uses DL as the byte accumulator and folds the upper bound into an unsigned branch
+// FUNCTION: CARMA2_HW 0x004e7460
+int C2_HOOK_FASTCALL SetRuntimeVariable(int pAddress, int pValue) {
+
+    if (pAddress >= 0 && pAddress < (int)CARPOCALYPSE2_ASIZE(gRace_memory)) {
+        return (tS8)(gRace_memory[pAddress] += (tU8)pValue);
+    }
+    /* the original leaves EAX unchanged here; both callers ignore the result */
 }

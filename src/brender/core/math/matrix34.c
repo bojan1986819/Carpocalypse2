@@ -144,6 +144,7 @@ void C2_HOOK_CDECL BrMatrix34RotateZ(br_matrix34* mat, br_angle rz) {
     M(3, 2) = 0;
 }
 
+// C2PORT-NONMATCHING: best 33% | difftest PASS 2000 trials (spec difftest/specs/00532940_BrMatrix34Rotate.json, tol ulp32 rel1e-5 abs1e-6) | reason original keeps x87 extended intermediates and uses fsin/fcos; ours is float sinf/cosf and float temporaries
 // FUNCTION: CARMA2_HW 0x00532940
 void C2_HOOK_CDECL BrMatrix34Rotate(br_matrix34* mat, br_angle r, const br_vector3* a) {
     br_scalar t;
@@ -267,6 +268,7 @@ void C2_HOOK_CDECL BrMatrix34ShearZ(br_matrix34* mat, br_scalar sx, br_scalar sy
     M(3, 2) = 0.f;
 }
 
+// C2PORT-NONMATCHING: best 30.41% | difftest PASS 4000 trials (spec difftest/specs/00532bd0_BrMatrix34Inverse.json, difftest/specs/00532bd0_BrMatrix34Inverse_absolute_guard.json) | reason x87 scheduling and temporary matrix layout
 // FUNCTION: CARMA2_HW 0x00532bd0
 br_scalar C2_HOOK_CDECL BrMatrix34Inverse(br_matrix34* B, const br_matrix34* A) {
     float idet;
@@ -287,6 +289,7 @@ br_scalar C2_HOOK_CDECL BrMatrix34Inverse(br_matrix34* B, const br_matrix34* A) 
     else             \
         neg += temp;
 #define PRECISION_LIMIT BR_SCALAR(1.0e-15)
+#define MATRIX_EPSILON BR_SCALAR(2.384185791015625e-7)
 #define ABS(a) (((a) < 0) ? -(a) : (a))
 
     for (i = 0; i < 4; i++) {
@@ -310,7 +313,7 @@ br_scalar C2_HOOK_CDECL BrMatrix34Inverse(br_matrix34* B, const br_matrix34* A) 
     ACCUMULATE
     det = pos + neg;
 
-    if (ABS(det) <= PRECISION_LIMIT)
+    if (ABS(det) <= MATRIX_EPSILON)
         return 0.f;
 
     if ((ABS(det / (pos - neg)) < PRECISION_LIMIT)) {
@@ -329,7 +332,7 @@ br_scalar C2_HOOK_CDECL BrMatrix34Inverse(br_matrix34* B, const br_matrix34* A) 
     BF(1, 2) = -(AF(0, 0) * AF(1, 2) - AF(0, 2) * AF(1, 0)) * idet;
     BF(2, 2) = (AF(0, 0) * AF(1, 1) - AF(0, 1) * AF(1, 0)) * idet;
 
-    BF(3, 0) = -(AF(3, 0) * BF(0, 0) + AF(3, 1) * BF(1, 0) + AF(3, 2) * BF(2, 0));
+    BF(3, 0) = -(AF(3, 0) * BF(0, 0) + AF(3, 2) * BF(2, 0) + AF(3, 1) * BF(1, 0));
     BF(3, 1) = -(AF(3, 0) * BF(0, 1) + AF(3, 1) * BF(1, 1) + AF(3, 2) * BF(2, 1));
     BF(3, 2) = -(AF(3, 0) * BF(0, 2) + AF(3, 1) * BF(1, 2) + AF(3, 2) * BF(2, 2));
 
@@ -362,6 +365,7 @@ void C2_HOOK_CDECL BrMatrix34LPInverse(br_matrix34* A, const br_matrix34* B) {
     A(3, 2) = -BR_MAC3(B(3, 0), A(0, 2), B(3, 1), A(1, 2), B(3, 2), A(2, 2));
 }
 
+// C2PORT-NONMATCHING: best 5.80% | difftest PASS 2000 trials (spec difftest/specs/00532f60_BrMatrix34LPNormalise.json) | reason original inlines the vector math while C calls vector helpers
 // FUNCTION: CARMA2_HW 0x00532f60
 void C2_HOOK_CDECL BrMatrix34LPNormalise(br_matrix34* A, const br_matrix34* B) {
 
@@ -375,6 +379,7 @@ void C2_HOOK_CDECL BrMatrix34LPNormalise(br_matrix34* A, const br_matrix34* B) {
     A(3, 2) = B(3, 2);
 }
 
+// C2PORT-NONMATCHING: best 31.42% | difftest PASS 2000 trials (spec 00533100_BrMatrix34RollingBall.json) | reason corrected roll-axis signs; remaining differences are x87 scheduling and register layout
 // FUNCTION: CARMA2_HW 0x00533100
 void C2_HOOK_CDECL BrMatrix34RollingBall(br_matrix34* mat, int dx, int dy, int radius) {
     br_scalar nx;
@@ -402,9 +407,9 @@ void C2_HOOK_CDECL BrMatrix34RollingBall(br_matrix34* mat, int dx, int dy, int r
 
     M(0, 0) = nx * nx * h + ca;
     M(0, 1) = nx * ny * h;
-    M(0, 2) = ny * sa;
+    M(0, 2) = -ny * sa;
     M(1, 1) = ca + ny * ny * h;
-    M(1, 2) = -nx * sa;
+    M(1, 2) = nx * sa;
     M(2, 2) = ca;
 
     M(1, 0) = M(0, 1);
@@ -416,6 +421,7 @@ void C2_HOOK_CDECL BrMatrix34RollingBall(br_matrix34* mat, int dx, int dy, int r
     M(3, 2) = BR_SCALAR(0.f);
 }
 
+// C2PORT-NONMATCHING: best 48.60% | difftest PASS 2000 trials (spec difftest/specs/00533290_BrBoundsToMatrix34.json) | reason x87-bounds-temp-layout
 // FUNCTION: CARMA2_HW 0x00533290
 br_matrix34* C2_HOOK_CDECL BrBoundsToMatrix34(br_matrix34* mat, const br_bounds* bounds) {
     int i;
@@ -630,9 +636,9 @@ void C2_HOOK_CDECL BrMatrix34PreScale(br_matrix34* mat, br_scalar sx, br_scalar 
 // FUNCTION: CARMA2_HW 0x00533f30
 void C2_HOOK_CDECL BrMatrix34PostScale(br_matrix34* mat, br_scalar sx, br_scalar sy, br_scalar sz) {
 
-    BrMatrix34Scale(&mattmp1, sx, sy, sz);
-    BrMatrix34Mul(&mattmp2, mat, &mattmp1);
-    BrMatrix34Copy(mat, &mattmp2);
+    BrMatrix34Scale(&mattmp2, sx, sy, sz);
+    BrMatrix34Mul(&mattmp1, mat, &mattmp2);
+    BrMatrix34Copy(mat, &mattmp1);
 }
 
 // FUNCTION: CARMA2_HW 0x00533fd0

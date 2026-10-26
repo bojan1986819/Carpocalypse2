@@ -34,17 +34,7 @@ extern int gNbPixelBits;
 
 // SmoothificateWorldMaterial
 
-// FUNCTION: CARMA2_HW 0x004f6b50
-void C2_HOOK_FASTCALL SmoothificateCarMaterial(br_material* pMaterial) {
-
-  if (gNbPixelBits == 16) {
-      pMaterial->ka = 0.6f;
-      pMaterial->flags &= ~BR_MATF_PRELIT;
-      pMaterial->flags |= BR_MATF_SMOOTH | BR_MATF_LIGHT;
-      pMaterial->kd = 0.2f;
-      BrMaterialUpdate(pMaterial,BR_MATU_ALL);
-  }
-}
+// SmoothificateCarMaterial
 
 // MungeLightingEffects
 
@@ -53,15 +43,11 @@ void C2_HOOK_FASTCALL SmoothificatePowerupMaterial(br_material* pMaterial) {
     int need_update = 0;
     pMaterial->user = (void*)(uintptr_t)0x5ba0;
 
-    if (pMaterial->ka <= 0.999) {
+    /* the original compares against the double 0.9999 (0x58afd0) */
+    if (pMaterial->ka <= 0.9999) {
         need_update = 1;
     }
     pMaterial->ka = 1.f;
-
-    /* ka is tested twice, but kd is set the 2nd time */
-    if (pMaterial->ka < 0.999) {
-        need_update = 1;
-    }
     pMaterial->kd = 1.f;
 
     if (!(pMaterial->flags & BR_MATF_SMOOTH)) {
@@ -123,6 +109,18 @@ void C2_HOOK_FASTCALL SmoothificateWorldMaterial(br_material* pMaterial) {
         pMaterial->flags &= ~BR_MATF_PRELIT;
         pMaterial->flags |= BR_MATF_LIGHT | BR_MATF_SMOOTH;
         BrMaterialUpdate(pMaterial, BR_MATU_LIGHTING | BR_MATU_RENDERING);
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x004f6b50
+void C2_HOOK_FASTCALL SmoothificateCarMaterial(br_material* pMaterial) {
+
+    if (gNbPixelBits == 16) {
+        pMaterial->ka = 0.6f;
+        pMaterial->flags &= ~BR_MATF_PRELIT;
+        pMaterial->flags |= BR_MATF_LIGHT | BR_MATF_SMOOTH;
+        pMaterial->kd = 0.2f;
+        BrMaterialUpdate(pMaterial, BR_MATU_ALL);
     }
 }
 
@@ -205,6 +203,18 @@ void C2_HOOK_FASTCALL KillLightingEffects(void) {
 
 // FUNCTION: CARMA2_HW 0x00486d80
 void C2_HOOK_FASTCALL InitLightingEffects(void) {
+
+    // empty
+}
+
+// FUNCTION: CARMA2_HW 0x00486d90
+void C2_HOOK_STDCALL FUN_00486d90(int pArg1, int pArg2) {
+
+    // empty
+}
+
+// FUNCTION: CARMA2_HW 0x00486db0
+void C2_HOOK_FASTCALL FUN_00486db0(void) {
 
     // empty
 }

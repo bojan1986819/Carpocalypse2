@@ -34,14 +34,14 @@ if(CARPOCALYPSE2_PLATFORM_WIN32)
     )
     find_library(DSOUND_LIBRARY NAMES dsound)
     find_library(WINMM_LIBRARY NAMES winmm)
-    find_library(WS2_32_LIBRARY NAMES wsock32)
+    find_library(WS2_32_LIBRARY NAMES ws2_32)
     option(SOUND_ENABLED "Enable sound with DirectSound" ON)
     target_link_libraries(c2_platform
         PRIVATE
             DirectX::dinput
             DirectX::dxguid
             winmm
-            wsock32
+            ws2_32
             IForce2::IForce2
     )
     if(SOUND_ENABLED)
@@ -65,16 +65,25 @@ elseif(CARPOCALYPSE2_PLATFORM_SDL3)
         sdl3/sdl3_net.h
         sdl3/sdl3_plib.c
         sdl3/sdl3_rend.c
+        sdl3/sdl3_gl.c
+        sdl3/sdl3_display.c
         sdl3/sdl3_ssdx.c
         sdl3/sdl3_ssdx.h
+        sdl3/sdl3_porttest_stubs.c
+        sdl3/vita_glyph.c
+        sdl3/vita_text.c
     )
     target_link_libraries(c2_platform PRIVATE SDL3::SDL3)
+    # sdl3_audio.c plays the Smacker video soundtrack (SmackSetAudioSink)
+    target_link_libraries(c2_platform PRIVATE Smackw32::Smackw32)
     if(WIN32)
         target_link_libraries(c2_platform PRIVATE ws2_32)
     endif()
     # sdl3_rend.c uses BRender DDI internals (core headers)
     target_link_libraries(c2_platform PRIVATE BRender::ddi)
-    if(UNIX)
+    # OpenGL renderer (sdl3_gl.c, C2_RENDERER=gl)
+    target_link_libraries(c2_platform PRIVATE glrend)
+    if(UNIX OR VITA)
         # Case-insensitive file name resolution (see sdl3/sdl3_casefix.c).
         # macOS gets the resolver too: its case-sensitive volumes need it even
         # though Apple's linker cannot interpose fopen()/open().
@@ -171,4 +180,13 @@ if(CARPOCALYPSE2_MATCHING)
         "${CMAKE_CURRENT_SOURCE_DIR}/win32/win32net.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/win32/winmain.c"
         APPEND PROPERTY COMPILE_OPTIONS "-O2;-Ob2")
+endif()
+
+if(VITA)
+    target_sources(c2_platform PRIVATE sdl3/vita_controls.c sdl3/vita_platform.c sdl3/vita_data.c sdl3/vita_music.c sdl3/vita_video.c sdl3/vita_gl.c sdl3/vita_pack.c sdl3/vita_perf.c sdl3/vita_hud.c)
+    target_link_libraries(carpocalypse2 PRIVATE SceCtrl_stub SceIofilemgr_stub ScePower_stub)
+    target_link_libraries(carpocalypse2 PRIVATE vitaGL stdc++ mathneon vitashark SceShaccCgExt
+        taihen_stub SceShaccCg_stub SceGxm_stub SceDisplay_stub SceKernelDmacMgr_stub zip)
+    target_link_options(carpocalypse2 PRIVATE "-Wl,--wrap=sceClibPrintf")
+    target_link_options(carpocalypse2 PRIVATE "-Wl,-Map=${PROJECT_BINARY_DIR}/carpocalypse2.map")
 endif()

@@ -10,6 +10,7 @@
 #include "finteray.h"
 #include "flicplay.h"
 #include "frontend.h"
+#include <stdio.h>
 #include "globvars.h"
 #include "globvrkm.h"
 #include "globvrpb.h"
@@ -110,9 +111,73 @@ void C2_HOOK_FASTCALL RecordAPOAndCredits(void) {
 
 // FUNCTION: CARMA2_HW 0x004e3440
 int C2_HOOK_FASTCALL DoPostRace(tRace_result pRace_result) {
+    int i;
+    int* race_count;
+    int min_count;
+    int result;
+    volatile int selected_seed = 0;
+    int selected_race;
+    tRace_group_spec* group;
 
-    NOT_IMPLEMENTED();
-    return 0;
+    if (pRace_result == eRace_completed) {
+
+        gCurrent_race.race_spec->count_opponents++;
+        if (gProgram_state.game_completed) {
+            gProgram_state.current_race_index = IRandomBetween(0, gNumber_of_races - 1);
+            gCurrent_race_group = gRace_list[gProgram_state.current_race_index].group;
+            return selected_seed;
+        }
+
+        if (gCurrent_race.race_spec->is_boundary) {
+            gCurrent_race_group++;
+            gIs_boundary_race = 0;
+            if (gCurrent_race_group - gRace_groups >= gCountRaceGroups) {
+                result = 1;
+                gProgram_state.game_completed = result;
+                DoGameCompletedAnimation();
+                FrontEndProcessMenus(5);
+                gProgram_state.current_race_index = IRandomBetween(0, gNumber_of_races - 1);
+                gCurrent_race_group = gRace_list[gProgram_state.current_race_index].group;
+                selected_seed = result;
+                return result;
+            }
+            gProgram_state.current_race_index = gCurrent_race_group->races - gRace_list;
+            return selected_seed;
+        }
+
+        group = gCurrent_race_group;
+        i = 0;
+        min_count = 10000;
+        if (group->count_races > 0) {
+            race_count = &group->races->count_opponents;
+            selected_race = selected_seed;
+            do {
+                if (*race_count < min_count) {
+                    min_count = *race_count;
+                    selected_race = i;
+                }
+                i++;
+                race_count += 145;
+            } while (i < group->count_races);
+        } else {
+            selected_race = selected_seed;
+        }
+        if (min_count != 0) {
+            gIs_boundary_race = 1;
+            gProgram_state.current_race_index = group->mission - gRace_list;
+            return selected_seed;
+        }
+        gProgram_state.current_race_index = &group->races[selected_race] - gRace_list;
+        return selected_seed;
+    }
+
+    if (!gNo_credits_APO_restore) {
+        gProgram_state.credits = gMoney_pre_race;
+        gProgram_state.current_car.power_up_levels[0] = gAPO_pre_race[0];
+        gProgram_state.current_car.power_up_levels[1] = gAPO_pre_race[1];
+        gProgram_state.current_car.power_up_levels[2] = gAPO_pre_race[2];
+    }
+    return selected_seed;
 }
 
 void C2_HOOK_FASTCALL InitialiseProgramState(void) {
@@ -358,6 +423,7 @@ int C2_HOOK_FASTCALL NumberOfOpponentsStillRunning(void) {
     return result;
 }
 
+// C2PORT-NONMATCHING: best 100% | difftest PASS 2000 trials (spec 005039e0_SelectOpponents.json) | reason corrected picked flag to use the explicit opponent index
 // FUNCTION: CARMA2_HW 0x005039e0
 void C2_HOOK_FASTCALL SelectOpponents(tRace_info* pRace_info) {
     int i;
@@ -372,7 +438,7 @@ void C2_HOOK_FASTCALL SelectOpponents(tRace_info* pRace_info) {
     }
     for (i = 0; i < pRace_info->race_spec->count_explicit_opponents; i++) {
         if (pRace_info->race_spec->explicit_opponents[i] >= 0) {
-            gOpponents[i].picked = 1;
+            gOpponents[pRace_info->race_spec->explicit_opponents[i]].picked = 1;
             pRace_info->opponent_list[i].index = pRace_info->race_spec->explicit_opponents[i];
             pRace_info->opponent_list[i].ranking = -(i + 1);
         }
@@ -538,21 +604,17 @@ void C2_HOOK_FASTCALL WrongCheckpoint(int pCheckpoint_index) {
         gCurrent_race.race_spec->race_type == kRaceType_Checkpoints)) {
         return;
     }
-    if ((gLast_wrong_checkpoint == pCheckpoint_index && GetTotalTime() - gLast_checkpoint_time > 20000)
-            || (gLast_wrong_checkpoint != pCheckpoint_index && GetTotalTime() - gLast_checkpoint_time > 2000)) {
-
-        if (gNet_mode == eNet_mode_none) {
-            int next_checkpoint = pCheckpoint_index + 2;
-            if (gCurrent_race.check_point_count < next_checkpoint) {
-                if (gLap == 1) {
-                    next_checkpoint = -1;
-                } else {
-                    next_checkpoint = 1;
-                }
-            }
-            if (next_checkpoint == gCheckpoint) {
-                return;
-            }
+    if (!((gLast_wrong_checkpoint == pCheckpoint_index && GetTotalTime() - gLast_checkpoint_time > 20000)
+            || (gLast_wrong_checkpoint != pCheckpoint_index && GetTotalTime() - gLast_checkpoint_time > 2000))) {
+        return;
+    }
+    if (gNet_mode == eNet_mode_none) {
+        int next_checkpoint = pCheckpoint_index + 2;
+        if (gCurrent_race.check_point_count < next_checkpoint) {
+            next_checkpoint = ((gLap != 1) ? 2 : 0) - 1;
+        }
+        if (next_checkpoint == gCheckpoint) {
+            return;
         }
     }
     NewTextHeadupSlot(4, 0, 1000, -4, GetMiscString(eMiscString_wrong_checkpoint));
@@ -561,16 +623,16 @@ void C2_HOOK_FASTCALL WrongCheckpoint(int pCheckpoint_index) {
     gLast_wrong_checkpoint = pCheckpoint_index;
 }
 
-int C2_HOOK_FASTCALL RayHitFace(br_vector3* pV0, br_vector3* pV1, br_vector3* pV2, br_vector3* pNormal, br_vector3* pStart, br_vector3* pDir) {
+C2_MATCHING_INLINE int C2_HOOK_FASTCALL RayHitFace(br_vector3* pV0, br_vector3* pV1, br_vector3* pV2, br_vector3* pNormal, br_vector3* pStart, br_vector3* pDir) {
     tFace_ref the_face;
     br_scalar rt;
     br_vector3 rp;
 
     the_face.material = NULL;
-    BrVector3Copy(&the_face.v[0], pV0);
-    BrVector3Copy(&the_face.v[1], pV1);
-    BrVector3Copy(&the_face.v[2], pV2);
-    BrVector3Copy(&the_face.normal, pNormal);
+    the_face.v[0] = *pV0;
+    the_face.v[1] = *pV1;
+    the_face.v[2] = *pV2;
+    the_face.normal = *pNormal;
     CheckSingleFace(&the_face, pStart, pDir, &the_face.normal, &rt, &rp);
     return rt >= 0.f && rt <= 1.f;
 }
@@ -580,16 +642,50 @@ void C2_HOOK_FASTCALL CheckCheckpoints(void) {
     tCar_spec* car;
     br_vector3 orig;
     br_vector3 dir;
+    int car_index;
+    int car_count;
+    int cat;
     int i;
     int j;
-    int cat;
-    int car_count;
-    int car_index;
     tNet_game_player_info* net_player;
 
     if (gNet_mode == eNet_mode_client) {
         return;
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    {
+        /* port diagnostics: checkpoint setup once per race */
+        static const void* logged_race;
+        if (logged_race != (const void*)gCurrent_race.race_spec) {
+            logged_race = (const void*)gCurrent_race.race_spec;
+            dr_dprintf("CHECKPOINTS race_type=%d count=%d first_quads=%d gCheckpoint=%d/%d lap=%d/%d",
+                gCurrent_race.race_spec != NULL ? (int)gCurrent_race.race_spec->race_type : -1,
+                gCurrent_race.check_point_count,
+                gCurrent_race.check_point_count > 0 ? gCurrent_race.checkpoints[0].count_quads : -1,
+                gCheckpoint, gCheckpoint_count, gLap, gTotal_laps);
+            if (getenv("C2_TEST_CHECKPOINTS") != NULL) {
+                /* self-test: a segment through each quad's centre along its normal must hit */
+                int ti, tj;
+                for (ti = 0; ti < gCurrent_race.check_point_count; ti++) {
+                    for (tj = 0; tj < gCurrent_race.checkpoints[ti].count_quads; tj++) {
+                        tQuad* q = &gCurrent_race.checkpoints[ti].quads[tj];
+                        br_vector3 c, n, o, d;
+                        int hit;
+                        BrVector3Add(&c, &q->points[0], &q->points[2]);
+                        BrVector3Scale(&c, &c, 0.5f);
+                        BrVector3Normalise(&n, &gCurrent_race.checkpoints[ti].normals[tj]);
+                        BrVector3Scale(&d, &n, 4.f);
+                        BrVector3Scale(&o, &n, -2.f);
+                        BrVector3Accumulate(&o, &c);
+                        hit = RayHitFace(&q->points[0], &q->points[1], &q->points[2], &gCurrent_race.checkpoints[ti].normals[tj], &o, &d)
+                            || RayHitFace(&q->points[0], &q->points[2], &q->points[3], &gCurrent_race.checkpoints[ti].normals[tj], &o, &d);
+                        dr_dprintf("CHECKPOINT selftest cp=%d quad=%d hit=%d", ti + 1, tj, hit);
+                    }
+                }
+            }
+        }
+    }
+#endif
     if (gNet_mode == eNet_mode_host && gCurrent_net_game->type != eNet_game_type_5 && gCurrent_net_game->type != eNet_game_type_checkpoint && gCurrent_net_game->type != eNet_game_type_4) {
         return;
     }
@@ -605,7 +701,7 @@ void C2_HOOK_FASTCALL CheckCheckpoints(void) {
             } else {
                 car = GetCarSpec(cat, car_index);
             }
-            BrVector3Copy(&orig, (br_vector3*)car->old_frame_mat.m[3]);
+            orig = *(br_vector3*)car->old_frame_mat.m[3];
             BrVector3Sub(&dir, &car->car_master_actor->t.t.translate.t, &orig);
             for (i = 0; i < gCurrent_race.check_point_count; i++) {
                 for (j = 0; j < gCurrent_race.checkpoints[i].count_quads; j++) {
@@ -621,13 +717,7 @@ void C2_HOOK_FASTCALL CheckCheckpoints(void) {
                                           &gCurrent_race.checkpoints[i].normals[j],
                                           &orig,
                                           &dir)) {
-                        if (gNet_mode == eNet_mode_none) {
-                            if (i + 1 == gCheckpoint) {
-                                IncrementCheckpoint();
-                            } else {
-                                WrongCheckpoint(i);
-                            }
-                        } else {
+                        if (gNet_mode != eNet_mode_none) {
                             net_player = NetPlayerFromCar(car);
                             if (gCurrent_net_game->type == eNet_game_type_checkpoint) {
                                 if (net_player->score2 & (1 << i)) {
@@ -656,12 +746,23 @@ void C2_HOOK_FASTCALL CheckCheckpoints(void) {
                                     SendGameplay(net_player->ID, eNet_gameplay_wrong_checkpoint, i, 0, 0, 0);
                                 }
                             }
+                        } else {
+#ifndef CARPOCALYPSE2_MATCHING
+                            dr_dprintf("CHECKPOINT hit index=%d expected=%d/%d lap=%d race_type=%d",
+                                i + 1, gCheckpoint, gCheckpoint_count, gLap,
+                                gCurrent_race.race_spec != NULL ? (int)gCurrent_race.race_spec->race_type : -1);
+#endif
+                            if (i + 1 == gCheckpoint) {
+                                IncrementCheckpoint();
+                            } else {
+                                WrongCheckpoint(i);
+                            }
                         }
                         break;
                     }
                 }
             }
-            BrMatrix34Copy(&car->old_frame_mat, &car->car_master_actor->t.t.mat);
+            car->old_frame_mat = car->car_master_actor->t.t.mat;
         }
     }
 }
@@ -673,6 +774,7 @@ void C2_HOOK_FASTCALL TotalRepair(void) {
     NewTextHeadupSlot(4, 0, 1000, -4, GetMiscString(eMiscString_instant_repair));
 }
 
+// C2PORT-NONMATCHING: best 29.20% | difftest PASS 2000 trials (spec 00503ba0_PickNetRace.json + _TIES.json) | reason loop and register allocation
 // FUNCTION: CARMA2_HW 0x00503ba0
 int C2_HOOK_FASTCALL PickNetRace(int pCurrent_race, tNet_sequence_type pNet_race_sequence) {
     int i;
@@ -689,19 +791,19 @@ int C2_HOOK_FASTCALL PickNetRace(int pCurrent_race, tNet_sequence_type pNet_race
     } else {
         most_seldom_seen = 10000;
         for (i = 0; i < gNumber_of_races; i++) {
-            if (gRace_list[i].been_there_done_that < most_seldom_seen) {
-                most_seldom_seen = gRace_list[i].been_there_done_that;
+            if (gRace_list[i].count_opponents < most_seldom_seen) {
+                most_seldom_seen = gRace_list[i].count_opponents;
             }
         }
         races_count = 0;
         for (i = 0; i < gNumber_of_races; i++) {
-            if (gRace_list[i].been_there_done_that == most_seldom_seen && (i != pCurrent_race)) {
+            if (gRace_list[i].count_opponents == most_seldom_seen && (i != pCurrent_race)) {
                 races_to_pick_from[races_count] = i;
                 races_count++;
             }
         }
         new_index = races_to_pick_from[IRandomBetween(0, races_count - 1)];
-        gRace_list[new_index].been_there_done_that += 1;
+        gRace_list[new_index].count_opponents += 1;
     }
     return new_index;
 }
@@ -1051,7 +1153,7 @@ void C2_HOOK_FASTCALL DoProgram(void) {
     }
 
     /* InitialiseProgramState (inlined by retail compiler) */
-    gProgram_state.prog_status = eProg_idling;
+    gProgram_state.prog_status = eProg_intro;
     gProgram_state.last_slot = 0;
     gProgram_state.racing = 0;
     gProgram_state.cut_scene = 0;
@@ -1067,15 +1169,64 @@ void C2_HOOK_FASTCALL DoProgram(void) {
     gProgram_state.cockpit_on = 1;
 #endif
     gProgram_state.frank_or_anniness = eFrankie;
+#ifdef __vita__
+    /* Vita: AutoLoad defaults to on once (the shipped OPTIONS.TXT says 0); afterwards the
+     * in-game Auto Load option, saved in OPTIONS.TXT, decides. */
+    {
+        FILE* marker = fopen("AUTOLOAD.SET", "rb");
+        if (marker != NULL) {
+            fclose(marker);
+        } else {
+            gAuto_load = 1;
+            marker = fopen("AUTOLOAD.SET", "wb");
+            if (marker != NULL) {
+                fputs("AutoLoad was switched on once by the Vita port; the in-game option controls it now.\n", marker);
+                fclose(marker);
+            }
+        }
+    }
+    /* Vita: draw distance (yon) defaults to 35 once (longer distances cost frame rate on
+     * the larger tracks); afterwards Options > Graphics > SCENERY CUTOFF (120 / 100 / 80 / 35 on Vita),
+     * saved in OPTIONS.TXT, decides. */
+    {
+        extern void C2_HOOK_STDCALL SetYon(br_scalar pYon);
+        extern int C2_HOOK_FASTCALL SaveOptions(void);
+        FILE* marker = fopen("YONDEF.SET", "rb");
+        if (marker != NULL) {
+            fclose(marker);
+        } else {
+            SetYon(35.f);
+            SaveOptions();
+            marker = fopen("YONDEF.SET", "wb");
+            if (marker != NULL) {
+                fputs("Draw distance was set to 35 once by the Vita port; Options > Graphics controls it now.\n", marker);
+                fclose(marker);
+            }
+        }
+    }
+#endif
 
     do {
         switch (gProgram_state.prog_status) {
         case eProg_intro:
+            /* retail: logos and the opening Smacker videos (skippable; -NOCUTSCENES skips them, and
+             * so do the C2_TEST_* harness runs) */
+            if (getenv("C2_TEST_RACE") != NULL || getenv("C2_TEST_KEYS") != NULL) {
+                gProgram_state.prog_status = eProg_opening;
+            } else {
+                DoLogos();
+            }
+            break;
         case eProg_opening:
             gProgram_state.prog_status = eProg_idling;
             break;
 
         case eProg_idling:
+            /* retail DoProgram: with the AutoLoad option, resume the most recent save once at startup */
+            if (gAuto_load && gLoad_last_save_game) {
+                DoLoadMostRecentGame();
+                gLoad_last_save_game = 0;
+            }
             if (!DoMainScreen()) {
                 gProgram_state.prog_status = eProg_quit;
             }

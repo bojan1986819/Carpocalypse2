@@ -8,6 +8,9 @@
 
 extern int gDecode_thing;
 
+extern const char gSkip_lines_delimiters[];
+extern const char gSkip_lines_format[];
+
 extern tU32 C2_HOOK_FASTCALL ReadU32(FILE* pF);
 
 extern float C2_HOOK_FASTCALL ReadF32(FILE* pF);
@@ -72,6 +75,8 @@ extern void C2_HOOK_CDECL SubsStringJob(char *pFormat, ...);
 
 extern void C2_HOOK_FASTCALL EncodeFile(char* pThe_path);
 
+extern void C2_HOOK_FASTCALL SkipLines(FILE* pF);
+
 char * C2_HOOK_FASTCALL GetALineWithNoPossibleService(FILE* pF, char* pS);
 
 char * C2_HOOK_FASTCALL GetALineAndDontArgue(FILE* pF, char* pS);
@@ -96,6 +101,8 @@ extern void C2_HOOK_FASTCALL DisposeCar(tCar_spec* pCar_spec, int pOwner);
 
 extern void C2_HOOK_FASTCALL DisposeRaceInfo(tRace_info* pRace_info);
 
+extern void C2_HOOK_FASTCALL LoadingNoOp(void);
+
 extern void C2_HOOK_FASTCALL DisposeOpponentsCars(tRace_info* pRace_info);
 
 extern void C2_HOOK_FASTCALL DisposeRace(void);
@@ -105,5 +112,7 @@ extern void C2_HOOK_FASTCALL DisposeRace(void);
 // DisposeTrack
 
 extern int GetRegisterSourceLocation(char* pSource_location);
+
+tU32 C2_HOOK_FASTCALL DecimalDigitsToBitmask(tU32 pValue);
 
 #endif // GUARD_LOADING1_H

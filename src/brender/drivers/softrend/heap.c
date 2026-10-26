@@ -91,6 +91,7 @@ void C2_HOOK_CDECL OpHeapAddTriangle(brp_block* block, brp_vertex* v0, brp_verte
     }
 }
 
+// C2PORT-NONMATCHING: best 49.66% | difftest PASS 2000 trials (spec difftest/specs/00546be0_OpHeapAddLine.json) | reason heap helper inlining and renderer register allocation
 // FUNCTION: CARMA2_HW 0x00546be0
 void C2_HOOK_CDECL OpHeapAddLine(brp_block* block, brp_vertex* v0, brp_vertex* v1) {
     br_primitive *p;

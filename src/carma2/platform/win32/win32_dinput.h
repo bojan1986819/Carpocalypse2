@@ -11,8 +11,19 @@ extern int gASCII_shift_table[151];
 extern int gScan_code[256];
 extern int gJoystick_deadzone;
 extern int gJoystickFFB;
-extern IDirectInputDevice2A* gDirectInputJoystickDevices[];
-extern tDirectInputJoystickInfo gDirectInputJoystickInfos[];
+extern int gForceFeedbackAvailable;
+extern int gCurrent_joystick_effect_index;
+extern void C2_HOOK_FASTCALL FUN_004587c0(void);
+extern IDirectInputDevice2A* gDirectInputJoystickDevices[16];
+extern tDirectInputJoystickInfo gDirectInputJoystickInfos[16];
+
+extern int C2_HOOK_FASTCALL SetDirectInputDeviceRange(IDirectInputDevice2A* pDevice, LONG pMin, LONG pMax);
+
+extern int C2_HOOK_FASTCALL CreateDinputEffectFromSpec(int pJoystickIndex, const tJoystick_effect_spec* pEffectSpec, const char* pName);
+
+extern tButtonJoystickInfo* C2_HOOK_FASTCALL AllocateCurrentJoystickButtonInfos(size_t pSize);
+
+extern void C2_HOOK_FASTCALL FreeCurrentJoystickButtonInfos(void);
 
 extern void C2_HOOK_FASTCALL KeyBegin(void);
 
@@ -42,9 +53,13 @@ extern int C2_HOOK_FASTCALL SetJoystickFFBForce(int pMagnitude);
 
 extern int C2_HOOK_FASTCALL SetJoystickFFBSteeringForce(int pMagnitude);
 
+extern int C2_HOOK_FASTCALL SetJoystickFFBCollisionForce(LONG pMagnitude, LONG pDirection);
+
 extern void C2_HOOK_FASTCALL Win32InitInputDevice(void);
 
 extern int C2_HOOK_FASTCALL JoystickDInputBegin(void);
+
+extern void C2_HOOK_FASTCALL SelectNextDInputJoystick(void);
 
 extern tU32 C2_HOOK_FASTCALL PDGetJoystickButtonStates(void);
 
@@ -82,9 +97,7 @@ extern int C2_HOOK_FASTCALL PDGetJoy2Y(void);
 
 extern void C2_HOOK_FASTCALL PDInitJoysticks(void);
 
-extern void C2_HOOK_FASTCALL FUN_00459a70(void);
-
-extern void C2_HOOK_FASTCALL FUN_0045c420(void);
+extern tJoystick_force_effect* C2_HOOK_FASTCALL FUN_00458430(int pIndex);
 
 extern void C2_HOOK_FASTCALL PDPlayFFBEffectIndex(int index);
 

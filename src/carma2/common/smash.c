@@ -1,6 +1,12 @@
 #include "smash.h"
 #include "smashing.h"
 #include "world.h"
+#include "physics.h"
+#include "globvrpb.h"
+#include "car.h"
+#include "crush.h"
+#include "finteray.h"
+#include "opponent.h"
 
 #include "utility.h"
 #include "globvars.h"
@@ -59,30 +65,13 @@ void C2_HOOK_FASTCALL InitExplosions(void) {
 
 // MungeExplosions
 
-// FUNCTION: CARMA2_HW 0x004eace0
-void C2_HOOK_FASTCALL CopyExplosionData(int pIndex, tExplosion* pExplosion) {
-    gExplosions[pIndex] = *pExplosion;
-}
+// CopyExplosionData
 
 // DoExplosionette
 
 // Explode
 
-// FUNCTION: CARMA2_HW 0x004eb020
-void C2_HOOK_FASTCALL RemoveExplosions(tCar_spec* pCar_spec) {
-    int i;
-    tExplosion* explosion;
-
-    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gExplosions); i++) {
-        explosion = &gExplosions[i];
-        if (explosion->start != 0 && explosion->collision_actor == pCar_spec->collision_info->actor) {
-            if (explosion->actor->parent != NULL) {
-                BrActorRemove(explosion->actor);
-            }
-            explosion->finished = 1;
-        }
-    }
-}
+// RemoveExplosions
 
 // CalcRandomPointBetween
 
@@ -206,47 +195,9 @@ void C2_HOOK_FASTCALL RemoveExplosions(tCar_spec* pCar_spec) {
 
 // KillFragment
 
-void C2_HOOK_FASTCALL AddRepairAnimationToQueue(tCar_spec* pCar_spec, tCar_crush_smashable_part* pSmashable) {
-    tRepair_animation* p;
-    int i;
-    int index;
+// AddRepairAnimationToQueue
 
-    index = -1;
-    i = 0;
-    for (p = gRepair_animations; p < &gRepair_animations[CARPOCALYPSE2_ASIZE(gRepair_animations)]; p++, i++) {
-        if (p->field_0x0 == pSmashable) {
-            index = i;
-            break;
-        }
-    }
-    if (index < 0) {
-        i = 0;
-        for (p = gRepair_animations; p < &gRepair_animations[CARPOCALYPSE2_ASIZE(gRepair_animations)]; p++, i++) {
-            if (p->field_0x0 == NULL) {
-                index = i;
-                break;
-            }
-        }
-    }
-    if (index >= 0) {
-        gRepair_animations[index].field_0x0 = pSmashable;
-        gRepair_animations[index].field_0x4 = GetTotalTime();
-        gRepair_animations[index].field_0x8 = pCar_spec;
-    }
-}
-
-// FUNCTION: CARMA2_HW 0x004ef910
-void C2_HOOK_FASTCALL RepairSmash(tCar_spec* pCar_spec, tCar_crush_buffer_entry* pSmash_data) {
-    tCar_crush_smashable_part* smashable = pSmash_data->smashables;
-    int i;
-
-    for (i = 0; i < pSmash_data->count_smashables; i++, smashable++) {
-        if (smashable->field_0x4c != 0) {
-            ActuallyRepairSmash(pCar_spec, smashable, smashable->field_0x4c - 1);
-            AddRepairAnimationToQueue(pCar_spec, smashable);
-        }
-    }
-}
+// RepairSmash
 
 // TotallyRepairSmash
 
@@ -331,35 +282,30 @@ void C2_HOOK_FASTCALL CleanUpSmashStuff(void) {
     } while (i != 0);
 }
 
-// FUNCTION: CARMA2_HW 0x004f6020
-void C2_HOOK_FASTCALL TurnOnSmashDecal(int pIndex) {
-
-    BrActorAdd(gOther_selfs[0], gDecals[pIndex].actor);
-}
-
-// FUNCTION: CARMA2_HW 0x004f6040
-void C2_HOOK_FASTCALL TurnOffSmashDecal(int pIndex) {
-
-    BrActorRemove(gDecals[pIndex].actor);
-}
-
 // FUNCTION: CARMA2_HW 0x004f0310
-void C2_HOOK_FASTCALL DisposeSmashData(tCar_crush_buffer_entry* pCrush_data) {
+void C2_HOOK_FASTCALL DisposeSmashData(tU8* pSmash) {
     int i;
+    int offset;
 
-    if (pCrush_data->smashables != NULL) {
-        for (i = 0; i < pCrush_data->count_smashables; i++) {
-            if (pCrush_data->smashables[i].field_0x70 != NULL) {
-                BrMemFree(pCrush_data->smashables[i].field_0x70);
-            }
-            if (pCrush_data->smashables[i].field_0x78 != NULL) {
-                BrMemFree(pCrush_data->smashables[i].field_0x78);
-            }
-            if (pCrush_data->smashables[i].levels != NULL) {
-                BrMemFree(pCrush_data->smashables[i].levels);
-            }
+    if (*(int*)(pSmash + 0x3c) != 0) {
+        i = 0;
+        if (*(tU16*)(pSmash + 0x38) > 0) {
+            offset = 0;
+            do {
+                if (*(int*)(*(int*)(pSmash + 0x3c) + (offset + 0x70)) != 0) {
+                    BrMemFree(*(void**)(*(int*)(pSmash + 0x3c) + (offset + 0x70)));
+                }
+                if (*(int*)(*(int*)(pSmash + 0x3c) + (offset + 0x78)) != 0) {
+                    BrMemFree(*(void**)(*(int*)(pSmash + 0x3c) + (offset + 0x78)));
+                }
+                if (*(int*)(*(int*)(pSmash + 0x3c) + (offset + 0x50)) != 0) {
+                    BrMemFree(*(void**)(*(int*)(pSmash + 0x3c) + (offset + 0x50)));
+                }
+                i++;
+                offset += 0x7c;
+            } while (i < *(tU16*)(pSmash + 0x38));
         }
-        BrMemFree(pCrush_data->smashables);
+        BrMemFree(*(void**)(pSmash + 0x3c));
     }
 }
 
@@ -439,39 +385,9 @@ void C2_HOOK_FASTCALL DisposeSmashData(tCar_crush_buffer_entry* pCrush_data) {
 
 // LinkSmashies
 
-// FUNCTION: CARMA2_HW 0x004f5a10
-static intptr_t C2_HOOK_CDECL RepairModels(br_actor* pActor, void* pUser) {
-    tUser_crush_data* user_crush = pActor->user;
-    tCar_crush_buffer_entry* crush_data;
-    tCar_crush_smashable_part* smashable;
-    int i;
+// RepairModels
 
-    if (user_crush == NULL) {
-        return 0;
-    }
-    crush_data = user_crush->crush_data;
-    if (crush_data == NULL) {
-        return 0;
-    }
-    smashable = crush_data->smashables;
-    i = 0;
-    if (crush_data->count_smashables <= i) {
-        return 0;
-    }
-    do {
-        if (smashable->field_0x4c != 0) {
-            ActuallyRepairSmash(pUser, smashable, 0);
-        }
-        i++;
-        smashable++;
-    } while (i < crush_data->count_smashables);
-    return 0;
-}
-
-// FUNCTION: CARMA2_HW 0x004f5a00
-intptr_t C2_HOOK_FASTCALL RepairAllSmashes(tCar_spec* pCar_spec) {
-    return DRActorEnumRecurse(pCar_spec->car_master_actor, RepairModels, pCar_spec);
-}
+// RepairAllSmashes
 
 // SmashEverythingCB
 
@@ -483,27 +399,13 @@ intptr_t C2_HOOK_FASTCALL RepairAllSmashes(tCar_spec* pCar_spec) {
 
 // LoadWastedExplosion
 
-// FUNCTION: CARMA2_HW 0x004f5f60
-void C2_HOOK_FASTCALL ChangeSmashModel(br_actor* pActor, br_model* pOld_model, br_model* pNew_model) {
-    (void)pOld_model;
-    pActor->model = pNew_model;
-}
+// ChangeSmashModel
 
-// FUNCTION: CARMA2_HW 0x004f5f70
-void C2_HOOK_FASTCALL TurnOnSmashModel(br_actor* pActor) {
-    pActor->render_style = BR_RSTYLE_FACES;
-}
+// TurnOnSmashModel
 
-// FUNCTION: CARMA2_HW 0x004f5f80
-void C2_HOOK_FASTCALL TurnOffSmashModel(br_actor* pActor) {
-    pActor->render_style = BR_RSTYLE_NONE;
-}
+// TurnOffSmashModel
 
-// FUNCTION: CARMA2_HW 0x004f5f90
-void C2_HOOK_FASTCALL SmashRemoveSomeFaces(br_model* pModel, tS16 pCount) {
-    pModel->nfaces -= pCount;
-    DRModelUpdateAndKevificateMaterials(pModel, BR_MODU_ALL);
-}
+// SmashRemoveSomeFaces
 
 // SmashRestoreSomeFaces
 
@@ -513,11 +415,119 @@ void C2_HOOK_FASTCALL SmashRemoveSomeFaces(br_model* pModel, tS16 pCount) {
 
 // ChangeSmashTexture
 
+// C2PORT-NONMATCHING: best 75.25% | difftest PASS 2000 trials (spec difftest/specs/004f60b0_QueueNetSmash.json) | reason regalloc-loop
+// FUNCTION: CARMA2_HW 0x004f60b0
+void C2_HOOK_FASTCALL QueueNetSmash(tQueued_net_smash* pSmash) {
+    int i;
+    int is_host;
+    tQueued_net_smash* pQueued_smash;
+    tQueued_net_smash* pHost_smash;
+
+    if (gPHIL_last_physics_tick == 0 || gPHIL_last_physics_tick >= pSmash->field_0x4) {
+        DoNetSmash(pSmash);
+        return;
+    }
+
+    i = 0;
+    pQueued_smash = gQueued_net_smashes;
+    do {
+        if (pQueued_smash->field_0x4 == 0) {
+            goto queue_net_smash_found;
+        }
+        i++;
+        pQueued_smash++;
+    } while (i < 50);
+    return;
+queue_net_smash_found:
+
+    is_host = gNet_mode == eNet_mode_host;
+    *pQueued_smash = *pSmash;
+
+    if (is_host && gCount_host_smashes < 1000) {
+        pHost_smash = (tQueued_net_smash*)((tU8*)gNet_host_smashes + gCount_host_smashes * 0x38);
+        gCount_host_smashes++;
+        *pHost_smash = *pSmash;
+    }
+}
+
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 78.51% | difftest PASS 2000 trials (spec difftest/specs/004f6130_DoNetSmash.json) | reason regalloc-loop
 // FUNCTION: CARMA2_HW 0x004f6130
 void C2_HOOK_FASTCALL DoNetSmash(tQueued_net_smash* pSmash) {
+    int owner_id;
+    int face_count;
+    int i;
+    tCar_spec* car;
+    tPhysics_object* object;
+    tFace_ref* face;
+    struct {
+        tBounds bounds;
+        br_matrix34 matrix;
+        tFace_ref faces[20];
+    } locals;
+    const float* point;
 
-    NOT_IMPLEMENTED();
+    owner_id = pSmash->vehicle_id;
+    if (owner_id != -1) {
+        if (gNet_mode) {
+            if (owner_id < gNumber_of_net_players) {
+                car = gNet_players[owner_id].car;
+            } else {
+                car = NULL;
+            }
+        } else if ((owner_id & 0xffffff00) == 0) {
+            car = &gProgram_state.current_car;
+        } else {
+            car = GetCarSpec((tVehicle_type)(owner_id >> 8), owner_id & 0xff);
+        }
+        if (car != NULL) {
+            object = car->collision_info;
+        } else {
+            object = NULL;
+        }
+    } else {
+        object = NULL;
+    }
+    if (object == NULL) {
+        return;
+    }
+
+    locals.bounds.mat = &locals.matrix;
+    BrMatrix34Identity(&locals.matrix);
+    point = pSmash->position.v;
+    locals.matrix.m[3][0] = point[0];
+    locals.matrix.m[3][1] = point[1];
+    locals.matrix.m[3][2] = point[2];
+    locals.bounds.original_bounds.min.v[0] = -0.05f;
+    locals.bounds.original_bounds.min.v[1] = -0.05f;
+    locals.bounds.original_bounds.min.v[2] = -0.05f;
+    locals.bounds.original_bounds.max.v[0] = 0.05f;
+    locals.bounds.original_bounds.max.v[1] = 0.05f;
+    locals.bounds.original_bounds.max.v[2] = 0.05f;
+    FillInBounds(&locals.bounds);
+    face_count = FindFacesInBox(&locals.bounds, locals.faces, 20, &gWorld_callbacks);
+    face = locals.faces;
+    i = 0;
+    if (face_count > 0) {
+        while (i < face_count) {
+            if (FUN_004f0d50(point, face->normal.v, face->d,
+                    face->v[0].v, face->v[1].v, face->v[2].v)) {
+                break;
+            }
+            i++;
+            face++;
+        }
+        if (i < face_count) {
+            gINT_006a8294 = pSmash->flags & 1;
+            SmashEnvironment(object, (undefined4*)face, pSmash->smash_strength,
+                    (br_vector3*)point, &pSmash->field_0x1c, &pSmash->field_0x28,
+                    (pSmash->flags >> 1) & 1, 1);
+            FlushSmashQueue(0);
+            gINT_006a8294 = 0;
+        }
+    }
 }
+#pragma auto_inline(on)
 
 // ReceivedSmashEnvironment
 

@@ -1,0 +1,72 @@
+diff --git a/source/custom_shaders.c b/source/custom_shaders.c
+index 34a39ff..67d863e 100644
+--- a/source/custom_shaders.c
++++ b/source/custom_shaders.c
+@@ -649,6 +649,10 @@ static inline __attribute__((always_inline)) size_t serialized_shader_size(shade
+ 		m = (matrix_uniform *)m->chain;
+ 	}
+ 	size_t sz = (1 + *matrix_uniforms_num) * sizeof(uint32_t) + s->size;
++	/* C2 port: uniform blocks (count, then index + name for each) */
++	sz += sizeof(uint32_t);
++	for (block_uniform *b = s->unif_blk; b; b = (block_uniform *)b->chain)
++		sz += sizeof(uint32_t) + sizeof(b->name);
+ 	if (have_bindings)
+ 		sz += sizeof(binds_map);
+ #ifdef HAVE_GLSL_TEXTURE_SIZE
+@@ -674,6 +678,20 @@ void *serialize_shader(void *out, size_t *sz, shader *s, GLboolean save_bindings
+ 		buf += sizeof(uint32_t);
+ 		m = (matrix_uniform *)m->chain;
+ 	}
++	{
++		uint32_t blocks_num = 0;
++		for (block_uniform *b = s->unif_blk; b; b = (block_uniform *)b->chain)
++			blocks_num++;
++		vgl_fast_memcpy(buf, &blocks_num, sizeof(uint32_t));
++		buf += sizeof(uint32_t);
++		for (block_uniform *b = s->unif_blk; b; b = (block_uniform *)b->chain) {
++			uint32_t idx = b->idx;
++			vgl_fast_memcpy(buf, &idx, sizeof(uint32_t));
++			buf += sizeof(uint32_t);
++			vgl_fast_memcpy(buf, b->name, sizeof(b->name));
++			buf += sizeof(b->name);
++		}
++	}
+ 	if (save_bindings) {
+ 		vgl_fast_memcpy(buf, &s->semantics, sizeof(binds_map));
+ 		buf += sizeof(binds_map);
+@@ -695,6 +713,22 @@ void unserialize_shader(void *in, size_t sz, shader *s, GLboolean load_bindings)
+ 	uint32_t matrix_uniforms_num;
+ 	vgl_fast_memcpy(&matrix_uniforms_num, buf, sizeof(uint32_t));
+ 	buf += sizeof(uint32_t) * (matrix_uniforms_num + 1);
++	{
++		uint32_t blocks_num;
++		vgl_fast_memcpy(&blocks_num, buf, sizeof(uint32_t));
++		buf += sizeof(uint32_t);
++		for (uint32_t i = 0; i < blocks_num; i++) {
++			block_uniform *b = (block_uniform *)vglMalloc(sizeof(block_uniform));
++			uint32_t idx;
++			vgl_fast_memcpy(&idx, buf, sizeof(uint32_t));
++			buf += sizeof(uint32_t);
++			b->idx = (uint8_t)idx;
++			vgl_fast_memcpy(b->name, buf, sizeof(b->name));
++			buf += sizeof(b->name);
++			b->chain = s->unif_blk;
++			s->unif_blk = b;
++		}
++	}
+ 	if (load_bindings) {
+ 		vgl_fast_memcpy(&s->semantics, buf, sizeof(binds_map));
+ 		buf += sizeof(binds_map);
+diff --git a/source/shared.h b/source/shared.h
+index 2d4b0f3..b859796 100644
+--- a/source/shared.h
++++ b/source/shared.h
+@@ -302,7 +302,7 @@ extern int NEW_DISPLAY_HEIGHT; // Requested new display height in pixels
+ 
+ // Custom shaders pipeline shader cache settings
+ #ifdef HAVE_SHADER_CACHE
+-#define SHADER_CACHE_MAGIC 3
++#define SHADER_CACHE_MAGIC 103 // C2 port: cache entries also store uniform blocks
+ extern char vgl_shader_cache_path[256];
+ #endif
+ 

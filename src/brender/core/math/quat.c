@@ -9,6 +9,7 @@
 #define M_DIAG(x) (((br_scalar*)mat->m)[4*(x)])
 #define Q_EL(e) (((br_scalar*)&(q->x))[(e)])
 
+// C2PORT-NONMATCHING: best 13.87% | difftest PASS 2000 trials (spec difftest/specs/005355e0_BrQuatMul.json, abs tol 2e-6) | reason x87 operation order differs; cancellation rounding up to 1248 ulp at near-zero outputs
 // FUNCTION: CARMA2_HW 0x005355e0
 br_quat* C2_HOOK_CDECL BrQuatMul(br_quat* q, const br_quat* l, const br_quat* r) {
     br_scalar x1;
@@ -29,6 +30,7 @@ br_quat* C2_HOOK_CDECL BrQuatMul(br_quat* q, const br_quat* l, const br_quat* r)
     return q;
 }
 
+// C2PORT-NONMATCHING: best 39.08% | difftest PASS 2000 trials (spec difftest/specs/00535710_BrQuatNormalise.json) | reason VC5 schedules x87 norm calculation differently
 // FUNCTION: CARMA2_HW 0x00535710
 br_quat* C2_HOOK_CDECL BrQuatNormalise(br_quat* q, const br_quat* qq) {
     br_scalar s;
@@ -51,6 +53,7 @@ br_quat* C2_HOOK_CDECL BrQuatInvert(br_quat* q, const br_quat* qq) {
     return q;
 }
 
+// C2PORT-NONMATCHING: best 45.2% | difftest PASS 4000 trials (specs 005357c0_BrQuatSlerp.json, 005357c0_BrQuatSlerp_NEAR.json) | reason x87 trig range reduction for high spins
 // FUNCTION: CARMA2_HW 0x005357c0
 br_quat* C2_HOOK_CDECL BrQuatSlerp(br_quat* q, const br_quat* l, const br_quat* r, br_scalar a, br_int_16 spins) {
     int omega;
@@ -93,6 +96,7 @@ br_quat* C2_HOOK_CDECL BrQuatSlerp(br_quat* q, const br_quat* l, const br_quat* 
     return q;
 }
 
+// C2PORT-NONMATCHING: best 24.21% | difftest PASS 2000 trials (spec difftest/specs/005359a0_BrQuatToMatrix34.json, abs tol 2e-6) | reason x87 scheduling of the quaternion products
 // FUNCTION: CARMA2_HW 0x005359a0
 br_matrix34* C2_HOOK_CDECL BrQuatToMatrix34(br_matrix34* mat, const br_quat* q) {
     br_scalar xs;
@@ -137,6 +141,7 @@ br_matrix34* C2_HOOK_CDECL BrQuatToMatrix34(br_matrix34* mat, const br_quat* q) 
     return mat;
 }
 
+// C2PORT-NONMATCHING: best 39.81% | difftest PASS 2000 trials (spec difftest/specs/00535ae0_BrMatrix34ToQuat_random.json) | reason VC5 branch and x87 scheduling
 // FUNCTION: CARMA2_HW 0x00535ae0
 br_quat* C2_HOOK_CDECL BrMatrix34ToQuat(br_quat* q, const br_matrix34* mat) {
     br_scalar tr;
@@ -155,8 +160,8 @@ br_quat* C2_HOOK_CDECL BrMatrix34ToQuat(br_quat* q, const br_matrix34* mat) {
         q->z = (M(0, 1) - M(1, 0)) * s;
         return q;
     }
-    i = M_DIAG(1) >= M_DIAG(0) ? 1 : 0;
-    i = M_DIAG(2) >= M_DIAG(i) ? 2 : i;
+    i = M_DIAG(1) > M_DIAG(0) ? 1 : 0;
+    i = M_DIAG(2) > M_DIAG(i) ? 2 : i;
     j = (i + 1) % 3;
     k = (j + 1) % 3;
     tr = (br_scalar)sqrt(M_DIAG(i) - (M_DIAG(j) + M_DIAG(k)) + 1.f);
@@ -164,7 +169,7 @@ br_quat* C2_HOOK_CDECL BrMatrix34ToQuat(br_quat* q, const br_matrix34* mat) {
     Q_EL(i) = 0.5f * tr;
     Q_EL(j) = (M(i, j) + M(j, i)) * s;
     Q_EL(k) = (M(i, k) + M(k, i)) * s;
-    q->w = (M(k, j) - M(j, k)) * s;
+    q->w = (M(j, k) - M(k, j)) * s;
     return q;
 }
 

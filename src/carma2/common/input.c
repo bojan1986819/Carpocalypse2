@@ -55,7 +55,7 @@ int gLetter_y_coords[15];
 int gThe_length;
 
 // GLOBAL: CARMA2_HW 0x0068c150
-char gCurrent_typing[110];
+char gThe_text[0x70];
 
 // GLOBAL: CARMA2_HW 0x0068c1c0
 int gCurrent_position;
@@ -107,15 +107,11 @@ int gKey_mapping[77];
 // GLOBAL: CARMA2_HW 0x0068c1c4
 int gEdge_trigger_mode;
 
-// GLOBAL: CARMA2_HW 0x006571f8
-int gLast_mouse_x_coord;
-// GLOBAL: CARMA2_HW 0x006571fc
-int gLast_mouse_y_coord;
 
 int C2_HOOK_FASTCALL AnyModifiersDown(void) {
     int i;
 
-    for (i = 0; i <= 10; i++) {
+    for (i = 0; i < 11; i++) {
         if (gKey_array[i] != 0) {
             return 1;
         }
@@ -178,41 +174,75 @@ int C2_HOOK_FASTCALL KeyIsDownNoMouldiness(int pKey_index) {
     return gKey_array[gKey_mapping[pKey_index]];
 }
 
+// C2PORT-NONMATCHING: best 43.37% | difftest PASS 2000 trials (spec 00483cf0_AddRollingLetter.json and branch specs) | reason equivalent slot allocation and letter output with different register scheduling
 // FUNCTION: CARMA2_HW 0x00483cf0
 int C2_HOOK_FASTCALL AddRollingLetter(char pChar, int pX, int pY, tRolling_type rolling_type) {
     tRolling_letter* let;
     int i;
 
-    for (let = gRolling_letters, i = 0; i < NBR_ROLLING_LETTERS; i++, let++) {
+    for (i = 0; i < NBR_ROLLING_LETTERS; i++) {
+        let = &gRolling_letters[i];
         if (let->number_of_letters < 0) {
-            goto letter_found;
+            break;
         }
     }
-    return -1;
-
-letter_found:
-    let->rolling_type = rolling_type;
+    if (i == NBR_ROLLING_LETTERS) {
+        return -1;
+    }
     let->x_coord = pX;
     let->y_coord = pY;
-    if (rolling_type == eRT_looping_random) {
+    let->rolling_type = rolling_type;
+    switch (rolling_type) {
+    case eRT_looping_random:
         let->number_of_letters = 9;
-    } else if (rolling_type == eRT_looping_single) {
+        break;
+    case eRT_looping_single:
         let->number_of_letters = 2;
-    } else {
+        break;
+    default:
         let->number_of_letters = IRandomBetween(3, 9);
+        break;
     }
+
     let->current_offset = (float)(let->number_of_letters * gCurrent_graf_data->save_slot_letter_height);
-    for (i = let->number_of_letters - 1; i > (rolling_type != eRT_looping_random ? 0 : -1); i--) {
-        if (rolling_type != eRT_numeric) {
-            let->letters[i] = IRandomBetween('A', 'Z' + 1);
-        } else {
+    for (i = (rolling_type != eRT_looping_random ? 1 : 0); i < let->number_of_letters; i++) {
+        if (rolling_type == eRT_numeric) {
+            /* The (tU8) cast makes sure extended ASCII is positive. */
             let->letters[i] = (tS8)pChar;
+        } else {
+            let->letters[i] = IRandomBetween('A', 'Z' + 1);
         }
     }
     if (rolling_type != eRT_looping_random) {
+        /* The (tU8) cast makes sure extended ASCII is positive. */
         let->letters[0] = (tS8)pChar;
     }
-    return i;
+
+    return rolling_type == eRT_looping_random ? -1 : 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00483dd0
+void C2_HOOK_FASTCALL AddRollingString(char* pText, int pX, int pY, tRolling_type pRolling_type) {
+    unsigned int i;
+
+    for (i = 0; i < strlen(pText); i++) {
+        AddRollingLetter(pText[i], i * gCurrent_graf_data->rolling_letter_x_pitch + pX, pY, pRolling_type);
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x00483e20
+void C2_HOOK_FASTCALL AddRollingNumber(tU32 pNumber, int pWidth, int pX, int pY) {
+    char the_string[32];
+    unsigned int i;
+
+    sprintf(the_string, "%0.*d", pWidth, pNumber);
+    for (i = 0; i < strlen(the_string); i++) {
+        AddRollingLetter(the_string[i], i * gCurrent_graf_data->rolling_letter_x_pitch + pX, pY, eRT_numeric);
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x00483e90
+void C2_HOOK_FASTCALL InputNoOp(void) {
 }
 
 // FUNCTION: CARMA2_HW 0x00484000
@@ -231,6 +261,7 @@ int C2_HOOK_FASTCALL ChangeCharTo(int pSlot_index, int pChar_index, char pNew_ch
     }
     y_coord = gLetter_y_coords[pSlot_index];
     x_coord = gLetter_x_coords[pSlot_index] + pChar_index * gCurrent_graf_data->rolling_letter_x_pitch;
+
     if (pNew_char == ROLLING_LETTER_LOOP_RANDOM) {
         new_type = eRT_looping_random;
     } else if (pNew_char >= '0' && pNew_char <= '9') {
@@ -238,27 +269,31 @@ int C2_HOOK_FASTCALL ChangeCharTo(int pSlot_index, int pChar_index, char pNew_ch
     } else {
         new_type = eRT_alpha;
     }
-    for (let = gRolling_letters, i = 0; i < NBR_ROLLING_LETTERS; i++, let++) {
+
+    for (i = 0; i < NBR_ROLLING_LETTERS; i++) {
+        let = &gRolling_letters[i];
         if (let->number_of_letters >= 0 && x_coord == let->x_coord && y_coord == let->y_coord) {
-            goto letter_found;
+            break;
         }
     }
-    return AddRollingLetter(pNew_char, x_coord, y_coord, new_type);
-
-letter_found:
+    if (i >= NBR_ROLLING_LETTERS) {
+        return AddRollingLetter(pNew_char, x_coord, y_coord, new_type);
+    }
     if (pNew_char != ROLLING_LETTER_LOOP_RANDOM) {
-        let->letters[0] = (tS8)pNew_char;
+        /* The (tU8) cast makes sure extended ASCII is positive. */
+        let->letters[0] = (tU8)pNew_char;
     }
     if (pNew_char == ' ') {
         let->letters[0] = ' ';
     }
-    let->current_offset = (float)(gCurrent_graf_data->save_slot_letter_height * let->number_of_letters);
     let->rolling_type = new_type;
+    let->current_offset = (float)(gCurrent_graf_data->save_slot_letter_height * let->number_of_letters);
     return i;
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x00482770
-__inline void C2_HOOK_FASTCALL SetJoystickArrays(int* pKeys, int pMark) {
+void C2_HOOK_FASTCALL SetJoystickArrays(int* pKeys, int pMark) {
     int i;
 
     for (i = 0; i < 44; i++) {
@@ -371,18 +406,135 @@ __inline void C2_HOOK_FASTCALL SetJoystickArrays(int* pKeys, int pMark) {
         gJoy2_y = new_joy2_y;
     }
 }
+#pragma auto_inline(on)
 // SetJoystickArrays
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x00481eb0
 void C2_HOOK_FASTCALL PollKeys(void) {
+    int i;
+    int mark;
 
     gKey_poll_counter += 1;
     PDSetKeyArray(gKey_array, gKey_poll_counter);
-    SetJoystickArrays(gKey_array, gKey_poll_counter);
+    mark = gKey_poll_counter;
+
+    for (i = 0; i < 44; i++) {
+        gKey_array[107 + i] = 0;
+    }
+    PDReadJoysticks();
+    for (i = 0; i < 8; i++) {
+        gJoy_array[i] = -1;
+    }
+    for (i = 0; i < 36; i++) {
+        gKey_array[107 + i] = 0;
+    }
+    if (gINT_006621e4 || gINT_006621e8) {
+        if (PDGetJoy1Button1()) {
+            gKey_array[107] = mark;
+        }
+        if (PDGetJoy1Button2()) {
+            gKey_array[108] = mark;
+        }
+        if (PDGetJoy1Button3()) {
+            gKey_array[109] = mark;
+        }
+        if (PDGetJoy1Button4()) {
+            gKey_array[110] = mark;
+        }
+    }
+    if (gINT_006621ec || gINT_006621f0) {
+        if (PDGetJoy2Button1()) {
+            gKey_array[139] = mark;
+        }
+        if (PDGetJoy2Button2()) {
+            gKey_array[140] = mark;
+        }
+        if (PDGetJoy2Button3()) {
+            gKey_array[141] = mark;
+        }
+        if (PDGetJoy2Button4()) {
+            gKey_array[142] = mark;
+        }
+    }
+    if (gINT_006621e4) {
+        int new_joy1_x = PDGetJoy1X();
+        if (new_joy1_x != -1) {
+            if (new_joy1_x < 0x8000) {
+                if (new_joy1_x < 0x4000 && gJoy1_x >= 0x4000) {
+                    gKey_array[143] = mark;
+                }
+                gJoy_array[0] = 2 * (0x8000 - new_joy1_x);
+            } else {
+                if (new_joy1_x > 0xc000 && gJoy1_x <= 0xc000) {
+                    gKey_array[144] = mark;
+                }
+                gJoy_array[1] = 2 * (new_joy1_x - 0x8000);
+            }
+        }
+        gJoy1_x = new_joy1_x;
+    }
+    if (gINT_006621e8) {
+        int new_joy1_y = PDGetJoy1Y();
+        if (new_joy1_y != -1) {
+            if (new_joy1_y < 0x8000) {
+                if (new_joy1_y < 0x4000 && gJoy1_y >= 0x4000) {
+                    gKey_array[145] = mark;
+                }
+                gJoy_array[2] = 2 * (0x8000 - new_joy1_y);
+            }
+            else {
+                if (new_joy1_y > 0xc000 && gJoy1_y <= 0xc000) {
+                    gKey_array[146] = mark;
+                }
+                gJoy_array[3] = 2 * (new_joy1_y - 0x8000);
+            }
+        }
+        gJoy1_y = new_joy1_y;
+    }
+    if (gINT_006621ec) {
+        int new_joy2_x = PDGetJoy2X();
+        if (new_joy2_x != -1) {
+            if (new_joy2_x < 0x8000) {
+                if (new_joy2_x < 0x4000 && gJoy2_x >= 0x4000) {
+                    gKey_array[147] = mark;
+                }
+                gJoy_array[4] = 2 * (0x8000 - new_joy2_x);
+            } else {
+                if (new_joy2_x > 0xc000 && gJoy2_x <= 0xc000) {
+                    gKey_array[148] = mark;
+                }
+                gJoy_array[5] = 2 * (new_joy2_x - 0x8000);
+            }
+        }
+        gJoy2_x = new_joy2_x;
+    }
+    if (gINT_006621f0) {
+        int new_joy2_y = PDGetJoy2Y();
+        if (new_joy2_y != -1) {
+            if (new_joy2_y < 0x8000) {
+                if (new_joy2_y < 0x4000 && gJoy2_y >= 0x4000) {
+                    gKey_array[149] = mark;
+                }
+                gJoy_array[6] = 2 * (0x8000 - new_joy2_y);
+            } else {
+                if (new_joy2_y > gJoystick_deadzone + 0x8000) {
+                    if (new_joy2_y > 0xc000 && gJoy2_y <= 0xc000) {
+                        gKey_array[150] = mark;
+                    }
+                    gJoy_array[7] = 2 * (new_joy2_y - 0x8000);
+                }
+            }
+        }
+        gJoy2_y = new_joy2_y;
+    }
+
     PDSetKeysFromJoystick(gKey_array);
     gLast_poll_keys = PDGetTotalTime();
 }
+#pragma auto_inline(on)
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x00482160
 void C2_HOOK_FASTCALL CyclePollKeys(void) {
     int i;
@@ -397,6 +549,7 @@ void C2_HOOK_FASTCALL CyclePollKeys(void) {
     }
     gKey_poll_counter = 0;
 }
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x004821a0
 void C2_HOOK_FASTCALL ResetPollKeys(void) {
@@ -434,8 +587,8 @@ int C2_HOOK_FASTCALL EitherMouseButtonDown(void) {
     int previous_x;
     int previous_y;
 
-    previous_x = gLast_mouse_x_coord;
-    previous_y = gLast_mouse_y_coord;
+    previous_x = gCurrent_mouse_position.x;
+    previous_y = gCurrent_mouse_position.y;
     GetMousePosition(&x_coord, &y_coord);
     if (previous_x == x_coord && previous_y == y_coord && PDGetMouseClickPosition(&click_x_coord, &click_y_coord) != 0
             && x_coord == click_x_coord && y_coord == click_y_coord) {
@@ -462,99 +615,435 @@ int C2_HOOK_FASTCALL PDKeyDown(int pKey_index) {
 
 // PDKeyDown3
 
+// FUNCTION: CARMA2_HW 0x004829f0
+int C2_HOOK_FASTCALL FUN_004829f0(int pKey_index) {
+
+    return gKey_array[pKey_index];
+}
+
 // FUNCTION: CARMA2_HW 0x00482a00
 int C2_HOOK_FASTCALL PDAnyKeyDown(void) {
     int i;
+    int mark;
+    tKey_down_result key_down_result;
 
-    CheckKeysForMouldiness();
-    for (i = 142; i >= 0; --i) {
-        if (gKey_array[i] && i != 4) {
-            if (!gEdge_trigger_mode) {
-                return i;
+    if (PDGetTotalTime() - gLast_poll_keys > 500) {
+            ResetPollKeys();
+            for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gKey_array); i++) {
+                if (gKey_array[i] > gKey_poll_counter) {
+                    gKey_array[i] = 0;
+                    if (i > 143) {
+                        gJoy_array[i - 143] = -1;
+                    }
+                }
             }
-            switch (EdgeTriggeryKey(i, 0)) {
-                case tKey_down_no:
-                case tKey_down_still:
-                    return -1;
-                case tKey_down_yes:
-                case tKey_down_repeat:
-                    return i;
+            gKey_poll_counter = 0;
+        gKey_poll_counter = 1;
+        PDSetKeyArray(gKey_array, gKey_poll_counter);
+        mark = gKey_poll_counter;
+    
+        for (i = 0; i < 44; i++) {
+            gKey_array[107 + i] = 0;
+        }
+        PDReadJoysticks();
+        for (i = 0; i < 8; i++) {
+            gJoy_array[i] = -1;
+        }
+        for (i = 0; i < 36; i++) {
+            gKey_array[107 + i] = 0;
+        }
+        if (gINT_006621e4 || gINT_006621e8) {
+            if (PDGetJoy1Button1()) {
+                gKey_array[107] = mark;
+            }
+            if (PDGetJoy1Button2()) {
+                gKey_array[108] = mark;
+            }
+            if (PDGetJoy1Button3()) {
+                gKey_array[109] = mark;
+            }
+            if (PDGetJoy1Button4()) {
+                gKey_array[110] = mark;
             }
         }
-    }
-    if (gEdge_trigger_mode) {
-        EdgeTriggeryKey(0, 1);
+        if (gINT_006621ec || gINT_006621f0) {
+            if (PDGetJoy2Button1()) {
+                gKey_array[139] = mark;
+            }
+            if (PDGetJoy2Button2()) {
+                gKey_array[140] = mark;
+            }
+            if (PDGetJoy2Button3()) {
+                gKey_array[141] = mark;
+            }
+            if (PDGetJoy2Button4()) {
+                gKey_array[142] = mark;
+            }
+        }
+        if (gINT_006621e4) {
+            int new_joy1_x = PDGetJoy1X();
+            if (new_joy1_x != -1) {
+                if (new_joy1_x < 0x8000) {
+                    if (new_joy1_x < 0x4000 && gJoy1_x >= 0x4000) {
+                        gKey_array[143] = mark;
+                    }
+                    gJoy_array[0] = 2 * (0x8000 - new_joy1_x);
+                } else {
+                    if (new_joy1_x > 0xc000 && gJoy1_x <= 0xc000) {
+                        gKey_array[144] = mark;
+                    }
+                    gJoy_array[1] = 2 * (new_joy1_x - 0x8000);
+                }
+            }
+            gJoy1_x = new_joy1_x;
+        }
+        if (gINT_006621e8) {
+            int new_joy1_y = PDGetJoy1Y();
+            if (new_joy1_y != -1) {
+                if (new_joy1_y < 0x8000) {
+                    if (new_joy1_y < 0x4000 && gJoy1_y >= 0x4000) {
+                        gKey_array[145] = mark;
+                    }
+                    gJoy_array[2] = 2 * (0x8000 - new_joy1_y);
+                }
+                else {
+                    if (new_joy1_y > 0xc000 && gJoy1_y <= 0xc000) {
+                        gKey_array[146] = mark;
+                    }
+                    gJoy_array[3] = 2 * (new_joy1_y - 0x8000);
+                }
+            }
+            gJoy1_y = new_joy1_y;
+        }
+        if (gINT_006621ec) {
+            int new_joy2_x = PDGetJoy2X();
+            if (new_joy2_x != -1) {
+                if (new_joy2_x < 0x8000) {
+                    if (new_joy2_x < 0x4000 && gJoy2_x >= 0x4000) {
+                        gKey_array[147] = mark;
+                    }
+                    gJoy_array[4] = 2 * (0x8000 - new_joy2_x);
+                } else {
+                    if (new_joy2_x > 0xc000 && gJoy2_x <= 0xc000) {
+                        gKey_array[148] = mark;
+                    }
+                    gJoy_array[5] = 2 * (new_joy2_x - 0x8000);
+                }
+            }
+            gJoy2_x = new_joy2_x;
+        }
+        if (gINT_006621f0) {
+            int new_joy2_y = PDGetJoy2Y();
+            if (new_joy2_y != -1) {
+                if (new_joy2_y < 0x8000) {
+                    if (new_joy2_y < 0x4000 && gJoy2_y >= 0x4000) {
+                        gKey_array[149] = mark;
+                    }
+                    gJoy_array[6] = 2 * (0x8000 - new_joy2_y);
+                } else {
+                    if (new_joy2_y > gJoystick_deadzone + 0x8000) {
+                        if (new_joy2_y > 0xc000 && gJoy2_y <= 0xc000) {
+                            gKey_array[150] = mark;
+                        }
+                        gJoy_array[7] = 2 * (new_joy2_y - 0x8000);
+                    }
+                }
+            }
+            gJoy2_y = new_joy2_y;
+        }
+    
+        PDSetKeysFromJoystick(gKey_array);
+        gLast_poll_keys = PDGetTotalTime();
+    
+        }
+    for (i = 0x8e; i >= 0; i--) {
+        if (gKey_array[i] != 0) {
+            if (i == 4 || !gEdge_trigger_mode) {
+                return i;
+            }
+            key_down_result = EdgeTriggeryKey(i, 0);
+            switch (key_down_result) {
+            case tKey_down_no:
+            case tKey_down_still:
+                break;
+            case tKey_down_yes:
+            case tKey_down_repeat:
+                return i;
+            }
+        }
     }
     return -1;
 }
 
 // FUNCTION: CARMA2_HW 0x00482d70
 int C2_HOOK_FASTCALL AnyKeyDown(void) {
-    int the_key;
+    int i;
+    int key;
+    int* keys;
+    int x;
+    int y;
+    int click_x;
+    int click_y;
+    int left_button;
+    int right_button;
+    int previous_x;
+    int previous_y;
 
-    the_key = PDAnyKeyDown();
-    return (the_key != -1 && the_key != 4) || EitherMouseButtonDown();
+    if (500 < (tU32)(PDGetTotalTime() - gLast_poll_keys)) {
+        keys = gKey_array;
+        for (i = 0x97; i != 0; i--) {
+            *keys++ = 0;
+        }
+        keys = gJoy_array;
+        for (i = 8; i != 0; i--) {
+            *keys++ = -1;
+        }
+        for (i = 0; i < 0x25c; i += 4) {
+            if (*(int*)((char*)gKey_array + i) > gKey_poll_counter) {
+                *(int*)((char*)gKey_array + i) = 0;
+                if (i > 0x23c) {
+                    *(int*)((char*)gJoy_array + i - 0x240) = -1;
+                }
+            }
+        }
+        gKey_poll_counter = 1;
+        PDSetKeyArray(gKey_array, gKey_poll_counter);
+        SetJoystickArrays(gKey_array, gKey_poll_counter);
+        PDSetKeysFromJoystick(gKey_array);
+        gLast_poll_keys = PDGetTotalTime();
+    }
+    key = 0x8e;
+    keys = &gKey_array[key];
+    do {
+        if (*keys != 0 && keys != &gKey_array[4]) {
+            if (!gEdge_trigger_mode) {
+                goto key_found;
+            }
+            i = EdgeTriggeryKey(key, 0);
+            if (i == 1 || i == 3) {
+                goto key_found;
+            }
+        }
+        keys--;
+        key--;
+    } while ((tS32)keys >= (tS32)gKey_array);
+    if (gEdge_trigger_mode) {
+        EdgeTriggeryKey(0, 1);
+    }
+    key = -1;
+key_found:
+    if (key == -1 || key == 4) {
+        previous_x = gCurrent_mouse_position.x;
+        previous_y = gCurrent_mouse_position.y;
+        GetMousePosition(&x, &y);
+        if (previous_x == x && previous_y == y) {
+            if (PDGetMouseClickPosition(&click_x, &click_y) != 0 && x == click_x && y == click_y) {
+                return 1;
+            }
+        }
+        PDMouseButtons(&left_button, &right_button);
+        if (left_button == 0 && right_button == 0) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
+// GLOBAL: CARMA2_HW 0x0068c1d4
+tU32 gKev_sum = 0;
+// GLOBAL: CARMA2_HW 0x0068c1d8
+tU32 gKev_code = 0;
+// GLOBAL: CARMA2_HW 0x0068c1dc
+tU32 gKev_code2 = 0;
+// GLOBAL: CARMA2_HW 0x00657210
+int gKev_last_key = -1;
+// GLOBAL: CARMA2_HW 0x00657214
+int gKev_last_single_key = -1;
+// GLOBAL: CARMA2_HW 0x0068be8c
+tU32 gKev_last_time = 0;
+// GLOBAL: CARMA2_HW 0x0068c1e0
+tU32 gKev_return_val[2];
+
+// C2PORT-NONMATCHING: best 53.66% | difftest PASS 2000 trials (spec difftest/specs/00482f10_KevKeyService.json) | reason codegen of the checksum block (register/stack order), logic checked
 // FUNCTION: CARMA2_HW 0x00482f10
 tU32* C2_HOOK_FASTCALL KevKeyService(void) {
-    // GLOBAL: CARMA2_HW 0x0068c1d4
-    static tU32 sum;
-    // GLOBAL: CARMA2_HW 0x0068c1d8
-    static tU32 code;
-    // GLOBAL: CARMA2_HW 0x0068c1dc
-    static tU32 code2;
-    // GLOBAL: CARMA2_HW 0x00657210
-    static int last_key = -1;
-    // GLOBAL: CARMA2_HW 0x00657214
-    static int last_single_key = -1;
-    // GLOBAL: CARMA2_HW 0x0068be8c
-    static tU32 last_time;
-    // GLOBAL: CARMA2_HW 0x0068c1e0
-    static tU32 return_val[2];
     tU32 keys;
 
+    gKev_return_val[0] = 0;
+    gKev_return_val[1] = 0;
     keys = gKeys_pressed;
-    return_val[0] = 0;
-    return_val[1] = 0;
-    if (keys < 0x6b) {
-        last_single_key = (int)keys;
+
+    if (keys < 0x6B) {
+        gKev_last_single_key = gKeys_pressed;
     } else {
-        if (keys > 0x6b00
-            || ((keys & 0xff) != (tU32)last_single_key && (keys >> 8) != (tU32)last_single_key)) {
-            sum = 0;
-            code = 0;
-            return return_val;
+        if (keys > 0x6b00) {
+            gKev_sum = 0;
+            gKev_code = 0;
+            return gKev_return_val;
         }
-        // Keep the newly pressed member of a two-key chord.
-        if ((keys & 0xff) == (tU32)last_single_key) {
-            keys >>= 8;
+        if ((keys & 0xff) == gKev_last_single_key) {
+            keys = keys >> 8;
+        } else if (keys >> 8 == gKev_last_single_key) {
+            keys = keys & 0xff;
         } else {
-            keys &= 0xff;
+            gKev_sum = 0;
+            gKev_code = 0;
+            return gKev_return_val;
         }
     }
-    if (keys != 0 && keys != (tU32)last_key) {
-        sum += keys;
-        code += keys << 11;
-        code = (code >> 17) + (code << 4);
-        code2 = (code2 >> 29) + keys * keys + (code2 << 3);
-        last_time = PDGetTotalTime();
-    } else if (PDGetTotalTime() > last_time + 1000u) {
-        return_val[0] = (code >> 11) + (sum << 21);
-        return_val[1] = code2;
-        code = 0;
-        code2 = 0;
-        sum = 0;
+
+    if (keys != 0 && keys != gKev_last_key) {
+        gKev_sum += keys;
+        gKev_code += keys << 11;
+        gKev_code = (gKev_code >> 17) + (gKev_code << 4);
+        gKev_code2 = (gKev_code2 >> 29) + keys * keys + (gKev_code2 << 3);
+        gKev_last_time = PDGetTotalTime();
+    } else if ((tU32)PDGetTotalTime() > gKev_last_time + 1000) {
+        gKev_return_val[0] = (gKev_code >> 11) + (gKev_sum << 21);
+        gKev_return_val[1] = gKev_code2;
+        // printf("final value: code=%lx, code2=%lx\n", return_val[0], return_val[1]);
+        gKev_code = 0;
+        gKev_code2 = 0;
+        gKev_sum = 0;
     }
-    last_key = (int)keys;
-    return return_val;
+    gKev_last_key = keys;
+    return gKev_return_val;
 }
 
 // FUNCTION: CARMA2_HW 0x00483040
 int C2_HOOK_FASTCALL KeyIsDown(int pKey_index) {
     int i;
+    int mark;
 
-    CheckKeysForMouldiness();
+    if (PDGetTotalTime() - gLast_poll_keys > 500) {
+        ResetPollKeys();
+        for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gKey_array); i++) {
+            if (gKey_array[i] > gKey_poll_counter) {
+                gKey_array[i] = 0;
+                if (i > 143) {
+                    gJoy_array[i - 143] = -1;
+                }
+            }
+        }
+        gKey_poll_counter = 0;
+    gKey_poll_counter = 1;
+    PDSetKeyArray(gKey_array, gKey_poll_counter);
+    mark = gKey_poll_counter;
+
+    for (i = 0; i < 44; i++) {
+        gKey_array[107 + i] = 0;
+    }
+    PDReadJoysticks();
+    for (i = 0; i < 8; i++) {
+        gJoy_array[i] = -1;
+    }
+    for (i = 0; i < 36; i++) {
+        gKey_array[107 + i] = 0;
+    }
+    if (gINT_006621e4 || gINT_006621e8) {
+        if (PDGetJoy1Button1()) {
+            gKey_array[107] = mark;
+        }
+        if (PDGetJoy1Button2()) {
+            gKey_array[108] = mark;
+        }
+        if (PDGetJoy1Button3()) {
+            gKey_array[109] = mark;
+        }
+        if (PDGetJoy1Button4()) {
+            gKey_array[110] = mark;
+        }
+    }
+    if (gINT_006621ec || gINT_006621f0) {
+        if (PDGetJoy2Button1()) {
+            gKey_array[139] = mark;
+        }
+        if (PDGetJoy2Button2()) {
+            gKey_array[140] = mark;
+        }
+        if (PDGetJoy2Button3()) {
+            gKey_array[141] = mark;
+        }
+        if (PDGetJoy2Button4()) {
+            gKey_array[142] = mark;
+        }
+    }
+    if (gINT_006621e4) {
+        int new_joy1_x = PDGetJoy1X();
+        if (new_joy1_x != -1) {
+            if (new_joy1_x < 0x8000) {
+                if (new_joy1_x < 0x4000 && gJoy1_x >= 0x4000) {
+                    gKey_array[143] = mark;
+                }
+                gJoy_array[0] = 2 * (0x8000 - new_joy1_x);
+            } else {
+                if (new_joy1_x > 0xc000 && gJoy1_x <= 0xc000) {
+                    gKey_array[144] = mark;
+                }
+                gJoy_array[1] = 2 * (new_joy1_x - 0x8000);
+            }
+        }
+        gJoy1_x = new_joy1_x;
+    }
+    if (gINT_006621e8) {
+        int new_joy1_y = PDGetJoy1Y();
+        if (new_joy1_y != -1) {
+            if (new_joy1_y < 0x8000) {
+                if (new_joy1_y < 0x4000 && gJoy1_y >= 0x4000) {
+                    gKey_array[145] = mark;
+                }
+                gJoy_array[2] = 2 * (0x8000 - new_joy1_y);
+            }
+            else {
+                if (new_joy1_y > 0xc000 && gJoy1_y <= 0xc000) {
+                    gKey_array[146] = mark;
+                }
+                gJoy_array[3] = 2 * (new_joy1_y - 0x8000);
+            }
+        }
+        gJoy1_y = new_joy1_y;
+    }
+    if (gINT_006621ec) {
+        int new_joy2_x = PDGetJoy2X();
+        if (new_joy2_x != -1) {
+            if (new_joy2_x < 0x8000) {
+                if (new_joy2_x < 0x4000 && gJoy2_x >= 0x4000) {
+                    gKey_array[147] = mark;
+                }
+                gJoy_array[4] = 2 * (0x8000 - new_joy2_x);
+            } else {
+                if (new_joy2_x > 0xc000 && gJoy2_x <= 0xc000) {
+                    gKey_array[148] = mark;
+                }
+                gJoy_array[5] = 2 * (new_joy2_x - 0x8000);
+            }
+        }
+        gJoy2_x = new_joy2_x;
+    }
+    if (gINT_006621f0) {
+        int new_joy2_y = PDGetJoy2Y();
+        if (new_joy2_y != -1) {
+            if (new_joy2_y < 0x8000) {
+                if (new_joy2_y < 0x4000 && gJoy2_y >= 0x4000) {
+                    gKey_array[149] = mark;
+                }
+                gJoy_array[6] = 2 * (0x8000 - new_joy2_y);
+            } else {
+                if (new_joy2_y > gJoystick_deadzone + 0x8000) {
+                    if (new_joy2_y > 0xc000 && gJoy2_y <= 0xc000) {
+                        gKey_array[150] = mark;
+                    }
+                    gJoy_array[7] = 2 * (new_joy2_y - 0x8000);
+                }
+            }
+        }
+        gJoy2_y = new_joy2_y;
+    }
+
+    PDSetKeysFromJoystick(gKey_array);
+    gLast_poll_keys = PDGetTotalTime();
+
+    }
     if (pKey_index == -2) {
         return 1;
     } else if (pKey_index == -1) {
@@ -571,15 +1060,283 @@ int C2_HOOK_FASTCALL KeyIsDown(int pKey_index) {
 
 // KeyIsDownNoMouldiness
 
+// C2PORT-NONMATCHING: best 70.47% | difftest PASS 2000 trials (spec difftest/specs/004833b0_WaitForNoKeys.json) | reason input polling and mouse branch layout differ under VC5
 // FUNCTION: CARMA2_HW 0x004833b0
 void C2_HOOK_FASTCALL WaitForNoKeys(void) {
+    int key;
+    int now;
+    int i;
+    int result;
+    int mouse[12];
+    int mouse_x;
+    int mouse_y;
+    int active;
+    int minus_one;
+    int zero;
 
-    do {
+    minus_one = -1;
+    zero = 0;
+    for (;;) {
         CheckQuit();
-    } while (AnyKeyDown() || EitherMouseButtonDown());
-    CheckQuit();
+        now = PDGetTotalTime();
+        if (500 < (tU32)(now - gLast_poll_keys)) {
+            for (i = 0; i < 0x97; i++) {
+                gKey_array[i] = zero;
+            }
+            for (i = 0; i < 8; i++) {
+                gJoy_array[i] = minus_one;
+            }
+            for (i = 0; i < 0x25c; i += 4) {
+                if (*(int*)((char*)gKey_array + i) > gKey_poll_counter) {
+                    *(int*)((char*)gKey_array + i) = zero;
+                    if (i > 0x23c) {
+                        gJoy_array[i / 4 - 143] = minus_one;
+                    }
+                }
+            }
+            gKey_poll_counter = 1;
+            PDSetKeyArray(gKey_array, gKey_poll_counter);
+            SetJoystickArrays(gKey_array, gKey_poll_counter);
+            PDSetKeysFromJoystick(gKey_array);
+            gLast_poll_keys = PDGetTotalTime();
+        }
+
+        key = 0x8e;
+        {
+            int *p_key = &gKey_array[0x8e];
+            do {
+                if (*p_key != 0 && p_key != &gKey_array[4]) {
+                    if (gEdge_trigger_mode == 0) {
+                        goto key_found;
+                    }
+                    result = EdgeTriggeryKey(key, 0);
+                    switch (result) {
+                    case 0:
+                    case 2:
+                        goto key_scan_next;
+                    case 1:
+                    case 3:
+                        goto key_found;
+                    }
+                }
+key_scan_next:
+                p_key--;
+                key--;
+            } while ((tS32)p_key >= (tS32)gKey_array);
+            if (gEdge_trigger_mode != 0) {
+                EdgeTriggeryKey(0, 1);
+            }
+            key = minus_one;
+key_found:
+            ;
+        }
+
+        if ((key == -1 || key == 4) &&
+                ((mouse_x = gCurrent_mouse_position.x,
+                  mouse_y = gCurrent_mouse_position.y,
+                  GetMousePosition(&mouse[0], &mouse[1]),
+                  mouse_x != mouse[0] ||
+                          (mouse_y != mouse[1] ||
+                                  ((result = PDGetMouseClickPosition(&mouse[4], &mouse[5])) == 0 ||
+                                          (mouse[0] != mouse[4] || mouse[1] != mouse[5]))))) &&
+                (PDMouseButtons(&mouse[6], &mouse[7]), mouse[6] == 0 && mouse[7] == 0)) {
+            active = 0;
+        } else {
+            active = 1;
+        }
+        if (!active) {
+            mouse_x = gCurrent_mouse_position.x;
+            mouse_y = gCurrent_mouse_position.y;
+            GetMousePosition(&mouse[2], &mouse[3]);
+            if (mouse_x == mouse[2] && mouse_y == mouse[3] &&
+                    (result = PDGetMouseClickPosition(&mouse[8], &mouse[9])) != 0 &&
+                    mouse[2] == mouse[8] && mouse[3] == mouse[9]) {
+                result = 2;
+            } else {
+                PDMouseButtons(&mouse[10], &mouse[11]);
+                result = mouse[10] == 0 && mouse[11] == 0 ? 0 : 1;
+            }
+            if (result == 0) {
+                CheckQuit();
+                return;
+            }
+        }
+    }
 }
 
+// FUNCTION: CARMA2_HW 0x004835d0
+void C2_HOOK_FASTCALL FUN_004835d0(void) {
+    int bVar1;
+    int iVar2;
+    int iVar3;
+    int iVar4;
+    int uVar5;
+    int* piVar6;
+    int* puVar7;
+    /* Shared stack slots in binary order, from local_30 through local_4. */
+    int localVars[12];
+
+    for (;;) {
+        CheckQuit();
+        iVar4 = PDGetTotalTime();
+        if (500 < (tU32)(iVar4 - gLast_poll_keys)) {
+            puVar7 = gKey_array;
+            for (iVar4 = 0x97; iVar4 != 0; iVar4--) {
+                *puVar7++ = 0;
+            }
+            puVar7 = gJoy_array;
+            for (iVar4 = 8; iVar4 != 0; iVar4--) {
+                *puVar7++ = -1;
+            }
+            CyclePollKeys();
+            gKey_poll_counter++;
+            PDSetKeyArray(gKey_array, gKey_poll_counter);
+            SetJoystickArrays(gKey_array, gKey_poll_counter);
+            PDSetKeysFromJoystick(gKey_array);
+            gLast_poll_keys = PDGetTotalTime();
+        }
+        iVar4 = 0x8e;
+        piVar6 = &gKey_array[0x8e];
+        do {
+            if (*piVar6 != 0 && piVar6 != &gKey_array[4]) {
+                if (gEdge_trigger_mode == 0) {
+                    goto key_found_first;
+                }
+                uVar5 = EdgeTriggeryKey(iVar4, 0);
+                switch (uVar5) {
+                case 0:
+                case 2:
+                    goto key_scan_next_first;
+                case 1:
+                case 3:
+                    goto key_found_first;
+                }
+            }
+key_scan_next_first:
+            piVar6--;
+            iVar4--;
+        } while ((tS32)piVar6 >= (tS32)gKey_array);
+        if (gEdge_trigger_mode != 0) {
+            EdgeTriggeryKey(0, 1);
+        }
+        iVar4 = -1;
+key_found_first:
+        if (iVar4 != -1 && iVar4 != 4) {
+            break;
+        }
+        iVar2 = gCurrent_mouse_position.x;
+        iVar3 = gCurrent_mouse_position.y;
+        GetMousePosition(&localVars[0], &localVars[1]);
+        if (iVar2 == localVars[0] && iVar3 == localVars[1]) {
+            iVar4 = PDGetMouseClickPosition(&localVars[4], &localVars[5]);
+            if (iVar4 != 0 && localVars[0] == localVars[4] && localVars[1] == localVars[5]) {
+                break;
+            }
+        }
+        PDMouseButtons(&localVars[6], &localVars[7]);
+        if (localVars[6] != 0 || localVars[7] != 0) {
+            break;
+        }
+        iVar2 = gCurrent_mouse_position.x;
+        iVar3 = gCurrent_mouse_position.y;
+        GetMousePosition(&localVars[2], &localVars[3]);
+        if (iVar2 == localVars[2] && iVar3 == localVars[3]) {
+            iVar4 = PDGetMouseClickPosition(&localVars[8], &localVars[9]);
+            if (iVar4 != 0 && localVars[2] == localVars[8] && localVars[3] == localVars[9]) {
+                break;
+            }
+        }
+        PDMouseButtons(&localVars[10], &localVars[11]);
+        if (localVars[10] != 0 || localVars[11] != 0) {
+            break;
+        }
+    }
+    CheckQuit();
+    do {
+        CheckQuit();
+        iVar4 = PDGetTotalTime();
+        if (500 < (tU32)(iVar4 - gLast_poll_keys)) {
+            puVar7 = gKey_array;
+            for (iVar4 = 0x97; iVar4 != 0; iVar4--) {
+                *puVar7++ = 0;
+            }
+            puVar7 = gJoy_array;
+            for (iVar4 = 8; iVar4 != 0; iVar4--) {
+                *puVar7++ = -1;
+            }
+            CyclePollKeys();
+            PollKeys();
+        }
+        iVar4 = 0x8e;
+        piVar6 = &gKey_array[0x8e];
+        do {
+            if (*piVar6 != 0 && piVar6 != &gKey_array[4]) {
+                if (gEdge_trigger_mode == 0) {
+                    goto key_found_second;
+                }
+                uVar5 = EdgeTriggeryKey(iVar4, 0);
+                switch (uVar5) {
+                case 0:
+                case 2:
+                    goto key_scan_next_second;
+                case 1:
+                case 3:
+                    goto key_found_second;
+                }
+            }
+key_scan_next_second:
+            piVar6--;
+            iVar4--;
+        } while ((tS32)piVar6 >= (tS32)gKey_array);
+        if (gEdge_trigger_mode != 0) {
+            EdgeTriggeryKey(0, 1);
+        }
+        iVar4 = -1;
+key_found_second:
+        if (iVar4 == -1 || iVar4 == 4) {
+            iVar2 = gCurrent_mouse_position.x;
+            iVar3 = gCurrent_mouse_position.y;
+            GetMousePosition(&localVars[3], &localVars[2]);
+            if (iVar2 == localVars[3] && iVar3 == localVars[2]) {
+                iVar4 = PDGetMouseClickPosition(&localVars[11], &localVars[10]);
+                if (iVar4 != 0 && localVars[3] == localVars[11] && localVars[2] == localVars[10]) {
+                    goto mouse_activity_found;
+                }
+            }
+            PDMouseButtons(&localVars[9], &localVars[8]);
+            if (localVars[9] != 0 || localVars[8] != 0) {
+                goto mouse_activity_found;
+            }
+            bVar1 = 0;
+        } else {
+mouse_activity_found:
+            bVar1 = 1;
+        }
+        if (!bVar1) {
+            iVar2 = gCurrent_mouse_position.x;
+            iVar3 = gCurrent_mouse_position.y;
+            GetMousePosition(&localVars[1], &localVars[0]);
+            if (iVar2 == localVars[1] && iVar3 == localVars[0] &&
+                    (iVar4 = PDGetMouseClickPosition(&localVars[7], &localVars[6]), iVar4 != 0 &&
+                     localVars[1] == localVars[7] && localVars[0] == localVars[6])) {
+                iVar4 = 2;
+            } else {
+                PDMouseButtons(&localVars[5], &localVars[4]);
+                if (localVars[5] == 0 && localVars[4] == 0) {
+                    iVar4 = 0;
+                } else {
+                    iVar4 = 1;
+                }
+            }
+            if (iVar4 == 0) {
+                CheckQuit();
+                return;
+            }
+        }
+    } while (1);
+}
+
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x00483c10
 void C2_HOOK_FASTCALL GetMousePosition(int *pX, int *pY) {
 
@@ -591,12 +1348,16 @@ void C2_HOOK_FASTCALL GetMousePosition(int *pX, int *pY) {
     }
     if (*pY < 0) {
         *pY = 0;
+        gCurrent_mouse_position.x = *pX;
+        gCurrent_mouse_position.y = *pY;
+        return;
     } else if (*pY > gGraf_specs[gGraf_spec_index].total_height) {
         *pY = gGraf_specs[gGraf_spec_index].total_height;
     }
     gCurrent_mouse_position.x = *pX;
     gCurrent_mouse_position.y = *pY;
 }
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x00483c90
 void C2_HOOK_FASTCALL InitRollingLetters(void) {
@@ -619,31 +1380,33 @@ void C2_HOOK_FASTCALL EndRollingLetters(void) {
 
 // ChangeCharTo
 
-// FUNCTION: CARMA2_HW 0x00483fd0
-void C2_HOOK_FASTCALL BlankSlot(int pIndex, int pName_length, int pVisible_length) {
-    int i;
+// FUNCTION: CARMA2_HW 0x004840d0
+void C2_HOOK_FASTCALL FUN_004840d0(int pSlot_index) {
+    unsigned i;
 
-    gVisible_length = pVisible_length;
-    for (i = 0; i < pName_length; i++) {
-        ChangeCharTo(pIndex, i, ' ');
+    i = 0;
+    if (0 < gThe_length) {
+        do {
+            ChangeCharTo(pSlot_index, i, i < strlen(gThe_text) ? gThe_text[i] : ' ');
+            i += 1;
+        } while ((int)i < gThe_length);
     }
 }
 
 // FUNCTION: CARMA2_HW 0x00484120
 void C2_HOOK_FASTCALL RevertTyping(int pSlot_index, char* pRevert_str) {
-    int i;
+    unsigned i;
 
-    for (i = 0; i < gThe_length; i++) {
-        ChangeCharTo(pSlot_index, i, (char)((size_t)i < strlen(pRevert_str) ? pRevert_str[i] : ' '));
+    for (i = 0; (int)i < gThe_length; i++) {
+        ChangeCharTo(pSlot_index, i, i >= strlen(pRevert_str) ? ' ' : pRevert_str[i]);
     }
 }
 
 // FUNCTION: CARMA2_HW 0x00484170
 void C2_HOOK_FASTCALL StartTyping(int pSlot_index, char* pText, int pVisible_length) {
-
     gThe_length = pVisible_length;
-    strcpy(gCurrent_typing, pText);
-    gCurrent_position = (int)strlen(gCurrent_typing);
+    strcpy(gThe_text, pText);
+    gCurrent_position = strlen(gThe_text);
     gVisible_length = pVisible_length;
     gCurrent_cursor = ChangeCharTo(pSlot_index, gCurrent_position, ROLLING_LETTER_LOOP_RANDOM);
 }

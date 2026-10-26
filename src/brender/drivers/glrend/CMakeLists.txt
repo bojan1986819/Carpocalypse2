@@ -1,4 +1,4 @@
-﻿project(glrend C)
+project(glrend C)
 
 # Embed shared shaders (drivers/commonrend)
 set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../commonrend")
@@ -53,6 +53,8 @@ set(RENDERER_FILES
 
         gstored.h
         v1model.c
+        transparency.c
+        transparency.h
 
         sbuffer.h
         sbuffer.c
@@ -74,6 +76,10 @@ set(GLREND_FILES
         glassert.h
 
         glad.c
+
+        compat/compat.c
+        backbuf.c
+        display_layout.c
         )
 
 set(INC_FILES
@@ -117,7 +123,9 @@ add_library(glrend
         )
 
 brender_common_target_setup(glrend BREND_DRIVER_GL GL gl "glrend")
-target_link_libraries(glrend PUBLIC glrend-headers)
+target_link_libraries(glrend PUBLIC glrend-headers PRIVATE brender-static c2_hooks)
+target_compile_definitions(glrend PRIVATE BASED_FLOAT=1 BASED_FIXED=0)
+target_include_directories(glrend PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/compat" "${CMAKE_CURRENT_SOURCE_DIR}/../ddi" "${BRender_SOURCE_DIR}/include/brender" "${BRender_SOURCE_DIR}")
 
 set_target_properties(glrend PROPERTIES
         C_STANDARD 11

@@ -1,4 +1,7 @@
 #include "interface-options.h"
+#ifdef CARPOCALYPSE2_PLATFORM_SDL3
+extern void PDAddDisplayOptions(tFrontend_spec* options);
+#endif
 
 #include "interface.h"
 #include "interface-graphics.h"
@@ -14,8 +17,6 @@
 #include "globvars.h"
 #include "globvrpb.h"
 #include "joystick.h"
-
-#include "platform.h"
 extern int C2_HOOK_FASTCALL Generic_MenuHandler(tFrontend_spec* pFrontend);
 extern int C2_HOOK_FASTCALL Options_Infunc(tFrontend_spec* pFrontend);
 extern int C2_HOOK_FASTCALL Options_Outfunc(tFrontend_spec* pFrontend);
@@ -26,6 +27,9 @@ extern int C2_HOOK_FASTCALL Options_MusicOff(tFrontend_spec* pFrontend);
 extern int C2_HOOK_FASTCALL Options_Ok(tFrontend_spec* pFrontend);
 extern void C2_HOOK_FASTCALL InitJoysticks(void);
 extern tFrontend_spec gFrontend_CONTROLS;
+#ifdef __vita__
+extern int C2_HOOK_FASTCALL C2VitaShowControls(tFrontend_spec* pFrontend);
+#endif
 extern tFrontend_spec gFrontend_LOAD_GAME;
 extern tFrontend_slider* gCurrent_frontend_scrollbars;
 extern int gFrontend_scrollbars_updated;
@@ -50,7 +54,11 @@ tFrontend_spec gFrontend_OPTIONS = {
     {
         { 0x14,  Options_AbortRace,  NULL,                       0, 17, 18, 0, 0, 0, 0, 1, 1, },
         { 0x15,  Options_AbortGame,  NULL,                       0, 17, 18, 0, 0, 0, 0, 1, 1, },
+#ifdef __vita__
+        { 0x16,  C2VitaShowControls, NULL,                       0, 17, 18, 0, 0, 0, 0, 1, 1, },
+#else
         { 0x16,  temp,               &gFrontend_CONTROLS,   0, 17, 18, 0, 0, 0, 0, 1, 1, },
+#endif
         { 0xed,  temp,               &gFrontend_GRAPHICS,   0, 17, 18, 0, 0, 0, 0, 1, 1, },
         { 0x18,  temp,               &gFrontend_LOAD_GAME,  0, 17, 18, 0, 0, 0, 0, 1, 1, },
         { 0x19,  temp,               NULL,                       0, 0,  0,  0, 0, 0, 0, 0, 1, },
@@ -104,6 +112,9 @@ int C2_HOOK_FASTCALL Options_Infunc(tFrontend_spec* pFrontend) {
             pFrontend->previous->isPreviousSomeOtherMenu = 1;
         }
     }
+#ifdef CARPOCALYPSE2_PLATFORM_SDL3
+    PDAddDisplayOptions(pFrontend);
+#endif
     gFrontend_scrollbars_updated = 0;
     EdgeTriggerModeOff();
     WaitForNoKeys();
@@ -205,7 +216,7 @@ int C2_HOOK_FASTCALL Options_Ok(tFrontend_spec* pFrontend) {
 // FUNCTION: CARMA2_HW 0x004747d0
 int C2_HOOK_FASTCALL Options_Quit(tFrontend_spec* pFrontend) {
 
-    PDInitJoysticks();
+    InitJoysticks();
     QuitGame();
     return 2;
 }

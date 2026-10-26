@@ -252,9 +252,13 @@ void main() {
         if(!disable_colour_key && textureColour.rgb == vec3(0)) {
             discard;
         }
+        // port: alpha textures (ARGB4444): fully transparent texels write nothing
+        if(textureColour.a < 0.004) {
+            discard;
+        }
     }
 
-    if (lighting == 1u) {
+    if (lighting == 1u || prelit == 1u) {
         fragColour.rgb = colour.rgb * textureColour.rgb;
     } else {
         fragColour.rgb = textureColour.rgb;
@@ -278,12 +282,10 @@ void main() {
 #endif
 
     // Apply alpha transparency
-    fragColour.a = alpha;
+    fragColour.a = alpha * (disable_texture ? 1.0 : textureColour.a); /* port: texture alpha */
 
     // Apply lighting
-    if (lighting == 1u && prelit == 0u) {
-        fragColour.rgb *= vec3(ka, ka, ka);
-    }
+    /* port: ka is applied as the ambient term in the vertex shader */
 
     doDistanceFog();
 }

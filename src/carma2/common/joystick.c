@@ -11,6 +11,12 @@
 #include "carpocalypse2_macros.h"
 #include "carpocalypse2_types.h"
 
+#ifdef CARPOCALYPSE2_MATCHING
+#include "win32/win32_dinput.h"
+#endif
+
+#include <math.h>
+
 #include "c2_string.h"
 #include "joystick.h"
 
@@ -23,19 +29,19 @@
 #include "carpocalypse2_macros.h"
 #include "carpocalypse2_types.h"
 #include "c2_string.h"
-#include "c2_stdio.h"
 #include <string.h>
-#include <stdio.h>
 extern void C2_HOOK_FASTCALL ChangeHeadupFont(int pHeadup_index, int pFont);
 extern void C2_HOOK_FASTCALL ChangeHeadupText(int pHeadup_index, char* pText);
 extern void C2_HOOK_FASTCALL FUN_0045a0c0(void);
 extern const char* C2_HOOK_FASTCALL GetCurrentJoystickName(void);
-extern int C2_HOOK_FASTCALL PDIsJoystickAvailable(int pIndex);
 // GLOBAL: CARMA2_HW 0x00595f84
-int gINT_00595f84 = 7500;
-
+int gUNK_00595f84 = 7500;
+int C2_HOOK_FASTCALL InsertHeadupText(tHeadup_text_buffer* pText_buffer, tHeadup_text* pText, int pSortAlphabetically);
 // GLOBAL: CARMA2_HW 0x00595f88
 int gJoystick_index = -1;
+
+// GLOBAL: CARMA2_HW 0x00596308
+int gINT_00596308 = -1;
 
 // GLOBAL: CARMA2_HW 0x00595f8c
 int gUNK_00595f8c = -1;
@@ -49,51 +55,28 @@ float gJoystick_x_steering = 1.f;
 // GLOBAL: CARMA2_HW 0x00595f94
 float gJoystick_y_throttle = 1.f;
 
-// GLOBAL: CARMA2_HW 0x00595f9c
-int gUNK_00595f9c = 1;
-
-// GLOBAL: CARMA2_HW 0x00686184
-int gJoystick_preferences_backup_valid;
-
-// GLOBAL: CARMA2_HW 0x0079d8c0
-tButtonJoystickInfo gJoystick_preferences_backup;
-
-typedef struct tJoystick_preference_node {
-    tButtonJoystickInfo* info;
-    struct tJoystick_preference_node* next;
-} tJoystick_preference_node;
 
 
 // GLOBAL: CARMA2_HW 0x00655e5c
 float Force_feedback_lower_limit = 1.5f;
+// GLOBAL: CARMA2_HW 0x00655e58
+float gForce_feedback_upper_limit = 2.7f;
+// GLOBAL: CARMA2_HW 0x00589f80
+const double gJoystick_collision_force_scale = 10000.0;
+// GLOBAL: CARMA2_HW 0x00589f88
+const float gJoystick_collision_force_min_length = 0.0000002384185791015625f;
+// GLOBAL: CARMA2_HW 0x00589f90
+const double gJoystick_collision_force_one = 1.0;
+// GLOBAL: CARMA2_HW 0x00589f98
+const float gJoystick_collision_force_one_f = 1.0f;
+// GLOBAL: CARMA2_HW 0x00589f9c
+const float gJoystick_collision_force_zero_f = 0.0f;
+// GLOBAL: CARMA2_HW 0x00589fa0
+const double gJoystick_collision_force_radians_to_degrees = 57.29577951308;
 // GLOBAL: CARMA2_HW 0x0079d8a0
 tHeadup_text_buffer gJoystick_headup_buffer_0079d8a0;
-
-// GLOBAL: CARMA2_HW 0x00596250
-tJoystick_headup_text gJoystick_headup_texts[21] = {
-    { "Recover", 60 },
-    { "Reapir", 45 },
-    { "Hand Brake", 54 },
-    { "Use Powerup", 61 },
-    { "Next Powerup", 64 },
-    { "Prev Powerup", 63 },
-    { "Wheel Spin", 56 },
-    { "Map", 57 },
-    { "Cockpit View", 46 },
-    { "Buy Armour", 67 },
-    { "Buy Power", 68 },
-    { "Buy Offensive", 69 },
-    { "Target Lock", 72 },
-    { "Cycle Target", 73 },
-    { "Camera Mode", 75 },
-    { "Doors", 74 },
-    { "Horn", 59 },
-    { "Accelerate", 49 },
-    { "Brake", 50 },
-    { "Left", 47 },
-    { "Right", 48 },
-};
-
+// GLOBAL: CARMA2_HW 0x0079d880
+tHeadup_text_buffer gHeadup_text_buffer_0079d880;
 // GLOBAL: CARMA2_HW 0x00688700
 int gOrig_joystick_index;
 
@@ -101,318 +84,15 @@ extern int gINT_0068b8e4;
 extern int gINT_0068b8e8;
 extern int gRace_head_ups[22];
 
-float gForce_feedback_upper_limit = 2.7f;
+// GLOBAL: CARMA2_HW 0x00688704
 float gOriginal_joystick_x;
+// GLOBAL: CARMA2_HW 0x00688708
 float gOriginal_joystick_y;
+// GLOBAL: CARMA2_HW 0x0068870c
 int gOriginal_joystick_fbb;
+// GLOBAL: CARMA2_HW 0x00688710
 int gOriginal_joystick_dpad;
 int gOrig_joystick_index;
-// GLOBAL: CARMA2_HW 0x00596308
-int gINT_00596308 = -1;
-
-// FUNCTION: CARMA2_HW 0x0045b7e0
-int C2_HOOK_FASTCALL FindJoystickPreferences(FILE* pF, const char* pJoystick_name) {
-    fpos_t position;
-    char joystick_name[256];
-    char s[256];
-    long start;
-    size_t i;
-
-    rewind(pF);
-    start = ftell(pF);
-    fseek(pF, 0, SEEK_END);
-    if (ftell(pF) - start < 32) {
-        return -1;
-    }
-    strcpy(joystick_name, pJoystick_name);
-    for (i = 0; i < strlen(joystick_name); i++) {
-        if (joystick_name[i] == ' ') {
-            joystick_name[i] = '_';
-        }
-    }
-    rewind(pF);
-    while (!feof(pF)) {
-        if (fgetpos(pF, &position) != 0) {
-            PDFatalError("getpos error");
-        }
-        GetAString(pF, s);
-        if (strstr(s, joystick_name) != NULL) {
-            if (fsetpos(pF, &position) != 0) {
-                PDFatalError("setpos error");
-            }
-            return 1;
-        }
-    }
-    rewind(pF);
-    return 0;
-}
-
-// FUNCTION: CARMA2_HW 0x0045b920
-int C2_HOOK_FASTCALL WriteJoystickPreferences(FILE* pF, const tButtonJoystickInfo* pInfo) {
-    char s[256];
-    char joystick_name[256];
-    size_t i;
-
-    strcpy(joystick_name, pInfo->productName);
-    for (i = 0; i < strlen(joystick_name); i++) {
-        if (joystick_name[i] == ' ') {
-            joystick_name[i] = '_';
-        }
-    }
-    sprintf(s, "&%s\n", joystick_name);
-    fwrite(s, 1, strlen(s), pF);
-    sprintf(s, "%d\n", 32);
-    fwrite(s, 1, strlen(s), pF);
-    for (i = 0; i < 32; i++) {
-        sprintf(s, "%d\n", pInfo->buttons[i]);
-        fwrite(s, 1, strlen(s), pF);
-    }
-    sprintf(s, "%d\n", pInfo->field_0xd4);
-    fwrite(s, 1, strlen(s), pF);
-    sprintf(s, "%.3f, %.3f\n", pInfo->field_0xd8, pInfo->field_0xdc);
-    fwrite(s, 1, strlen(s), pF);
-    sprintf(s, "%d\n", pInfo->field_0xe0);
-    fwrite(s, 1, strlen(s), pF);
-    sprintf(s, "%d\n", pInfo->field_0xe4);
-    fwrite(s, 1, strlen(s), pF);
-    sprintf(s, "%d\n", pInfo->field_0xe8);
-    fwrite(s, 1, strlen(s), pF);
-    sprintf(s, "\n");
-    fwrite(s, 1, strlen(s), pF);
-    return 1;
-}
-
-// FUNCTION: CARMA2_HW 0x0045bbc0
-int C2_HOOK_FASTCALL ReadJoystickPreferences(FILE* pF, tButtonJoystickInfo* pInfo) {
-    char s[256];
-    size_t count_buttons;
-    size_t i;
-
-    GetAString(pF, s);
-    for (i = 0; i < strlen(s); i++) {
-        if (s[i] == '_') {
-            s[i] = ' ';
-        }
-    }
-    strcpy(pInfo->productName, s + 1);
-    count_buttons = GetAnInt(pF);
-    for (i = 0; i < 32; i++) {
-        if (i < count_buttons) {
-            pInfo->buttons[i] = GetAnInt(pF);
-        } else {
-            pInfo->buttons[i] = -1;
-        }
-    }
-    pInfo->field_0xd4 = GetAnInt(pF);
-    GetPairOfScalars(pF, &pInfo->field_0xd8, &pInfo->field_0xdc);
-    pInfo->field_0xe0 = GetAnInt(pF);
-    pInfo->field_0xe4 = GetAnInt(pF);
-    pInfo->field_0xe8 = GetAnInt(pF);
-    return 1;
-}
-
-// FUNCTION: CARMA2_HW 0x0045bcc0
-int C2_HOOK_FASTCALL CountJoystickPreferences(FILE* pF) {
-    char s[256];
-    int count = 0;
-    long start;
-
-    rewind(pF);
-    start = ftell(pF);
-    fseek(pF, 0, SEEK_END);
-    if (ftell(pF) - start < 32) {
-        return 0;
-    }
-    rewind(pF);
-    while (!feof(pF)) {
-        GetAString(pF, s);
-        if (s[0] == '&') {
-            count++;
-        }
-    }
-    rewind(pF);
-    return count;
-}
-
-// FUNCTION: CARMA2_HW 0x0045c0b0
-int C2_HOOK_FASTCALL LoadJoystickPreferences(void) {
-    tPath_name path;
-    tButtonJoystickInfo* info;
-    FILE* f;
-
-    info = PDGetCurrentJoystickData();
-    if (info == NULL) {
-        return 0;
-    }
-    PathCat(path, gApplication_path, "JOYSTICK.TXT");
-    f = fopen(path, "rt");
-    if (f == NULL) {
-        return 0;
-    }
-    if (FindJoystickPreferences(f, GetCurrentJoystickName()) > 0) {
-        ReadJoystickPreferences(f, info);
-        fclose(f);
-    } else {
-        fclose(f);
-        remove(path);
-    }
-    gJoystick_x_steering = info->field_0xd8;
-    gJoystick_y_throttle = info->field_0xdc;
-    gUNK_00595f9c = info->field_0xd4;
-    gINT_00595f84 = info->field_0xe4;
-    gUNK_00596310 += 25;
-    if (gUNK_00596310 > 100) {
-        gUNK_00596310 = 0;
-    }
-    SetAllFFBEffectsGain(gUNK_00596310);
-    if (info->field_0xe8 != 0) {
-        EnableJoysticks();
-    } else {
-        DisableJoysticks();
-    }
-    return 1;
-}
-
-// FUNCTION: CARMA2_HW 0x0045bd90
-int C2_HOOK_FASTCALL SaveAllJoystickData(void) {
-    tPath_name path;
-    char error[256];
-    int original_index;
-    int count;
-    int i;
-    int result;
-    FILE* f;
-    tJoystick_preference_node* list;
-    tJoystick_preference_node* node;
-    tJoystick_preference_node* tail;
-    tJoystick_preference_node* match;
-    tButtonJoystickInfo* info;
-
-    original_index = gJoystick_index;
-    PathCat(path, gApplication_path, "JOYSTICK.TXT");
-    f = fopen(path, "rt");
-    if (f == NULL) {
-        f = fopen(path, "wt");
-        if (f != NULL) {
-            for (i = 0; i < 16; i++) {
-                if (PDIsJoystickAvailable(i)) {
-                    gJoystick_index = i;
-                    info = PDGetCurrentJoystickData();
-                    if (info != NULL) {
-                        WriteJoystickPreferences(f, info);
-                    }
-                }
-            }
-            fclose(f);
-        }
-        gJoystick_index = original_index;
-        return 1;
-    }
-    count = CountJoystickPreferences(f);
-    if (count == 0) {
-        return 1;
-    }
-    list = malloc(sizeof(*list));
-    if (list == NULL) {
-        fclose(f);
-        gJoystick_index = original_index;
-        return 0;
-    }
-    node = list;
-    for (i = 0; i < count; i++) {
-        node->next = NULL;
-        node->info = malloc(sizeof(*node->info));
-        if (node->info != NULL) {
-            ReadJoystickPreferences(f, node->info);
-        }
-        if (i != count - 1) {
-            node->next = malloc(sizeof(*node));
-            node = node->next;
-        }
-        tail = node;
-    }
-    fclose(f);
-    for (i = 0; i < 16; i++) {
-        if (PDIsJoystickAvailable(i)) {
-            gJoystick_index = i;
-            info = PDGetCurrentJoystickData();
-            if (info == NULL) {
-                continue;
-            }
-            match = NULL;
-            for (node = list; node != NULL; node = node->next) {
-                if (match != NULL) {
-                    break;
-                }
-                if (strcmp(node->info->productName, GetCurrentJoystickName()) == 0) {
-                    match = node;
-                }
-            }
-            if (match != NULL) {
-                *match->info = *info;
-            } else {
-                node = malloc(sizeof(*node));
-                if (node == NULL) {
-                    return 0;
-                }
-                tail->next = node;
-                tail = node;
-                node->info = malloc(sizeof(*node->info));
-                if (node->info == NULL) {
-                    return 0;
-                }
-                node->next = NULL;
-                *node->info = *info;
-            }
-        }
-    }
-    PathCat(path, gApplication_path, "JOYSTICK.TXT");
-    f = fopen(path, "wt");
-    if (f == NULL) {
-        sprintf(error, "Cant open %s", path);
-        return 0;
-    }
-    node = list;
-    do {
-        if (node->info != NULL) {
-            WriteJoystickPreferences(f, node->info);
-        }
-        tail = node;
-        node = node->next;
-        if (tail->info != NULL) {
-            free(tail->info);
-        }
-        if (tail != NULL) {
-            free(tail);
-        }
-    } while (node != NULL);
-    result = fclose(f);
-    gJoystick_index = original_index;
-    return result;
-}
-
-// FUNCTION: CARMA2_HW 0x0045c1e0
-void C2_HOOK_FASTCALL BackupJoystickPreferences(void) {
-    tButtonJoystickInfo* info;
-
-    info = PDGetCurrentJoystickData();
-    if (info != NULL) {
-        gJoystick_preferences_backup = *info;
-        gJoystick_preferences_backup_valid = 1;
-    }
-}
-
-// FUNCTION: CARMA2_HW 0x0045c210
-void C2_HOOK_FASTCALL RestoreJoystickPreferences(void) {
-    tButtonJoystickInfo* info;
-
-    if (gJoystick_preferences_backup_valid) {
-        info = PDGetCurrentJoystickData();
-        if (info != NULL) {
-            *info = gJoystick_preferences_backup;
-        }
-    }
-}
 
 /* ported from common/joystick.c */
 void C2_HOOK_FASTCALL SetupFFBValues(void) {
@@ -429,14 +109,196 @@ void C2_HOOK_FASTCALL SetupFFBValues(void) {
     PFfclose(f);
 }
 
-int C2_HOOK_FASTCALL PlayExclusiveFFBEffect(const char* pEffect_name, int pArg2) {
+#ifdef CARPOCALYPSE2_MATCHING
+extern int gCountEnumeratedJoystickDinputDevices;
+extern IDirectInputA* gDirectInputJoystickHandle;
+extern int gDirectInputJoystickEnumerated;
+extern BOOL CALLBACK Win32DInputJoystickEnum(const DIDEVICEINSTANCEA* pDeviceInstance, void* pContext);
+extern tDirectInputJoystickInfo* C2_HOOK_FASTCALL JoystickDInputGetInfo(int pJoystickIndex, tU32* pButtonMask, tU32* pAxisMask);
+#endif
+extern void C2_HOOK_CDECL dr_dprintf(const char* fmt_string, ...);
 
-    NOT_IMPLEMENTED();
+// C2PORT-NONMATCHING: best 84.96% | difftest PASS 2000 trials (spec difftest/specs/004575b0_InitJoysticks.json) | reason VC5 register allocation and initialization-loop layout
+// FUNCTION: CARMA2_HW 0x004575b0
+void C2_HOOK_FASTCALL InitJoysticks(void) {
+#ifdef CARPOCALYPSE2_MATCHING
+    int i;
+    int joystick_index;
+    IDirectInputDevice2A** devices;
+    tU32* fields;
+    IDirectInputDevice2A* device;
+
+    if (gCountEnumeratedJoystickDinputDevices == 0) {
+        if (gDirectInputJoystickHandle == NULL) {
+            C2_HOOK_BUG_ON(sizeof(tDirectInputJoystickInfo) != 0x68);
+            memset(gDirectInputJoystickDevices, 0, 16 * sizeof(*gDirectInputJoystickDevices));
+            fields = (tU32*)&gDirectInputJoystickInfos[0].axisMask;
+            do {
+                fields[-1] = 0;
+                fields[0] = 0;
+                fields[1] = 0;
+                ((tU8*)fields)[8] = 0;
+                fields[0x17] = 0;
+                fields[0x18] = 0;
+                fields += 0x1a;
+            } while ((int)fields < (int)((tU32*)gDirectInputJoystickInfos + 0x1a * 16 + 1));
+            memset(gDirectInputEffects, 0, 30 * sizeof(*gDirectInputEffects));
+            gJoystickFFB = 0;
+            gCountEnumeratedJoystickDinputDevices = 0;
+            DirectInputCreateA(GetModuleHandleA(NULL), 0x0500, &gDirectInputJoystickHandle, NULL);
+            if (gDirectInputJoystickHandle == NULL) {
+                goto finish;
+            }
+            gDirectInputJoystickEnumerated = 0;
+        }
+        if (!gDirectInputJoystickEnumerated) {
+            gDirectInputJoystickEnumerated = 1;
+            if (gCountEnumeratedJoystickDinputDevices == 0) {
+                gDirectInputJoystickHandle->lpVtbl->EnumDevices(gDirectInputJoystickHandle, DIDEVTYPE_JOYSTICK, Win32DInputJoystickEnum, gDirectInputJoystickHandle, DIEDFL_ATTACHEDONLY);
+            }
+            if (gCountEnumeratedJoystickDinputDevices != 0) {
+                i = 0;
+                devices = gDirectInputJoystickDevices;
+                do {
+                    JoystickDInputGetInfo(i, NULL, NULL);
+                    device = *devices;
+                    if (device != NULL && gDirectInputJoystickHandle != NULL) {
+                        HRESULT acquire_result;
+                        acquire_result = IDirectInputDevice2_Acquire(device);
+                        if (acquire_result == DI_OK) {
+                            dr_dprintf("Joystick #%d acquired\n", i);
+                        } else if (acquire_result == DI_NOEFFECT) {
+                            dr_dprintf("Joystick #%d already acquired\n", i);
+                        } else if (acquire_result == DIERR_INVALIDPARAM) {
+                            dr_dprintf("Joystick %d DIERR_INVALIDPARAM\n", i);
+                        } else if (acquire_result == DIERR_OTHERAPPHASPRIO) {
+                            dr_dprintf("Joystick %d DIERR_OTHERAPPHASPRIO\n", i);
+                        } else {
+                            dr_dprintf("Unknown Error acquiring joystick %d\n", i);
+                        }
+                    }
+                    devices++;
+                    i++;
+                } while ((int)devices < (int)(gDirectInputJoystickDevices + CARPOCALYPSE2_ASIZE(gDirectInputJoystickDevices)));
+                gJoystick_index = 0;
+            }
+            if (gJoystick_index >= 0 && InitForceFeedback()) {
+                ResetDInputJoystickFFB(gJoystick_index);
+                RegisterJoystickFFBForces();
+            }
+        }
+    }
+finish:
+    if (gJoystickFFB != 0) {
+        joystick_index = 0;
+        devices = gDirectInputJoystickDevices;
+        do {
+            device = *devices;
+            if (device != NULL && (gJoystickFFB & (1 << joystick_index)) != 0) {
+                IDirectInputDevice2_SendForceFeedbackCommand(device, DISFFC_RESET);
+            }
+            devices++;
+            joystick_index++;
+        } while ((int)devices < (int)(gDirectInputJoystickDevices + CARPOCALYPSE2_ASIZE(gDirectInputJoystickDevices)));
+    }
+#else
+    PDInitJoysticks();
+#endif
 }
 
-void C2_HOOK_FASTCALL InitJoysticks(void) {
+typedef struct {
+    const char* name;
+    int key;
+} tJoystick_action_entry;
 
-    PDInitJoysticks();
+// GLOBAL: CARMA2_HW 0x00596250
+tJoystick_action_entry gJoystick_actions[21] = {
+    { "Recover", 0x3c },
+    { "Reapir", 0x2d },
+    { "Hand Brake", 0x36 },
+    { "Use Powerup", 0x3d },
+    { "Next Powerup", 0x40 },
+    { "Prev Powerup", 0x3f },
+    { "Wheel Spin", 0x38 },
+    { "Map", 0x39 },
+    { "Cockpit View", 0x2e },
+    { "Buy Armour", 0x43 },
+    { "Buy Power", 0x44 },
+    { "Buy Offensive", 0x45 },
+    { "Target Lock", 0x48 },
+    { "Cycle Target", 0x49 },
+    { "Camera Mode", 0x4b },
+    { "Doors", 0x4a },
+    { "Horn", 0x3b },
+    { "Accelerate", 0x31 },
+    { "Brake", 0x32 },
+    { "Left", 0x2f },
+    { "Right", 0x30 },
+};
+
+// FUNCTION: CARMA2_HW 0x0045c240
+void C2_HOOK_FASTCALL FUN_0045c240(void) {
+    int x;
+    tJoystick_action_entry* entry;
+    int* headup;
+    char* dest;
+
+    if (gINT_0068b8e8) {
+        gINT_0068b8e8 = 0;
+        if (gAcc_poly_actor != NULL && gRender_acc_poly_actor != 0) {
+            BrActorRemove(gAcc_poly_actor);
+            gRender_acc_poly_actor = 0;
+        }
+    } else {
+        gINT_0068b8e8 = 1;
+        PlaceHeadupAt(gProgram_state.frame_rate_headup, 10, 350);
+        x = 120;
+        headup = gRace_head_ups;
+        do {
+            PlaceHeadupAt(*headup, 10, x);
+            ChangeHeadupFont(*headup, -2);
+            headup++;
+            x += 10;
+        } while (x < 340);
+        CreateAccentPolyActor(8.0f, 118.0f, 130.0f, 224.0f);
+        if (gJoystick_headup_buffer_0079d8a0.count == 0) {
+            if (gJoystick_headup_buffer_0079d8a0.field_0x14 < 5) {
+                gJoystick_headup_buffer_0079d8a0.field_0x14 = 10;
+            }
+            gJoystick_headup_buffer_0079d8a0.texts = NULL;
+            gJoystick_headup_buffer_0079d8a0.count = 0;
+            gJoystick_headup_buffer_0079d8a0.pos_last_add = 0;
+            gJoystick_headup_buffer_0079d8a0.text_last_add = NULL;
+            gJoystick_headup_buffer_0079d8a0.field_0x4 = NULL;
+            gJoystick_headup_buffer_0079d8a0.field_0x10 = 22;
+            entry = gJoystick_actions;
+            do {
+                dest = malloc(0x3c);
+                if (dest != NULL) {
+                    *(int*)(dest + 0x38) = 0;
+                    strncpy(dest, entry->name, 0x28);
+                    InsertHeadupText(&gJoystick_headup_buffer_0079d8a0, (tHeadup_text*)dest, 0);
+                }
+                entry++;
+            } while ((int)entry < (int)(gJoystick_actions + CARPOCALYPSE2_ASIZE(gJoystick_actions)));
+        }
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x0045c590
+unsigned int C2_HOOK_FASTCALL GetJoystickButtonIndexForKey(int pKey) {
+    tButtonJoystickInfo* joystick_info;
+    unsigned int i;
+
+    joystick_info = PDGetCurrentJoystickData();
+    if (joystick_info != NULL) {
+        for (i = 0; i < joystick_info->count_buttons; i++) {
+            if (gJoystick_actions[joystick_info->buttons[i]].key == pKey) {
+                return i;
+            }
+        }
+    }
+    return -1;
 }
 
 // FUNCTION: CARMA2_HW 0x0045c8d0
@@ -461,12 +323,6 @@ float C2_HOOK_FASTCALL GetJoystickY(void) {
         return joystick_info->field_0xdc;
     }
     return gJoystick_y_throttle;
-}
-
-// UNLABELED: CARMA2_HW 0x0045c910
-void C2_HOOK_FASTCALL FUN_0045c910(tCar_spec* pCar, br_vector3* pPoint, br_vector3* pForce, float pImpulse) {
-
-    NOT_IMPLEMENTED();
 }
 
 // FUNCTION: CARMA2_HW 0x0045c7f0
@@ -534,6 +390,21 @@ void C2_HOOK_FASTCALL SetJoystickFFBGain(int pValue) {
     }
 }
 
+extern void C2_HOOK_FASTCALL SelectNextDInputJoystick(void);
+
+// FUNCTION: CARMA2_HW 0x0045c420
+void C2_HOOK_FASTCALL FUN_0045c420(void) {
+    tButtonJoystickInfo* joystick;
+
+    SelectNextDInputJoystick();
+    joystick = PDGetCurrentJoystickData();
+    if (joystick != NULL) {
+        gJoystick_x_steering = joystick->field_0xd8;
+        gJoystick_y_throttle = joystick->field_0xdc;
+        gUNK_00595f9c = joystick->field_0xd4;
+    }
+}
+
 // FUNCTION: CARMA2_HW 0x0045c570
 void C2_HOOK_FASTCALL SetJoystickDPadEnabled(int pEnabled) {
     tButtonJoystickInfo* joystick_info;
@@ -554,14 +425,303 @@ void C2_HOOK_FASTCALL Joystick_BackupSettings(void) {
     gJoystick_index = gOrig_joystick_index;
 }
 
+// FUNCTION: CARMA2_HW 0x0045bcc0
+int C2_HOOK_FASTCALL CountAmpersandLines(FILE* pFile) {
+    char s[256];
+    long start;
+    long end;
+    int count;
+
+    count = 0;
+    rewind(pFile);
+    start = ftell(pFile);
+    fseek(pFile, 0, SEEK_END);
+    end = ftell(pFile);
+    if (end - start < 0x20) {
+        return 0;
+    }
+    rewind(pFile);
+    while (!feof(pFile)) {
+        GetAString(pFile, s);
+        if (s[0] == '&') {
+            count++;
+        }
+    }
+    rewind(pFile);
+    return count;
+}
+
+int C2_HOOK_FASTCALL InsertHeadupText(tHeadup_text_buffer* pText_buffer, tHeadup_text* pText, int pSortAlphabetically);
+
+// C2PORT-NONMATCHING: best 93.33% | difftest PASS 2000 trials (spec difftest/specs/0045a7f0_FUN_0045a7f0.json) | reason regalloc-loop
+// FUNCTION: CARMA2_HW 0x0045a7f0
+int C2_HOOK_FASTCALL FUN_0045a7f0(char* pFilename, int* pArg2) {
+    char local_100[256];
+    char* substr;
+    void* this_ptr;
+    char* mem;
+
+    this_ptr = (void*)pArg2[0];
+    substr = (char*)pArg2[1];
+    memcpy(local_100, pFilename, strlen(pFilename) + 1);
+    DRstrlwr(local_100);
+    if (strstr(local_100, "POWERUP") == NULL && strstr(local_100, "CPOINT") == NULL && strstr(local_100, "TRACKX") == NULL) {
+        if (strstr(local_100, substr) == NULL) {
+            if (strcmp(substr, ".*") != 0) {
+                return 0;
+            }
+        }
+        mem = (char*)malloc(0x3c);
+        if (mem != NULL) {
+            *(int*)(mem + 0x38) = 0;
+            strncpy(mem, local_100, 0x28);
+            StringTransformToLower(mem);
+            mem[0] = (char)toupper((int)*mem);
+            InsertHeadupText(this_ptr, (tHeadup_text*)mem, 1);
+        }
+    }
+    return 0;
+}
+
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 59.59% | difftest PASS 2000 trials (spec difftest/specs/0045a920_InsertHeadupText.json) | reason vc5-regalloc-string
+// FUNCTION: CARMA2_HW 0x0045a920
+int C2_HOOK_FASTCALL InsertHeadupText(tHeadup_text_buffer* pText_buffer, tHeadup_text* pText, int pSortAlphabetically) {
+    tHeadup_text* pHead;
+    tHeadup_text* pPrevious;
+    tHeadup_text* pNext;
+    int pos;
+    int comparison;
+
+    pos = 0;
+    pHead = pText_buffer->texts;
+    if (pHead == NULL) {
+        pText_buffer->texts = pText;
+        pText->next = NULL;
+        pText_buffer->count = 1;
+        pText_buffer->pos_last_add = 0;
+        pText_buffer->text_last_add = pText;
+        return 0;
+    }
+    if (!pSortAlphabetically) {
+        pPrevious = pHead;
+        for (pNext = pHead->next; pNext != NULL; pNext = pPrevious->next) {
+            pPrevious = pNext;
+            pos++;
+        }
+        pText->next = NULL;
+        pPrevious->next = pText;
+    } else {
+        comparison = strcmp(pHead->text, pText->text);
+        if (comparison > 0) {
+            pText_buffer->texts = pText;
+            pText->next = pHead;
+            pPrevious = pHead;
+        } else {
+            pPrevious = pHead;
+            pNext = pHead->next;
+            while (pNext != NULL) {
+                comparison = strcmp(pNext->text, pText->text);
+                if (comparison > 0) {
+                    pos++;
+                    pText->next = pNext;
+                    pPrevious->next = pText;
+                    break;
+                }
+                pPrevious = pNext;
+                pNext = pPrevious->next;
+                pos++;
+            }
+            if (pNext == NULL) {
+                pText->next = NULL;
+                pPrevious->next = pText;
+            }
+        }
+    }
+    pText_buffer->count++;
+    pText_buffer->pos_last_add = pos;
+    pText_buffer->text_last_add = pPrevious;
+    return pos;
+}
+#pragma auto_inline(on)
+
+// FUNCTION: CARMA2_HW 0x0045b790
+void C2_HOOK_FASTCALL FUN_0045b790(void* pThis) {
+    tJoystick_action_entry* entry;
+    char* dest;
+
+    entry = gJoystick_actions;
+    do {
+        dest = malloc(0x3c);
+        if (dest != NULL) {
+            *(int*)(dest + 0x38) = 0;
+            strncpy(dest, entry->name, 0x28);
+            InsertHeadupText(pThis, (tHeadup_text*)dest, 0);
+        }
+        entry++;
+    } while ((int)entry < (int)(gJoystick_actions + CARPOCALYPSE2_ASIZE(gJoystick_actions)));
+}
+
+// FUNCTION: CARMA2_HW 0x0045b7e0
+int C2_HOOK_FASTCALL FUN_0045b7e0(FILE* pFile, char* pString) {
+    fpos_t file_pos;
+    char search_string[256];
+    char line[256];
+    unsigned int i;
+    long start;
+    long end;
+
+    rewind(pFile);
+    start = ftell(pFile);
+    fseek(pFile, 0, SEEK_END);
+    end = ftell(pFile);
+    if (end - start < 0x20) {
+        return -1;
+    }
+    strcpy(search_string, pString);
+    for (i = 0; i < strlen(search_string); i++) {
+        if (search_string[i] == ' ') {
+            search_string[i] = '_';
+        }
+    }
+    rewind(pFile);
+    while (!feof(pFile)) {
+        if (fgetpos(pFile, &file_pos) != 0) {
+            PDFatalError("getpos error");
+        }
+        GetAString(pFile, line);
+        if (strstr(line, search_string) != NULL) {
+            if (fsetpos(pFile, &file_pos) != 0) {
+                PDFatalError("setpos error");
+            }
+            return 1;
+        }
+    }
+    rewind(pFile);
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x0045b920
+int C2_HOOK_FASTCALL WriteJoystickInfo(FILE* pFile, tButtonJoystickInfo* pInfo) {
+    char formatted[256];
+    char joystick_name[256];
+    unsigned int i;
+
+    strcpy(joystick_name, pInfo->productName);
+    for (i = 0; i < strlen(joystick_name); i++) {
+        if (joystick_name[i] == ' ') {
+            joystick_name[i] = '_';
+        }
+    }
+    sprintf(formatted, "&%s\n", joystick_name);
+    fwrite(formatted, 1, strlen(formatted), pFile);
+    sprintf(formatted, "%d\n", 0x20);
+    fwrite(formatted, 1, strlen(formatted), pFile);
+    for (i = 0; i < 0x20; i++) {
+        sprintf(formatted, "%d\n", pInfo->buttons[i]);
+        fwrite(formatted, 1, strlen(formatted), pFile);
+    }
+    sprintf(formatted, "%d\n", pInfo->field_0xd4);
+    fwrite(formatted, 1, strlen(formatted), pFile);
+    sprintf(formatted, "%.3f, %.3f\n", (double)pInfo->field_0xd8, (double)pInfo->field_0xdc);
+    fwrite(formatted, 1, strlen(formatted), pFile);
+    sprintf(formatted, "%d\n", pInfo->field_0xe0);
+    fwrite(formatted, 1, strlen(formatted), pFile);
+    sprintf(formatted, "%d\n", pInfo->field_0xe4);
+    fwrite(formatted, 1, strlen(formatted), pFile);
+    sprintf(formatted, "%d\n", pInfo->field_0xe8);
+    fwrite(formatted, 1, strlen(formatted), pFile);
+    sprintf(formatted, "\n");
+    fwrite(formatted, 1, strlen(formatted), pFile);
+    return 1;
+}
+
+// FUNCTION: CARMA2_HW 0x0045bbc0
+int C2_HOOK_FASTCALL ReadJoystickInfo(FILE* pFile, tButtonJoystickInfo* pInfo) {
+    char name[256];
+    unsigned int i;
+    size_t count;
+
+    GetAString(pFile, name);
+    for (i = 0; i < strlen(name); i++) {
+        if (name[i] == '_') {
+            name[i] = ' ';
+        }
+    }
+    strcpy(pInfo->productName, name + 1);
+
+    count = GetAnInt(pFile);
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(pInfo->buttons); i++) {
+        if (i < count) {
+            pInfo->buttons[i] = GetAnInt(pFile);
+        } else {
+            pInfo->buttons[i] = -1;
+        }
+    }
+    pInfo->field_0xd4 = GetAnInt(pFile);
+    GetPairOfScalars(pFile, &pInfo->field_0xd8, &pInfo->field_0xdc);
+    pInfo->field_0xe0 = GetAnInt(pFile);
+    pInfo->field_0xe4 = GetAnInt(pFile);
+    pInfo->field_0xe8 = GetAnInt(pFile);
+    return 1;
+}
+
+// FUNCTION: CARMA2_HW 0x0045c0b0
+int C2_HOOK_FASTCALL LoadJoystickPreferences(void) {
+    tButtonJoystickInfo* joystick_info;
+    FILE* f;
+    tPath_name path;
+
+    joystick_info = PDGetCurrentJoystickData();
+    if (joystick_info == NULL) {
+        return 0;
+    }
+    PathCat(path, gApplication_path, "JOYSTICK.TXT");
+    f = fopen(path, "rt");
+    if (f == NULL) {
+        return 0;
+    }
+    if (FUN_0045b7e0(f, (char*)GetCurrentJoystickName()) > 0) {
+        ReadJoystickInfo(f, joystick_info);
+        fclose(f);
+    } else {
+        fclose(f);
+        remove(path);
+    }
+    gJoystick_x_steering = joystick_info->field_0xd8;
+    gJoystick_y_throttle = joystick_info->field_0xdc;
+    gUNK_00595f9c = joystick_info->field_0xd4;
+    gUNK_00595f84 = joystick_info->field_0xe4;
+    gUNK_00596310 += 0x19;
+    if (gUNK_00596310 > 100) {
+        gUNK_00596310 = 0;
+    }
+    SetAllFFBEffectsGain(gUNK_00596310);
+    if (joystick_info->field_0xe8 != 0) {
+        FUN_0045a070();
+        joystick_info = PDGetCurrentJoystickData();
+        if (joystick_info != NULL) {
+            joystick_info->field_0xe8 = 1;
+            return 1;
+        }
+    } else {
+        joystick_info = PDGetCurrentJoystickData();
+        if (joystick_info != NULL) {
+            joystick_info->field_0xe8 = 0;
+        }
+        FUN_0045a0c0();
+    }
+    return 1;
+}
+
 // FUNCTION: CARMA2_HW 0x0045bd50
 void C2_HOOK_FASTCALL EnableJoysticks(void) {
-    tButtonJoystickInfo* info;
+    tButtonJoystickInfo* joystick_info;
 
-    PDEnableJoysticks();
-    info = PDGetCurrentJoystickData();
-    if (info != NULL) {
-        info->field_0xe8 = 1;
+    FUN_0045a070();
+    joystick_info = PDGetCurrentJoystickData();
+    if (joystick_info != NULL) {
+        joystick_info->field_0xe8 = 1;
     }
 }
 
@@ -577,7 +737,7 @@ void C2_HOOK_FASTCALL DisableJoysticks(void) {
 }
 
 // FUNCTION: CARMA2_HW 0x0045b0a0
-void C2_HOOK_FASTCALL FUN_0045b0a0(tHeadup_text_buffer* pText_buffer) {
+void C2_HOOK_FASTCALL AdjustHeadupTextBuffer(tHeadup_text_buffer* pText_buffer) {
     tHeadup_text* node;
     tHeadup_text* current;
     int index;
@@ -624,58 +784,41 @@ void C2_HOOK_FASTCALL FUN_0045b0a0(tHeadup_text_buffer* pText_buffer) {
     }
 }
 
-// UNLABELED: CARMA2_HW 0x0045a920
-int C2_HOOK_FASTCALL FUN_0045a920(tHeadup_text_buffer* pText_buffer, tHeadup_text* pText, int pSorted) {
-    tHeadup_text* node;
-    tHeadup_text* previous;
-    int index;
+int C2_HOOK_FASTCALL FUN_CheckJoystickHeadupButtons(tButtonJoystickInfo** pJoystick_info) {
 
-    node = pText_buffer->texts;
-    index = 0;
-    if (node == NULL) {
-        pText_buffer->texts = pText;
-        pText->next = NULL;
-        pText_buffer->count = 1;
-        pText_buffer->pos_last_add = 0;
-        pText_buffer->text_last_add = pText;
-        return 0;
+    if (!PDKeyDown(65)) {
+        return 1;
     }
-    if (!pSorted) {
-        while (node->next != NULL) {
-            node = node->next;
-            index++;
-        }
-        pText->next = NULL;
-        node->next = pText;
-        pText_buffer->count++;
-        pText_buffer->pos_last_add = index;
-        pText_buffer->text_last_add = node;
-        return index;
-    }
-    previous = NULL;
-    while (node != NULL) {
-        if (strcmp(node->text, pText->text) > 0) {
-            break;
-        }
-        previous = node;
-        node = node->next;
-        index++;
-    }
-    pText->next = node;
-    if (previous == NULL) {
-        pText_buffer->texts = pText;
+    if (gAccent_poly_prims[2].t != -1) {
+        gAccent_poly_prims[2].t = -1;
     } else {
-        previous->next = pText;
+        tHeadup_text* text;
+        int last_index;
+        size_t i;
+
+        *pJoystick_info = PDGetCurrentJoystickData();
+        if (*pJoystick_info == NULL) {
+            return 0;
+        }
+
+        i = 0;
+        last_index = -1;
+        for (text = gJoystick_headup_buffer_0079d8a0.texts; text != NULL; text = text->next, i++) {
+            if (text == gJoystick_headup_buffer_0079d8a0.text_last_add) {
+                last_index = i;
+            }
+        }
+        for (i = 0; i < (*pJoystick_info)->count_buttons; i++) {
+            if ((*pJoystick_info)->buttons[i] == last_index && (*pJoystick_info)->buttons[i] != -1) {
+                (*pJoystick_info)->buttons[i] = -1;
+            }
+        }
     }
-    pText_buffer->count++;
-    if (node != NULL) {
-        pText_buffer->pos_last_add = index;
-        pText_buffer->text_last_add = previous != NULL ? previous : node;
-    } else {
-        pText_buffer->pos_last_add = index - 1;
-        pText_buffer->text_last_add = previous;
+    while (PDKeyDown(65)) {
+        /* brr */
+        /* FIXME: replace with udelay */
     }
-    return pText_buffer->pos_last_add;
+    return 1;
 }
 
 // FUNCTION: CARMA2_HW 0x0045b3b0
@@ -781,7 +924,7 @@ void C2_HOOK_FASTCALL MungeJoystickHeadups(void) {
             }
         }
 munge:
-        FUN_0045b0a0(&gJoystick_headup_buffer_0079d8a0);
+        AdjustHeadupTextBuffer(&gJoystick_headup_buffer_0079d8a0);
         headup_text = gJoystick_headup_buffer_0079d8a0.field_0x4;
         joystick_info = PDGetCurrentJoystickData();
         if (joystick_info == NULL) {
@@ -828,4 +971,82 @@ munge:
 int C2_HOOK_FASTCALL HasCurrentJoystick(void) {
 
     return gJoystick_index != -1;
+}
+
+// FUNCTION: CARMA2_HW 0x0045a2e0
+int C2_HOOK_FASTCALL PeekChar(FILE* pFile) {
+    char c;
+
+    c = fgetc(pFile);
+    return ungetc(c, pFile);
+}
+
+// FUNCTION: CARMA2_HW 0x0045a300
+tU32 C2_HOOK_FASTCALL ReadStringUntil(FILE* pFile, char* pString, int pMaxLength, char pTerminator) {
+    char character[2];
+    int length;
+
+    pString[0] = *(volatile const char*) "";
+    character[1] = '\0';
+    character[0] = (char) fgetc(pFile);
+    length = 0;
+    while (character[0] != pTerminator && length < pMaxLength && !feof(pFile)) {
+        strcat(pString, character);
+        length++;
+        character[0] = (char) fgetc(pFile);
+    }
+    return feof(pFile) ? 1 : 0;
+}
+
+// C2PORT-NONMATCHING: best 50.55% | difftest PASS 2000 trials (spec difftest/specs/0045c910_FUN_0045c910.json) | reason x87-order
+// FUNCTION: CARMA2_HW 0x0045c910
+void C2_HOOK_FASTCALL FUN_0045c910(tCar_spec* pCar, const br_vector3* pPosition, br_vector3* pForce, float pMagnitude) {
+    float force_length;
+    float inverse_force_length;
+    br_vector3 normalized_position;
+    register int angle_degrees;
+    int magnitude;
+    float force_x;
+    float force_y;
+    float force_z;
+
+    (void)pForce;
+    (void)pCar;
+
+    if (pMagnitude > gForce_feedback_upper_limit) {
+        pMagnitude = gForce_feedback_upper_limit;
+    }
+    if (pMagnitude < Force_feedback_lower_limit) {
+        pMagnitude = Force_feedback_lower_limit;
+    }
+    magnitude = (int)(pMagnitude * (gJoystick_collision_force_scale / gForce_feedback_upper_limit));
+
+    force_x = pPosition->v[0];
+    force_y = pPosition->v[1];
+    force_z = pPosition->v[2];
+    force_length = sqrt(force_x * force_x + force_y * force_y + force_z * force_z);
+    if (force_length > gJoystick_collision_force_min_length) {
+        inverse_force_length = gJoystick_collision_force_one / force_length;
+        normalized_position.v[0] = force_x * inverse_force_length;
+        normalized_position.v[1] = force_y * inverse_force_length;
+        normalized_position.v[2] = force_z * inverse_force_length;
+    }
+    else {
+        normalized_position.v[0] = gJoystick_collision_force_one_f;
+        normalized_position.v[1] = gJoystick_collision_force_zero_f;
+        normalized_position.v[2] = gJoystick_collision_force_zero_f;
+    }
+
+    angle_degrees = (int)(acos(-(double)normalized_position.v[2]) * gJoystick_collision_force_radians_to_degrees);
+    if (angle_degrees < 45) {
+        angle_degrees = 90 - angle_degrees;
+    }
+    if (angle_degrees > 135) {
+        angle_degrees = 270 - angle_degrees;
+    }
+    if (normalized_position.v[0] <= 0.0f) {
+        angle_degrees = 360 - angle_degrees;
+    }
+
+    SetJoystickFFBCollisionForce(magnitude, angle_degrees * 100);
 }

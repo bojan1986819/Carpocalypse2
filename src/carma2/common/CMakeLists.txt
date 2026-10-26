@@ -296,3 +296,7 @@ endif()
 if(NOT MSVC)
     target_compile_options(c2_common PRIVATE -fpermissive -w)
 endif()
+
+if(NOT CARPOCALYPSE2_MATCHING)
+    target_sources(c2_common PRIVATE loadprof.c loadprof.h)
+endif()

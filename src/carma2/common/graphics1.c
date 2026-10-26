@@ -14,8 +14,15 @@
 #include "platform.h"
 #include "carpocalypse2_types.h"
 #include "carpocalypse2_macros.h"
+#if defined(__vita__) || defined(C2_GLYPH_BATCH)
+#include "sdl3/vita_glyph.h"
+#endif
+#ifdef __vita__
+#include "sdl3/vita_perf.h"
+#endif
 
 #include <limits.h>
+
 // GLOBAL: CARMA2_HW 0x00703e24
 int gWidth;
 
@@ -126,28 +133,6 @@ extern int gFancy_shadow;
 
 // FUNCTION: CARMA2_HW 0x004e99d0
 void C2_HOOK_FASTCALL InitShadow(void) {
-#ifndef CARPOCALYPSE2_MATCHING
-    int i;
-
-    gShadow_actor = BrActorAllocate(BR_ACTOR_MODEL, NULL);
-    gShadow_model = BrModelAllocate(NULL, 48, 16);
-    gShadow_model->flags = 6;
-    gShadow_actor->model = gShadow_model;
-    gShadow_actor->render_style = BR_RSTYLE_NONE;
-
-    gShadow_material = BrMaterialAllocate(NULL);
-    gShadow_material->flags &= ~BR_MATF_LIGHT;
-    gShadow_material->flags |= BR_MATF_ALWAYS_VISIBLE;
-    BrMaterialAdd(gShadow_material);
-
-    BrVector3Set(&gShadow_light_ray, 0.f, -1.f, 0.f);
-    BrVector3Set(&gShadow_light_x, 1.f, 0.f, 0.f);
-    BrVector3Set(&gShadow_light_z, 0.f, 0.f, 1.f);
-
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gShadow_clip_planes); i++) {
-        gShadow_clip_planes[i].clip = BrActorAllocate(BR_ACTOR_CLIP_PLANE, NULL);
-    }
-#else
     int i;
 
     for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gShadow_clip_planes); i++) {
@@ -168,7 +153,6 @@ void C2_HOOK_FASTCALL InitShadow(void) {
     gShadow_actor = BrActorAllocate(BR_ACTOR_MODEL, NULL);
     gShadow_actor->model = gShadow_model;
     BrActorAdd(gUniverse_actor, gShadow_actor);
-#endif
 }
 
 // SaveShadeTable
@@ -180,23 +164,11 @@ extern int gSaved_table_count;
 
 // FUNCTION: CARMA2_HW 0x004e9b60
 void C2_HOOK_FASTCALL DisposeSavedShadeTables(void) {
-#ifndef CARPOCALYPSE2_MATCHING
-    int i;
-
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gSaved_shade_tables); i++) {
-        if (gSaved_shade_tables[i].copy != NULL) {
-            BrMemFree(gSaved_shade_tables[i].copy);
-            gSaved_shade_tables[i].copy = NULL;
-        }
-    }
-    gSaved_table_count = 0;
-#else
     int i;
 
     for (i = 0; i < gSaved_table_count; i++) {
         BrMemFree(gSaved_shade_tables[i].copy);
     }
-#endif
 }
 
 // ShadowMode
@@ -207,17 +179,7 @@ void C2_HOOK_FASTCALL DisposeSavedShadeTables(void) {
 
 // RenderLollipops
 
-// FUNCTION: CARMA2_HW 0x004e4940
-void C2_HOOK_FASTCALL SetupDepthBuffer(void) {
-    if (gDepth_buffer != NULL) {
-        BrPixelmapFree(gDepth_buffer);
-        gDepth_buffer = NULL;
-    }
-    gDepth_buffer = BrPixelmapMatch(gBack_screen, BR_PMMATCH_DEPTH_16);
-    if (gDepth_buffer == NULL) {
-        FatalError(kFatalError_AllocateZBuffer);
-    }
-}
+// SetupDepthBuffer
 
 // FUNCTION: CARMA2_HW 0x004e4980
 void C2_HOOK_FASTCALL SetBRenderScreenAndBuffers(int pX_offset, int pY_offset, int pWidth, int pHeight) {
@@ -290,26 +252,29 @@ void C2_HOOK_FASTCALL InitWobbleStuff(void) {
     gEvalu = LoadPixelmap("Evalu01.PIX");
 }
 
-// FUNCTION: CARMA2_HW 0x004e4db0
-void C2_HOOK_FASTCALL NewScreenWobble(double pAmplitude_x, double pAmplitude_y, double pPeriod) {
-    int i;
-    int index = -1;
-    int oldest_time = INT_MAX;
+// NewScreenWobble
 
-    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gWobble_array); ++i) {
+// FUNCTION: CARMA2_HW 0x004e4db0
+void C2_HOOK_STDCALL NewScreenWobble(double pAmplitude_x, double pAmplitude_y, double pPeriod) {
+    int i;
+    int oldest_time;
+    int oldest_index;
+
+    oldest_index = -1;
+    oldest_time = INT_MAX;
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gWobble_array); i++) {
         if (gWobble_array[i].time_started == 0) {
-            index = i;
+            oldest_index = i;
             break;
-        }
-        if (gWobble_array[i].time_started < oldest_time) {
+        } else if (gWobble_array[i].time_started < oldest_time) {
             oldest_time = gWobble_array[i].time_started;
-            index = i;
+            oldest_index = i;
         }
     }
-    gWobble_array[index].time_started = (int)GetTotalTime();
-    gWobble_array[index].amplitude_x = (float)pAmplitude_x;
-    gWobble_array[index].amplitude_y = (float)pAmplitude_y;
-    gWobble_array[index].period = (float)pPeriod;
+    gWobble_array[oldest_index].time_started = GetTotalTime();
+    gWobble_array[oldest_index].amplitude_x = (float)pAmplitude_x;
+    gWobble_array[oldest_index].amplitude_y = (float)pAmplitude_y;
+    gWobble_array[oldest_index].period = (float)pPeriod;
 }
 
 // SetScreenWobble
@@ -338,6 +303,7 @@ void C2_HOOK_FASTCALL StartRenderingHeadups(void) {
     gRender_poly_text = 0;
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004e5ad0
 void C2_HOOK_FASTCALL RenderThisHeadup(br_actor* pActor) {
 
@@ -347,6 +313,7 @@ void C2_HOOK_FASTCALL RenderThisHeadup(br_actor* pActor) {
     gHud_actor_storage[gHud_actor_storage_size] = pActor;
     gHud_actor_storage_size += 1;
 }
+#pragma auto_inline(on)
 
 void C2_HOOK_FASTCALL CleanPolyFontDangler(void) {
     int i;
@@ -358,6 +325,9 @@ void C2_HOOK_FASTCALL CleanPolyFontDangler(void) {
             BrActorRemove(a);
         }
     }
+#if defined(__vita__) || defined(C2_GLYPH_BATCH)
+    C2VitaGlyphClean();
+#endif
     gCount_polyfont_glyph_actors = 0;
 }
 
@@ -370,7 +340,11 @@ void C2_HOOK_FASTCALL StopRenderingHeadups(void) {
     int i;
     br_actor* a;
 
-    if (gCount_polyfont_glyph_actors != 0) {
+    if (gCount_polyfont_glyph_actors != 0
+#if defined(__vita__) || defined(C2_GLYPH_BATCH)
+            || C2VitaGlyphHasActors()
+#endif
+            ) {
         BrActorAdd(gHUD_root, gString_root_actor);
     }
     for (i = 0; i < gHud_actor_storage_size; i++) {
@@ -387,7 +361,13 @@ void C2_HOOK_FASTCALL StopRenderingHeadups(void) {
     gRender_screen->origin_y = 0;
     gRender_screen->base_x = 0;
     gRender_screen->base_y = 0;
+#ifdef __vita__
+    C2VitaPerfBegin(C2VP_HUD_GEOMETRY);
+#endif
     BrZbSceneRender(gHUD_root, gHUD_camera, gRender_screen, gDepth_buffer);
+#ifdef __vita__
+    C2VitaPerfEnd(C2VP_HUD_GEOMETRY);
+#endif
     gRender_screen->origin_x = original_origin_x;
     gRender_screen->origin_y = original_origin_y;
     gRender_screen->base_x = original_base_x;
@@ -405,7 +385,13 @@ void C2_HOOK_FASTCALL StopRenderingHeadups(void) {
     CleanPolyFontDangler();
     gRender_poly_text = 1;
 #ifndef CARPOCALYPSE2_MATCHING
+#ifdef __vita__
+    C2VitaPerfBegin(C2VP_HUD_REDRAW);
+#endif
     RedrawHeadupTexts(GetTotalTime());
+#ifdef __vita__
+    C2VitaPerfEnd(C2VP_HUD_REDRAW);
+#endif
 #endif
 }
 
@@ -419,6 +405,9 @@ void C2_HOOK_FASTCALL CleanPolyFontDanglers(void) {
             BrActorRemove(actor);
         }
     }
+#if defined(__vita__) || defined(C2_GLYPH_BATCH)
+    C2VitaGlyphClean();
+#endif
     gCount_polyfont_glyph_actors = 0;
 }
 
@@ -432,14 +421,32 @@ void C2_HOOK_FASTCALL DoTestHeadup(void) {
         BrMapUpdate(gCurrent_rev, BR_MAPU_ALL);
         gStatbarHUD1_material->colour_map = gCurrent_rev;
         BrMaterialUpdate(gStatbarHUD1_material, BR_MATU_COLOURMAP);
+        if (do_headup_material) {
+            goto headup_material_done;
+        }
     }
-    if (!do_headup_material) {
-        BrMapUpdate(gDamage_hud, BR_MAPU_ALL);
-        gStatbarHUD5_material->colour_map = gDamage_hud;
-        BrMaterialUpdate(gStatbarHUD5_material, BR_MATU_COLOURMAP);
-    }
-
-    if (gNet_mode == eNet_mode_none) {
+    BrMapUpdate(gDamage_hud, BR_MAPU_ALL);
+    gStatbarHUD5_material->colour_map = gDamage_hud;
+    BrMaterialUpdate(gStatbarHUD5_material, BR_MATU_COLOURMAP);
+headup_material_done:
+    if (gNet_mode != eNet_mode_none) {
+        if (gHeadup_detail_level % 3 > 0) {
+            BrMatrix34Translate(&gStatbarHUD5_actor->t.t.mat, -448.f, 0.f, 0.f);
+            RenderThisHeadup(gStatbarHUD5_actor);
+            RenderThisHeadup(gStatbarHUD1_actor);
+            if (gHeadup_detail_level % 3 > 1) {
+                BrMatrix34Translate(&gArmour_actor->t.t.mat, 48.f, 35.f, 0.f);
+                BrMatrix34Translate(&gPower_actor->t.t.mat, -102.f, 5.f, 0.f);
+                BrMatrix34Translate(&gOffense_actor->t.t.mat, -252.f, -25.f, 0.f);
+                RenderThisHeadup(gArmour_actor);
+                RenderThisHeadup(gPower_actor);
+                RenderThisHeadup(gOffense_actor);
+            }
+        }
+        if (gHeadup_detail_level > 2) {
+            RenderThisHeadup(gHeadup_actor);
+        }
+    } else {
         BrMatrix34Translate(&gArmour_actor->t.t.mat, 0.f, 0.f, 0.f);
         BrMatrix34Translate(&gPower_actor->t.t.mat, 0.f, 0.f, 0.f);
         BrMatrix34Translate(&gOffense_actor->t.t.mat, 0.f, 0.f, 0.f);
@@ -462,22 +469,58 @@ void C2_HOOK_FASTCALL DoTestHeadup(void) {
                 PolyFontText(gHeadup_oppo_ped_text, 335, 50, kPolyfont_ingame_medium_blue, eJust_centre, 0);
             }
         }
-    } else {
-        if (gHeadup_detail_level % 3 > 0) {
-            BrMatrix34Translate(&gStatbarHUD5_actor->t.t.mat, -448.f, 0.f, 0.f);
-            RenderThisHeadup(gStatbarHUD5_actor);
-            RenderThisHeadup(gStatbarHUD1_actor);
-            if (gHeadup_detail_level % 3 > 1) {
-                BrMatrix34Translate(&gArmour_actor->t.t.mat, 48.f, 35.f, 0.f);
-                BrMatrix34Translate(&gPower_actor->t.t.mat, -102.f, 5.f, 0.f);
-                BrMatrix34Translate(&gOffense_actor->t.t.mat, -252.f, -25.f, 0.f);
-                RenderThisHeadup(gArmour_actor);
-                RenderThisHeadup(gPower_actor);
-                RenderThisHeadup(gOffense_actor);
-            }
+        if (gHeadup_detail_level > 2) {
+            RenderThisHeadup(gHeadup_actor);
         }
     }
-    if (gHeadup_detail_level > 2) {
-        RenderThisHeadup(gHeadup_actor);
+}
+
+// GLOBAL: CARMA2_HW 0x0074cf90
+br_pixelmap* gDAT_0074cf90;
+// GLOBAL: CARMA2_HW 0x0074ca08
+br_pixelmap* gDAT_0074ca08;
+// GLOBAL: CARMA2_HW 0x0074cf7c
+br_pixelmap* gDAT_0074cf7c;
+// GLOBAL: CARMA2_HW 0x0074ca2c
+br_pixelmap* gDAT_0074ca2c;
+// GLOBAL: CARMA2_HW 0x0074ca48
+br_pixelmap* gDAT_0074ca48;
+// GLOBAL: CARMA2_HW 0x0074ca74
+br_pixelmap* gDAT_0074ca74;
+
+// FUNCTION: CARMA2_HW 0x0044b980
+br_pixelmap* C2_HOOK_FASTCALL FUN_0044b980(int pIndex) {
+    switch (pIndex) {
+    case 0:
+        return gBack_screen;
+    case 1:
+        return gCurrent_rev;
+    case 3:
+        return gDAT_0074cf90;
+    case 5:
+        return gDamage_hud;
+    case 6:
+        return gDAT_0074ca08;
+    case 7:
+        return gTimer_lhs;
+    case 8:
+        return gHud_timer_rhs;
+    case 9:
+        return gDAT_0074cf7c;
+    case 10:
+        return gDAT_0074ca2c;
+    case 11:
+        return gDAT_0074ca48;
+    case 12:
+        return gDAT_0074ca74;
     }
+}
+
+// FUNCTION: CARMA2_HW 0x0044ba10
+void C2_HOOK_FASTCALL DisplayTimedMessage(char* pText) {
+    LoadFont(1);
+    ClearEntireScreen();
+    DRPixelmapText(gBack_screen, 20, 50, &gFonts[1], pText, 600);
+    PDScreenBufferSwap(0);
+    WaitFor(500);
 }

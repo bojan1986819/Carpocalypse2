@@ -3,6 +3,9 @@
 #include "lightmac.h"
 #include "setup.h"
 
+// GLOBAL: CARMA2_HW 0x0058c984
+const br_scalar gFLOAT_0058c984 = 2.384185791015625e-7f;
+
 // FUNCTION: CARMA2_HW 0x0054a230
 void C2_HOOK_CDECL SurfaceIndexZero(br_soft_renderer* self, br_vector3* p, br_vector2* map, br_vector3* n, br_colour colour, br_scalar* comp) {
 
@@ -154,6 +157,7 @@ void C2_HOOK_STDCALL lightingIndexLocal2(br_soft_renderer* self, br_vector3* p, 
     }
 }
 
+// C2PORT-NONMATCHING: best 42.67% | difftest PASS 2000 trials (spec difftest/specs/0054ab70_lightingIndexPointAttn.json) | reason x87 scheduling and renderer stack layout
 // FUNCTION: CARMA2_HW 0x0054ab70
 void C2_HOOK_STDCALL lightingIndexPointAttn(br_soft_renderer* self, br_vector3* p, br_vector3* n, active_light* alp, br_scalar* comp) {
     br_scalar attn, dot, l, dist, dist2;
@@ -161,7 +165,7 @@ void C2_HOOK_STDCALL lightingIndexPointAttn(br_soft_renderer* self, br_vector3* 
 
 	BrVector3Sub(&dirn, &alp->position, p);
     dist = BrVector3Length(&dirn);
-    if (dist <= BR_SCALAR_EPSILON) {
+    if (dist <= gFLOAT_0058c984) {
         return;
     }
     dist2 = dist < 180.f ? dist * dist : 32767.f;

@@ -176,6 +176,7 @@ br_scalar C2_HOOK_CDECL BrVector3Dot(br_vector3* v1, const br_vector3* v2) {
     return BR_MAC3(v2->v[1], v1->v[1], v2->v[2], v1->v[2], v2->v[0], v1->v[0]);
 }
 
+// C2PORT-NONMATCHING: best 24.49% | difftest PASS 2000 trials (spec 005346f0_BrVector3Cross.json) | reason VC5 schedules x87 cross-product operands differently
 // FUNCTION: CARMA2_HW 0x005346f0
 void C2_HOOK_CDECL BrVector3Cross(br_vector3* v1, const br_vector3* v2, const br_vector3* v3) {
 

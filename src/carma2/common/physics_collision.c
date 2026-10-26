@@ -12,9 +12,8 @@
 
 // SetCollisionInfoChildsDoNothing
 
-/* MSVC5 has no __declspec(noinline); keep the SetCollisionInfoDoNothing call out-of-line. */
+/* Keep the recursive helper out of line, as in retail/upstream. */
 #pragma inline_depth(0)
-
 // FUNCTION: CARMA2_HW 0x004b9e40
 void C2_HOOK_FASTCALL SetCollisionInfoDoNothingChain(tPhysics_object *pCollision_info, tU32 pDisable) {
     tPhysics_object *cur;
@@ -39,7 +38,6 @@ void C2_HOOK_FASTCALL SetCollisionInfoDoNothingChain(tPhysics_object *pCollision
         cur = cur->field183_0x1d8;
     } while (cur != NULL && cur != pCollision_info);
 }
-
 #pragma inline_depth(1)
 
 // FUNCTION: CARMA2_HW 0x004b9eb0

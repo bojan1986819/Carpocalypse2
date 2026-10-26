@@ -13,3 +13,5 @@
 #include "carpocalypse2_macros.h"
 // GLOBAL: CARMA2_HW 0x006b75e0
 int gTimers_stack[19];
+
+/* Rebuild after the Timers_Pop stack index correction. */

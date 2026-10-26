@@ -1,3 +1,6 @@
+#ifndef CARPOCALYPSE2_MATCHING
+#include "loadprof.h"
+#endif
 #include "mainloop.h"
 
 #include "car.h"
@@ -7,6 +10,7 @@
 #include "displays.h"
 #include "drmem.h"
 #include "drone.h"
+#include "errors.h"
 #include "explosions.h"
 #include "flicplay.h"
 #include "globvars.h"
@@ -39,7 +43,17 @@
 #include "world.h"
 
 #include "carpocalypse2_macros.h"
+#ifdef __vita__
+#include "sdl3/vita_perf.h"
+#endif
 #include "mainloop.h"
+
+#ifdef CARPOCALYPSE2_MATCHING
+#include <windows.h>
+
+extern br_size_t gPage_size;
+extern SYSTEM_INFO gSystem_info;
+#endif
 // GLOBAL: CARMA2_HW 0x0068c814
 tU32 gOld_camera_time;
 
@@ -125,6 +139,288 @@ tU32 gNet_auto_increase_credits_dt[8];
 // GLOBAL: CARMA2_HW 0x0079eb00
 char gHeadup_oppo_ped_text[64];
 
+#ifndef CARPOCALYPSE2_MATCHING
+/* Opt-in snapshots for long-play traffic/non-car motion comparisons. */
+static void LogNonVehiclePhysics(void) {
+    static tU32 last_time;
+    static int have_time;
+    tU32 now = gTime_stamp_for_this_munging;
+    tPhysics_object* object;
+    static tU32 wall_start;
+    static tU32 frame_count;
+    tU32 wall_now;
+    tU32 wall_elapsed;
+    int passive_peds = 0;
+    int active_peds = 0;
+    int i;
+    if (getenv("C2_OBJLOG") == NULL) return;
+    wall_now = PDGetTotalTime();
+    if (!have_time) wall_start = wall_now;
+    frame_count++;
+    if (have_time && now - last_time < 1000) return;
+    wall_elapsed = wall_now - wall_start;
+    dr_dprintf("PEDTIMING frames=%u wall_ms=%u loop_fps=%.3f engine_frame_ms=%u",
+        frame_count, wall_elapsed, wall_elapsed != 0 ? frame_count * 1000.0 / wall_elapsed : 0.0,
+        gFrame_period_for_this_munging);
+    frame_count = 0;
+    wall_start = wall_now;
+    for (i = 0; i < gPed_count; i++) {
+        tPedestrian* ped = &gPedestrian_array[i];
+        tPed_character_instance* character = ped->character;
+        tPHIL_queued_header* info;
+        if (character == NULL || !(character->field_0x14 & 1) || (character->field_0x14 & 4)
+                || character->field_0x4 < 0 || ped->hit_points <= 0
+                || (ped->action != ePed_action_walking && ped->action != ePed_action_running)) continue;
+        object = character->personality->form->simple_physicing[character->field_0x5].collision_info;
+        info = object != NULL ? object->field_0x240 : NULL;
+        if (info != NULL && info->field_0x8 == 1) passive_peds++;
+        if (info != NULL && info->field_0x8 == 2) active_peds++;
+    }
+    dr_dprintf("PEDOWNERS passive=%d active=%d", passive_peds, active_peds);
+    have_time = 1;
+    last_time = now;
+    dr_dprintf("OBJFRAME time=%u tick=%u frame_ms=%u gravity=%.6g", now,
+        gPHIL_last_physics_tick, gFrame_period_for_this_munging, gGravity_multiplier);
+    for (object = gList_collision_infos; object != NULL; object = object->next) {
+        tPHIL_queued_header* info = object->field_0x240;
+        br_matrix34* mat = &object->transform_matrix;
+        if (object->flags_0x238 == 1 || object->actor == NULL) continue;
+        dr_dprintf("OBJLOG %p type=%u owner=%p state=%d halted=%u flags=%x M=%.7g I=%.7g,%.7g,%.7g v=%.7g,%.7g,%.7g omega=%.7g,%.7g,%.7g pos=%.7g,%.7g,%.7g basis=%.7g,%.7g,%.7g grav=%.7g drag=%.7g", object,
+            object->flags_0x238, object->owner, info != NULL ? info->field_0x8 : -1,
+            object->disable_move_rotate, object->flags, object->M, object->I.v[0], object->I.v[1], object->I.v[2],
+            object->v.v[0], object->v.v[1], object->v.v[2], object->omega.v[0], object->omega.v[1], object->omega.v[2],
+            mat->m[3][0], mat->m[3][1], mat->m[3][2],
+            BrVector3LengthSquared((br_vector3*)mat->m[0]), BrVector3LengthSquared((br_vector3*)mat->m[1]), BrVector3LengthSquared((br_vector3*)mat->m[2]),
+            info != NULL ? info->field_0x10 : 0.f, info != NULL ? info->field_0xc : 0.f);
+    }
+    for (i = 0; i < gCount_drones; ++i) {
+        tDrone_spec* drone = &gDrone_specs[i];
+        if (drone->actor == NULL || drone->current_state == 5) continue;
+        dr_dprintf("DRONELOG id=%d object=%p state=%d last=%u dt=%.7g path_v=%.7g,%.7g,%.7g pos=%.7g,%.7g,%.7g", drone->id,
+            &drone->collision_info, drone->current_state, drone->time_last_munge, gDrone_delta_time,
+            drone->field_0x18.v[0], drone->field_0x18.v[1], drone->field_0x18.v[2],
+            drone->actor->t.t.mat.m[3][0], drone->actor->t.t.mat.m[3][1], drone->actor->t.t.mat.m[3][2]);
+    }
+}
+
+/* Test harness: C2_TEST_SMASH=n puts the player car ~2 units in front of smashable race target n,
+ * facing it, two seconds into the race (hold accelerate with C2_TEST_KEYS to ram it). */
+static float gC2_test_smash_height = .3f;
+/* C2_TEST_SMASH=m:<prefix>: first track face whose material identifier starts with <prefix> */
+static int gC2_test_face_skip; /* matches to skip (C2_TEST_SMASH=m:prefix,dist,height,index) */
+static int TestFindMaterialFace(br_actor* pActor, const char* pPrefix, br_vector3* pCentre, br_vector3* pNormal) {
+    br_actor* child;
+    if (pActor->model != NULL && pActor->model->faces != NULL) {
+        br_model* model = pActor->model;
+        int f;
+        for (f = 0; f < model->nfaces; f++) {
+            br_material* mat = model->faces[f].material;
+            if (mat != NULL && mat->identifier != NULL && strncmp(mat->identifier, pPrefix, strlen(pPrefix)) == 0) {
+                br_matrix34 to_world;
+                if (gC2_test_face_skip > 0) {
+                    /* skip the rest of this model: count one match per model */
+                    gC2_test_face_skip--;
+                    break;
+                }
+                br_vector3 c, a, b, n;
+                br_vertex* v = model->vertices;
+                br_face* face = &model->faces[f];
+                BrVector3Add(&c, &v[face->vertices[0]].p, &v[face->vertices[1]].p);
+                BrVector3Accumulate(&c, &v[face->vertices[2]].p);
+                BrVector3InvScale(&c, &c, 3.f);
+                BrVector3Sub(&a, &v[face->vertices[1]].p, &v[face->vertices[0]].p);
+                BrVector3Sub(&b, &v[face->vertices[2]].p, &v[face->vertices[0]].p);
+                BrVector3Cross(&n, &a, &b);
+                BrActorToActorMatrix34(&to_world, pActor, gUniverse_actor);
+                BrMatrix34ApplyP(pCentre, &c, &to_world);
+                BrMatrix34ApplyV(pNormal, &n, &to_world);
+                dr_dprintf("C2_TEST_SMASH material face %s actor=%s centre=%.2f,%.2f,%.2f normal=%.2f,%.2f,%.2f",
+                    mat->identifier, pActor->identifier ? pActor->identifier : "?",
+                    pCentre->v[0], pCentre->v[1], pCentre->v[2], pNormal->v[0], pNormal->v[1], pNormal->v[2]);
+                return 1;
+            }
+        }
+    }
+    /* prepared track models keep only groups: group->stored is the material's stored state */
+    if (pActor->model != NULL && pActor->model->prepared != NULL) {
+        v11model* prepared = pActor->model->prepared;
+        int g, i;
+        for (g = 0; g < prepared->ngroups; g++) {
+            v11group* group = &prepared->groups[g];
+            for (i = 0; i < gCount_track_smashable_environment_specs; i++) {
+                tSmashable_item_spec* spec = &gTrack_smashable_environment_specs[i];
+                br_material* mat;
+                if (spec->trigger_type != kSmashableTrigger_Material) continue;
+                mat = spec->trigger_object.material;
+                if (mat == NULL || mat->identifier == NULL || strncmp(mat->identifier, pPrefix, strlen(pPrefix)) != 0) continue;
+                if (group->stored == NULL || group->stored != mat->stored || group->nfaces == 0) continue;
+                if (gC2_test_face_skip-- > 0) continue;
+                {
+                    br_matrix34 to_world;
+                    br_vector3 c;
+                    v11face* face = &group->faces[0];
+                    BrVector3Add(&c, &group->vertices[face->vertices[0]].p, &group->vertices[face->vertices[1]].p);
+                    BrVector3Accumulate(&c, &group->vertices[face->vertices[2]].p);
+                    BrVector3InvScale(&c, &c, 3.f);
+                    BrActorToActorMatrix34(&to_world, pActor, gUniverse_actor);
+                    BrMatrix34ApplyP(pCentre, &c, &to_world);
+                    BrMatrix34ApplyV(pNormal, (br_vector3*)&face->eqn, &to_world);
+                    dr_dprintf("C2_TEST_SMASH prepared face %s actor=%s faces=%d centre=%.2f,%.2f,%.2f normal=%.2f,%.2f,%.2f",
+                        mat->identifier, pActor->identifier ? pActor->identifier : "?", group->nfaces,
+                        pCentre->v[0], pCentre->v[1], pCentre->v[2], pNormal->v[0], pNormal->v[1], pNormal->v[2]);
+                    return 1;
+                }
+            }
+        }
+    }
+    for (child = pActor->children; child != NULL; child = child->next) {
+        if (TestFindMaterialFace(child, pPrefix, pCentre, pNormal)) return 1;
+    }
+    return 0;
+}
+static void TestPlaceAtSmashTarget(void) {
+    static int done;
+    const char* e;
+    int n;
+    br_matrix34 target_mat, m;
+    br_vector3 t, d;
+    tCar_spec* car = &gProgram_state.current_car;
+
+    static tU32 go_time;
+    static char spec_buf[128];
+    static int stage;
+    if (done || (e = getenv("C2_TEST_SMASH")) == NULL) return;
+    if (gCountdown != 0 || go_time == 0) { if (gCountdown == 0) go_time = PDGetTotalTime(); else go_time = 0; return; }
+    /* "first;second": the second placement follows 6 s after the first */
+    if (PDGetTotalTime() - go_time < (stage == 0 ? 500u : 6500u)) return;
+    {
+        const char* semi = strchr(e, ';');
+        if (stage == 0) {
+            size_t len = semi != NULL ? (size_t)(semi - e) : strlen(e);
+            if (len >= sizeof(spec_buf)) len = sizeof(spec_buf) - 1;
+            memcpy(spec_buf, e, len);
+            spec_buf[len] = 0;
+            stage = 1;
+            done = semi == NULL;
+        } else {
+            strncpy(spec_buf, semi + 1, sizeof(spec_buf) - 1);
+            done = 1;
+        }
+        e = spec_buf;
+    }
+    n = atoi(e);
+    dr_dprintf("C2_TEST_SMASH targets=%d", gCount_smashable_race_targets);
+    for (n = 0; n < gCount_smashable_race_targets; n++) {
+        br_actor* a = gSmashable_race_targets[n].actor;
+        BrActorToActorMatrix34(&target_mat, a, gUniverse_actor);
+        dr_dprintf("C2_TEST_SMASH target %d actor=%s model=%s pos=%.2f,%.2f,%.2f", n,
+            a->identifier ? a->identifier : "?", a->model && a->model->identifier ? a->model->identifier : "?",
+            target_mat.m[3][0], target_mat.m[3][1], target_mat.m[3][2]);
+    }
+    if (e[0] == 'm' && e[1] == ':') {
+        /* C2_TEST_SMASH=m:<prefix>[,dist,height]: approach the face along its normal */
+        char prefix[32];
+        br_vector3 normal;
+        float dist = 5.f, height = .3f, len;
+        const char* c = strchr(e, ',');
+        size_t plen = c != NULL ? (size_t)(c - (e + 2)) : strlen(e + 2);
+        if (plen >= sizeof(prefix)) plen = sizeof(prefix) - 1;
+        memcpy(prefix, e + 2, plen);
+        prefix[plen] = '\0';
+        gC2_test_face_skip = 0;
+        if (c != NULL) sscanf(c + 1, "%f,%f,%d", &dist, &height, &gC2_test_face_skip);
+        if (!TestFindMaterialFace(gUniverse_actor, prefix, &t, &normal)) {
+            int i;
+            dr_dprintf("C2_TEST_SMASH no face with material %s", prefix);
+            for (i = 0; i < gCount_track_smashable_environment_specs; i++) {
+                tSmashable_item_spec* spec = &gTrack_smashable_environment_specs[i];
+                if (spec->trigger_type == kSmashableTrigger_Material && spec->trigger_object.material != NULL)
+                    dr_dprintf("C2_TEST_SMASH spec %d material=%.11s stored=%p", i,
+                        spec->trigger_object.material->identifier ? spec->trigger_object.material->identifier : "?",
+                        (void*)spec->trigger_object.material->stored);
+            }
+            return;
+        }
+        len = sqrtf(normal.v[0] * normal.v[0] + normal.v[2] * normal.v[2]);
+        if (len < 1e-6f) return;
+        gC2_test_smash_height = height;
+        BrVector3Set(&d, normal.v[0] / len * dist / 2.f, 0.f, normal.v[2] / len * dist / 2.f);
+        t.v[1] -= .3f; /* face centre is above the ground */
+        goto place;
+    }
+    n = atoi(e);
+    if (n < 0 || n >= gCount_smashable_race_targets) return;
+    BrActorToActorMatrix34(&target_mat, gSmashable_race_targets[n].actor, gUniverse_actor);
+    BrVector3Copy(&t, (br_vector3*)target_mat.m[3]);
+    { /* C2_TEST_SMASH=n[,dx,dz[,dist]]: approach direction (default +x) */
+        float dx = 1.f, dz = 0.f, dist = 2.f, height = .3f, len;
+        const char* c = strchr(e, ',');
+        if (c != NULL) sscanf(c + 1, "%f,%f,%f,%f", &dx, &dz, &dist, &height);
+        gC2_test_smash_height = height;
+        len = sqrtf(dx * dx + dz * dz);
+        if (len < 1e-3f) { dx = 1.f; dz = 0.f; len = 1.f; }
+        BrVector3Set(&d, dx / len * dist / 2.f, 0.f, dz / len * dist / 2.f);
+    }
+place:
+    BrMatrix34Identity(&m);
+    /* car forward is -z: z axis = d */
+    {
+        float l = sqrtf(d.v[0] * d.v[0] + d.v[2] * d.v[2]);
+        m.m[2][0] = d.v[0] / l; m.m[2][1] = 0.f; m.m[2][2] = d.v[2] / l;
+        m.m[0][0] = d.v[2] / l; m.m[0][1] = 0.f; m.m[0][2] = -d.v[0] / l;
+    }
+    m.m[3][0] = t.v[0] + 2.f * d.v[0];
+    m.m[3][1] = t.v[1] + gC2_test_smash_height;
+    m.m[3][2] = t.v[2] + 2.f * d.v[2];
+    for (n = 0; n < (int)CARPOCALYPSE2_ASIZE(car->last_safe_positions); n++) {
+        BrMatrix34Copy(&car->last_safe_positions[n], &m);
+    }
+    FlipUpCar(car);
+    dr_dprintf("C2_TEST_SMASH placed car at %.2f,%.2f,%.2f", car->car_master_actor->t.t.translate.t.v[0],
+        car->car_master_actor->t.t.translate.t.v[1], car->car_master_actor->t.t.translate.t.v[2]);
+}
+
+/* First twelve seconds only, for countdown/start-grid investigations. */
+static void LogRaceStart(void) {
+    static tU32 previous_start, previous_sample;
+    static int have_start, previous_countdown;
+    tU32 now, age;
+    tCar_spec* player = &gProgram_state.current_car;
+    int i;
+    if (getenv("C2_OBJLOG") == NULL) return;
+    now = PDGetTotalTime();
+    age = now - gRace_start;
+    if (age > 12000) return;
+    if (have_start && previous_start == gRace_start
+            && now - previous_sample < 500 && previous_countdown == gCountdown) return;
+    have_start = 1; previous_start = gRace_start;
+    previous_sample = now; previous_countdown = gCountdown;
+    dr_dprintf("RACESTART age=%u wall=%u ai=%u frame=%u count=%d ack=%d jump=%d",
+        age, now, gTime_stamp_for_this_munging, gFrame_period_for_this_munging,
+        gCountdown, gAcknowledged_start, gStart_jumped);
+    dr_dprintf("RACEPLAYER acc_key=%d up=%d down=%d gear=%d acc=%.7g brake=%.7g",
+        player->keys.acc, player->keys.change_up, player->keys.change_down,
+        player->gear, player->acc_force, player->brake_force);
+    for (i = 0; i < gProgram_state.AI_vehicles.number_of_opponents; ++i) {
+        tOpponent_spec* opponent = &gProgram_state.AI_vehicles.opponents[i];
+        tCar_spec* car = opponent->car_spec;
+        tPhysics_object* body;
+        if (car == NULL || car->collision_info == NULL || car->car_master_actor == NULL) continue;
+        body = car->collision_info;
+        dr_dprintf("RACEGRID slot=%d id=%d name=%.24s rank=%d stun=%u objective=%d physics=%d cheat=%d",
+            i, opponent->index, car->driver_name, gOpponents[opponent->index].strength_rating,
+            opponent->stun_time_ends, opponent->current_objective, opponent->physics_me, opponent->cheating);
+        dr_dprintf("RACEFORCE slot=%d acc=%.7g brake=%.7g M=%.7g v=%.7g,%.7g,%.7g pos=%.7g,%.7g,%.7g",
+            i, car->acc_force, car->brake_force, body->M, body->v.v[0], body->v.v[1], body->v.v[2],
+            car->car_master_actor->t.t.translate.t.v[0], car->car_master_actor->t.t.translate.t.v[1],
+            car->car_master_actor->t.t.translate.t.v[2]);
+    }
+}
+
+#endif
+
+// C2PORT-NONMATCHING: best 32.67% | difftest PASS 2000 trials (spec difftest/specs/00401170_MungeAIWorld.json) | reason timer-stack scheduling and register allocation
+// C2PORT-NONMATCHING: best 32.67% | difftest PASS 2000 trials (spec difftest/specs/00401170_MungeAIWorld.json) | reason timer-stack scheduling and register allocation
 // FUNCTION: CARMA2_HW 0x00401170
 void C2_HOOK_FASTCALL MungeAIWorld(tU32 pFrame_period) {
 
@@ -132,13 +428,46 @@ void C2_HOOK_FASTCALL MungeAIWorld(tU32 pFrame_period) {
     if (gTime_stamp_for_this_munging == 0) {
         gTime_stamp_for_this_munging = PDGetTotalTime();
     }
-    gDrone_delta_time = (float)pFrame_period / 1000.f;
+    gDrone_delta_time = (float)pFrame_period * 0.001f;
     gFrame_period_for_this_munging = pFrame_period;
     Timers_Push(TIMER_DRN);
     DoDronePerGameFrameStuff();
+#ifndef CARPOCALYPSE2_MATCHING
+    LogNonVehiclePhysics();
+#endif
     Timers_Pop(TIMER_DRN);
     Timers_Push(TIMER_OPP);
     MungeOpponents();
+#ifndef CARPOCALYPSE2_MATCHING
+    LogRaceStart();
+    TestPlaceAtSmashTarget();
+    {
+        /* heap-corruption tripwire (drmem.c), about once a second of game time */
+        extern void C2_HOOK_FASTCALL C2CheckRegistriesAt(const char* pTitle);
+        static tU32 last_registry_check;
+        if (gTime_stamp_for_this_munging - last_registry_check >= 1000) {
+            last_registry_check = gTime_stamp_for_this_munging;
+            C2CheckRegistriesAt("race frame");
+        }
+    }
+    if (getenv("C2_TEST_NAPALM") != NULL) {
+        /* harness: fire the ped flamethrower power-up's napalm bolt every 2 s (MungeNapalm check) */
+        extern int C2_HOOK_FASTCALL NapalmPedestrianNearCar(tCar_spec* car);
+        static tU32 last_napalm;
+        if (gTime_stamp_for_this_munging - last_napalm >= 2000) {
+            last_napalm = gTime_stamp_for_this_munging;
+            dr_dprintf("TEST NAPALM fired=%d", NapalmPedestrianNearCar(&gProgram_state.current_car));
+        }
+    }
+    if (getenv("C2_TEST_MAPVIEW") != NULL) {
+        /* harness: switch to the full-screen map once, C2_TEST_MAPVIEW seconds into the race */
+        static int map_toggled;
+        if (!map_toggled && gTime_stamp_for_this_munging - gRace_start >= (tU32)atoi(getenv("C2_TEST_MAPVIEW")) * 1000) {
+            map_toggled = 1;
+            ToggleMap();
+        }
+    }
+#endif
     Timers_Pop(TIMER_OPP);
     gFirst_drone_processing = 0;
     ProcessShitMines(gTime_stamp_for_this_munging);
@@ -162,6 +491,36 @@ void C2_HOOK_FASTCALL CalculateCameraStuff(tU32 pCamera_period) {
         ResetPedNearness();
     }
     BrVector3Copy(&gPrev_camera_position, (br_vector3*)gCamera_to_world.m[3]);
+}
+
+// FUNCTION: CARMA2_HW 0x00494210
+int C2_HOOK_FAKE_THISCALL FUN_00494210(int pStatus, undefined4 pArg2, undefined4 pArg3, undefined4 pArg4, int pFlag) {
+    (void)pArg2;
+    (void)pArg3;
+    (void)pArg4;
+    if (pFlag != 0) {
+        return -1;
+    }
+    switch (pStatus) {
+    case 1:
+        PreloadBunchOfFlics(4);
+        return pStatus;
+    case 2:
+        PreloadBunchOfFlics(5);
+        return pStatus;
+    case 3:
+        PreloadBunchOfFlics(1);
+        return pStatus;
+    case 4:
+        PreloadBunchOfFlics(3);
+        return pStatus;
+    case 5:
+        PreloadBunchOfFlics(2);
+        return pStatus;
+    case 7:
+        PreloadBunchOfFlics(7);
+    }
+    return pStatus;
 }
 
 void C2_HOOK_FASTCALL CheckActiveCarList(void) {
@@ -207,6 +566,25 @@ void C2_HOOK_FASTCALL CalculateFrameRate(void) {
     }
 }
 
+// FUNCTION: CARMA2_HW 0x00492840
+void C2_HOOK_FASTCALL FUN_00492840(void* pMemory, br_size_t pSize) {
+#ifdef CARPOCALYPSE2_MATCHING
+    br_size_t offset;
+
+    if (gPage_size == 0) {
+        GetSystemInfo(&gSystem_info);
+        gPage_size = gSystem_info.dwOemId;
+    }
+    for (offset = gPage_size << 4; offset < pSize; offset += gPage_size) {
+        *((volatile br_uint_8*)pMemory + (offset - 16 * gPage_size)) = *((volatile br_uint_8*)pMemory + (offset - 16 * gPage_size));
+        *((volatile br_uint_8*)pMemory + offset) = *((volatile br_uint_8*)pMemory + offset);
+    }
+#else
+    (void)pMemory;
+    (void)pSize;
+#endif
+}
+
 // FUNCTION: CARMA2_HW 0x00492980
 tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
     int tried_to_allocate_AR;
@@ -250,6 +628,9 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
     GetAverageGridPosition(&gCurrent_race);
     ForceRebuildActiveCarList();
     PrintMemoryDump(0, "ABOUT TO ENTER MAINLOOP");
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
     UpdateFramePeriod(&gCamera_period);
     BrVector3Set(&gPrev_camera_position, 1000.f, 1000.f, 1000.f);
     CalculateCameraStuff(gCamera_period);
@@ -271,10 +652,13 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
 
         Timers_StartFrame();
         EdgeTriggerModeOff();
-        if (!gPed_676914) {
+        if (!gAction_replay_mode) {
             UpdateFramePeriod(&gCamera_period);
         }
         frame_start_time = GetTotalTime();
+#ifdef __vita__
+        C2VitaPerfReset();
+#endif
         CyclePollKeys();
         InitSmashQueue();
         CheckSystemKeys(1);
@@ -309,22 +693,40 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
         }
         gWindow_inactive = window_inactive;
 
-        if (!gPed_676914) {
+        if (!gAction_replay_mode) {
+#ifdef __vita__
+            C2VitaPerfBegin(C2VP_AI);
+#endif
             MungeAIWorld(gFrame_period);
+#ifdef __vita__
+            C2VitaPerfEnd(C2VP_AI);
+#endif
             PollCarControls(gFrame_period);
         }
 
-        if (!gPed_676914) {
+        if (!gAction_replay_mode) {
             CheckActiveCarList();
 
             Timers_Push(TIMER_PED);
+#ifdef __vita__
+            C2VitaPerfBegin(C2VP_PED);
+#endif
             MungePedestrians();
+#ifdef __vita__
+            C2VitaPerfEnd(C2VP_PED);
+#endif
             Timers_Pop(TIMER_PED);
 
             ControlOurCar(gFrame_period);
 
             Timers_Push(TIMER_PHS);
+#ifdef __vita__
+            C2VitaPerfBegin(C2VP_PHYSICS);
+#endif
             ApplyPhysicsToCars(gLast_tick_count - gRace_start, gFrame_period);
+#ifdef __vita__
+            C2VitaPerfEnd(C2VP_PHYSICS);
+#endif
             Timers_Pop(TIMER_PHS);
 
             MungeSomeOtherCarGraphics();
@@ -344,10 +746,10 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
         MungeEngineNoise();
         CalculateCameraStuff(gCamera_period);
         MungeNapalm();
-        if (!gPed_676914) {
+        if (!gAction_replay_mode) {
             DoPowerupPeriodics(gFrame_period);
         }
-        if (!gPed_676914) {
+        if (!gAction_replay_mode) {
             CheckCheckpoints();
             MungeEnvironmentalSound();
         }
@@ -358,7 +760,7 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
         DoWheelDamage(gFrame_period);
         CalculateFrameRate();
         CameraBugFix(&gProgram_state.current_car, gCamera_period);
-        if (!gPed_676914) {
+        if (!gAction_replay_mode) {
             /* MungeHeadups() inlined to match retail codegen */
             {
             char the_text[256];
@@ -498,7 +900,7 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
                     ChangeHeadupText(gLaps_headup, the_text);
                 }
 
-                the_time = GetTotalTime() - gTime_bonus_state;
+                the_time = GetTotalTime() - gTime_bonus_start;
 
                 switch (gTime_bonus_state) {
                 case eTime_bonus_initial_pause:
@@ -587,7 +989,7 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
         }
         MungeDelayedSideEffects();
         MungeShrapnel(gFrame_period);
-        if (!gPed_676914) {
+        if (!gAction_replay_mode) {
             MungePowerupStuff(gFrame_period);
         }
         ChangeDepthEffect();
@@ -609,7 +1011,13 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
         }
         if (gWait_for_it == 0) {
             Timers_Force(TIMER_RQQ);
+#ifdef __vita__
+            C2VitaPerfBegin(C2VP_RENDER);
+#endif
             RenderAFrame(1);
+#ifdef __vita__
+            C2VitaPerfEnd(C2VP_RENDER);
+#endif
             Timers_Force(TIMER_OQQ);
         }
         DoComplexCarModels();
@@ -618,7 +1026,7 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
                 && gProgram_state.prog_status == eProg_game_ongoing
                 && gPalette_fade_time == 0
                 && (gNet_mode == eNet_mode_none
-                        || !gPed_676914
+                        || !gAction_replay_mode
                         || gProgram_state.current_car.car_master_actor->t.t.translate.t.v[0] < 500.f)) {
 
             EnsureRenderPalette();
@@ -628,7 +1036,7 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
         if (KeyIsDown(0) && !gEntering_message) {
 
             WaitForNoKeys();
-            if (!gPed_676914) {
+            if (!gAction_replay_mode) {
                 tU32 start_menu_time;
 
                 if (gMap_view == 2) {
@@ -645,12 +1053,12 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
                 ToggleReplay(NULL, NULL);
             }
         }
-        if (!gPed_676914) {
+        if (!gAction_replay_mode) {
             CheckTimer();
         } else {
             PollActionReplayControls(&gFrame_period, &gAverage_frame_period);
         }
-        if (!gPed_676914 && gKnobbled_frame_period != 0) {
+        if (!gAction_replay_mode && gKnobbled_frame_period != 0) {
             while (GetTotalTime() - frame_start_time < gKnobbled_frame_period) {
                 /* brr */
                 /* FIXME: replace with udelay */
@@ -667,6 +1075,9 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
             gAbandon_game = 0;
         }
         Timers_EndFrame();
+#ifdef __vita__
+        C2VitaPerfFinish();
+#endif
 
         if (gProgram_state.prog_status != eProg_game_ongoing) {
             break;
@@ -702,7 +1113,7 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
     if (gAbandon_game && gNet_mode == eNet_mode_host && gRace_over_reason < 8 ) { /* FIXME: 8 == eRace_over_count */
         NetFinishRace(gCurrent_net_game, eRace_over_abandoned);
     }
-    if (gPed_676914) {
+    if (gAction_replay_mode) {
         ToggleReplay(NULL, NULL);
     }
     if (gHost_abandon_game || gProgram_state.prog_status != eProg_game_ongoing) {
@@ -746,6 +1157,11 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
     return result;
 }
 
+// FUNCTION: CARMA2_HW 0x00492830
+tU32 C2_HOOK_FASTCALL GetLastTickCount(void) {
+    return gLast_tick_count;
+}
+
 // FUNCTION: CARMA2_HW 0x00492950
 tRace_result C2_HOOK_FASTCALL DoRace(void) {
     tRace_result result;
@@ -766,7 +1182,7 @@ void C2_HOOK_FASTCALL UpdateFramePeriod(tU32* pCamera_period) {
     tU32 new_camera_tick_count;
     int error;
 
-    if (gPed_676914) {
+    if (gAction_replay_mode) {
         tU32 last_tick_count;
 
         last_tick_count = gLast_tick_count;
@@ -788,9 +1204,13 @@ void C2_HOOK_FASTCALL UpdateFramePeriod(tU32* pCamera_period) {
         if (gFrame_period > 500 && new_tick_count - gRace_start > 2000) {
             gFrame_period = gAverage_frame_period / 10;
             gLast_tick_count = new_tick_count;
-            if (gNet_mode != eNet_mode_none && gNet_mode != eNet_mode_host) {
-                if (gNet_mode == eNet_mode_client) {
+            if (gNet_mode != eNet_mode_none) {
+                switch (gNet_mode) {
+                case eNet_mode_host:
+                    break;
+                case eNet_mode_client:
                     gProgram_state.current_car.collision_info->field_0x49c = 0;
+                    break;
                 }
             }
         }
@@ -799,16 +1219,16 @@ void C2_HOOK_FASTCALL UpdateFramePeriod(tU32* pCamera_period) {
             gFrame_period = gAverage_frame_period / 10;
         }
         new_period = gFrame_period + error;
-        if (new_period > 0) {
-            gFrame_period = new_period;
-        } else {
+        if (new_period <= 0) {
             gLast_tick_count = new_tick_count;
+        } else {
+            gFrame_period = new_period;
         }
         *pCamera_period = gFrame_period;
         gActual_last_tick_count = new_tick_count;
     }
     if (gFrame_period < 10) {
-        gLast_tick_count = 10;
+        gFrame_period = 10;
         gLast_tick_count = new_tick_count;
     } else if (gFrame_period > 1000) {
         gFrame_period = 1000;
@@ -816,7 +1236,7 @@ void C2_HOOK_FASTCALL UpdateFramePeriod(tU32* pCamera_period) {
     }
     if (*pCamera_period < 10) {
         *pCamera_period = 10;
-    } else if (*pCamera_period > 1000) {
+    } else if (*pCamera_period > 1000 && 0) {
         *pCamera_period = 1000;
     }
 }
@@ -950,3 +1370,6 @@ void C2_HOOK_FASTCALL QueueWastedMessage(int pIndex) {
 // MainGameLoop
 
 // DoRace
+
+
+/* Rebuild after the Timers_Pop stack index correction. */

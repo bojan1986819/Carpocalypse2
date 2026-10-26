@@ -1,5 +1,12 @@
 #include "../include/s3/internal/resource.h"
 
+extern int C2_HOOK_FASTCALL PDS3Return0_B(void);
+
+// FUNCTION: CARMA2_HW 0x00565aed
+void C2_HOOK_FASTCALL FUN_00565aed(void) {
+    PDS3Return0_B();
+}
+
 // FUNCTION: CARMA2_HW 0x00565af7
 void* C2_HOOK_FASTCALL S3MemAllocate(br_size_t size, br_uint_8 type) {
     void *result;
@@ -14,6 +21,7 @@ void C2_HOOK_FASTCALL S3MemFree(void* p) {
     BrMemFree(p);
 }
 
+// C2PORT-NONMATCHING: best 16.7% | difftest PASS 2000 trials (spec 005186f0_S3_low_memory_fopen.json) | reason compiler prologue/epilogue for unused fastcall args
 // FUNCTION: CARMA2_HW 0x005186f0
 FILE* C2_HOOK_FASTCALL S3_low_memory_fopen(const char* pPath, const char* pMode) {
     return NULL;

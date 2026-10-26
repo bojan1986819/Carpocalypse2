@@ -545,6 +545,7 @@ br_error C2_HOOK_CDECL _M_br_device_pixelmap_mem_doubleBufferDirty(br_device_pix
     return 0x1008;
 }
 
+// C2PORT-NONMATCHING: best 45.73% | difftest PASS 2000 trials (spec difftest/specs/0053a150_M_br_device_pixelmap_mem_rectangleCopyTo.json) | reason pointer arithmetic and compiler stack layout
 // FUNCTION: CARMA2_HW 0x0053a150
 br_error C2_HOOK_CDECL _M_br_device_pixelmap_mem_rectangleCopyTo(br_device_pixelmap* self, br_point* p, br_device_pixelmap* src, br_rectangle* r) {
     int bytes;
@@ -554,7 +555,7 @@ br_error C2_HOOK_CDECL _M_br_device_pixelmap_mem_rectangleCopyTo(br_device_pixel
     if (PixelmapRectangleClipTwo(&ar, &ap, r, p, (br_pixelmap*)self, (br_pixelmap*)src) == BR_CLIP_REJECT) {
         return 0;
     }
-    bytes = pmTypeInfo[self->pm_type].bits / 8;
+    bytes = pmTypeInfo[self->pm_type].bits >> 3;
     if (ar.w == self->pm_width) {
         if (self->pm_row_bytes == src->pm_row_bytes
             && (self->pm_flags & (BR_PMF_LINEAR | BR_PMF_ROW_WHOLEPIXELS)) == (BR_PMF_LINEAR | BR_PMF_ROW_WHOLEPIXELS)
@@ -580,32 +581,32 @@ br_error C2_HOOK_CDECL _M_br_device_pixelmap_mem_rectangleCopyTo(br_device_pixel
             }
         }
     }
-    if ((self->pm_row_bytes & 0x7) == 0) {
-        pm_mem_copy_colour_rowbyrow(
-            (br_uint_8*)self->pm_pixels + (self->pm_base_y + ap.y) * self->pm_row_bytes + (self->pm_base_x + ap.x) * bytes,
-            self->pm_pixels_qualifier,
-            (br_uint_8*)src->pm_pixels + (src->pm_base_y + ar.y) * src->pm_row_bytes + (src->pm_base_x + ar.x) * bytes,
-            src->pm_pixels_qualifier,
-            ar.w, ar.h,
-            self->pm_row_bytes, src->pm_row_bytes,
-            bytes);
-        return 0;
-    } else {
-        int i;
+    if ((src->pm_row_bytes & 0x7) != 0) {
+        br_uint_8 *d;
+        br_uint_8 *s;
+        br_uint_32 i;
 
+        d = (br_uint_8*)self->pm_pixels + (self->pm_base_y + ap.y) * self->pm_row_bytes + (self->pm_base_x + ap.x) * bytes;
+        s = (br_uint_8*)src->pm_pixels + (src->pm_base_y + ar.y) * src->pm_row_bytes + (src->pm_base_x + ar.x) * bytes;
         for (i = 0; i < ar.h; i++) {
-            pm_mem_copy_colour(
-                (br_uint_8*)self->pm_pixels + (self->pm_base_y + ap.y + i) * self->pm_row_bytes + (self->pm_base_x + ap.x) * bytes,
-                self->pm_pixels_qualifier,
-                (br_uint_8*)src->pm_pixels + (src->pm_base_y + ar.y + i) * src->pm_row_bytes + (src->pm_base_x + ar.x) * bytes,
-                self->pm_pixels_qualifier,
-                ar.w,
-                bytes);
+            pm_mem_copy_colour(d, self->pm_pixels_qualifier, s, src->pm_pixels_qualifier, ar.w, bytes);
+            d += self->pm_row_bytes;
+            s += src->pm_row_bytes;
         }
         return 0;
     }
+    pm_mem_copy_colour_rowbyrow(
+        (br_uint_8*)self->pm_pixels + (self->pm_base_y + ap.y) * self->pm_row_bytes + (self->pm_base_x + ap.x) * bytes,
+        self->pm_pixels_qualifier,
+        (br_uint_8*)src->pm_pixels + (src->pm_base_y + ar.y) * src->pm_row_bytes + (src->pm_base_x + ar.x) * bytes,
+        src->pm_pixels_qualifier,
+        ar.w, ar.h,
+        self->pm_row_bytes, src->pm_row_bytes,
+        bytes);
+    return 0;
 }
 
+// C2PORT-NONMATCHING: best 15.32% | difftest PASS 2000 trials (spec difftest/specs/0053a3f0_M_br_device_pixelmap_mem_rectangleCopyFrom.json) | reason pointer arithmetic and compiler stack layout
 // FUNCTION: CARMA2_HW 0x0053a3f0
 br_error C2_HOOK_CDECL _M_br_device_pixelmap_mem_rectangleCopyFrom(br_device_pixelmap* self, br_point* p, br_device_pixelmap* dest, br_rectangle* r) {
     int bytes;
@@ -795,7 +796,9 @@ br_error C2_HOOK_CDECL _M_br_device_pixelmap_mem_line(br_device_pixelmap* self, 
     sx = as.x < ae.x ? 1 : -1;
     dx = (ae.x - as.x) * sx;
     sy = as.y < ae.y ? 1 : -1;
-    dy = (ae.y - as.y) * sy;
+    /* Bresenham: dy is the negative absolute delta (a positive one broke every sloped line,
+     * e.g. the mini map's checkpoint/opponent direction lines) */
+    dy = -(ae.y - as.y) * sy;
     err = dx + dy;
 
     p.x = as.x;

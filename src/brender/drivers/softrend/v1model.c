@@ -128,6 +128,7 @@ void C2_HOOK_CDECL V1Face_CullOneSided(br_geometry* self, br_soft_renderer* rend
     }
 }
 
+// C2PORT-NONMATCHING: best 42.96% | difftest PASS 2000 trials (spec difftest/specs/005432b0_V1Face_CullOneSidedPerspective.json) | reason register-allocation-face-loop
 // FUNCTION: CARMA2_HW 0x005432b0
 void C2_HOOK_CDECL V1Face_CullOneSidedPerspective(br_geometry* self, br_soft_renderer* renderer) {
     int f;
@@ -155,6 +156,7 @@ void C2_HOOK_CDECL V1Face_CullOneSidedPerspective(br_geometry* self, br_soft_ren
     }
 }
 
+// C2PORT-NONMATCHING: best 42.96% | difftest PASS 2000 trials (spec difftest/specs/00543380_V1Face_CullOneSidedParallel.json) | reason register-allocation-face-loop
 // FUNCTION: CARMA2_HW 0x00543380
 void C2_HOOK_CDECL V1Face_CullOneSidedParallel(br_geometry* self, br_soft_renderer* renderer) {
     int f;
@@ -223,58 +225,66 @@ void C2_HOOK_CDECL V1Face_CullTwoSided(br_geometry* self, br_soft_renderer* rend
 void C2_HOOK_CDECL V1Face_CullTwoSidedPerspective(br_geometry* self, br_soft_renderer* renderer) {
     int f;
     int df;
-    temp_face_soft* tfp;
     v11face* fp;
+    unsigned char* flags;
 
-    for (f = 0; f < rend.nfaces; f++) {
-        tfp = &rend.temp_faces[f];
-        fp = &rend.faces[f];
-
-        tfp->flag = TFF_VISIBLE;
-        df = TVDIR_FRONT;
-
-        if (BrVector3Dot(&fp->eqn, &scache.eye_m) < fp->eqn.v[3]) {
-            tfp->flag |= TFF_REVERSED;
-            df = TVDIR_BACK;
-        }
-
-        rend.vertex_counts[fp->vertices[0]] += 1;
-        rend.vertex_counts[fp->vertices[1]] += 1;
-        rend.vertex_counts[fp->vertices[2]] += 1;
-
-        rend.temp_vertices[fp->vertices[0]].flags |= df;
-        rend.temp_vertices[fp->vertices[1]].flags |= df;
-        rend.temp_vertices[fp->vertices[2]].flags |= df;
+    f = 0;
+    if (rend.nfaces > 0) {
+        fp = rend.faces;
+        flags = (unsigned char*)rend.temp_faces + 2;
+        do {
+            *flags = TFF_VISIBLE;
+            df = TVDIR_FRONT;
+            if (BrVector3Dot(&fp->eqn, &scache.eye_m) < fp->eqn.v[3]) {
+                *flags |= TFF_REVERSED;
+                df = TVDIR_BACK;
+            }
+            rend.vertex_counts[fp->vertices[0]] += 1;
+            rend.vertex_counts[fp->vertices[1]] += 1;
+            rend.vertex_counts[fp->vertices[2]] += 1;
+            rend.temp_vertices[fp->vertices[0]].flags |= df;
+            rend.temp_vertices[fp->vertices[1]].flags |= df;
+            rend.temp_vertices[fp->vertices[2]].flags |= df;
+            fp++;
+            flags += 4;
+            f++;
+        } while (f < rend.nfaces);
     }
     rend.nvisible_faces = rend.nfaces;
 }
 
+// C2PORT-NONMATCHING: best 89.02% | difftest PASS 2000 trials (spec difftest/specs/005436b0_V1Face_CullTwoSidedParallel.json) | reason x87-order-register-allocation
 // FUNCTION: CARMA2_HW 0x005436b0
 void C2_HOOK_CDECL V1Face_CullTwoSidedParallel(br_geometry* self, br_soft_renderer* renderer) {
     int f;
     int df;
-    temp_face_soft* tfp;
     v11face* fp;
+    unsigned char* flags;
 
-    for (f = 0; f < rend.nfaces; f++) {
-        tfp = &rend.temp_faces[f];
-        fp = &rend.faces[f];
+    f = 0;
+    flags = (unsigned char*)rend.temp_faces + 2;
+    fp = rend.faces;
+    if (rend.nfaces > 0) {
+        do {
+            *flags = TFF_VISIBLE;
+            df = TVDIR_FRONT;
+            if (BrVector3Dot(&fp->eqn, &scache.eye_m) < 0.f) {
+                *flags = 5;
+                df = TVDIR_BACK;
+            }
 
-        tfp->flag = TFF_VISIBLE;
-        df = TVDIR_FRONT;
+            rend.vertex_counts[fp->vertices[0]] += 1;
+            rend.vertex_counts[fp->vertices[1]] += 1;
+            rend.vertex_counts[fp->vertices[2]] += 1;
 
-        if (BrVector3Dot(&fp->eqn, &scache.eye_m) < 0.f) {
-            tfp->flag |= TFF_REVERSED;
-            df = TVDIR_BACK;
-        }
+            rend.temp_vertices[fp->vertices[0]].flags |= df;
+            rend.temp_vertices[fp->vertices[1]].flags |= df;
+            rend.temp_vertices[fp->vertices[2]].flags |= df;
 
-        rend.vertex_counts[fp->vertices[0]] += 1;
-        rend.vertex_counts[fp->vertices[1]] += 1;
-        rend.vertex_counts[fp->vertices[2]] += 1;
-
-        rend.temp_vertices[fp->vertices[0]].flags |= df;
-        rend.temp_vertices[fp->vertices[1]].flags |= df;
-        rend.temp_vertices[fp->vertices[2]].flags |= df;
+            fp++;
+            flags += 4;
+            f++;
+        } while (f < rend.nfaces);
     }
     rend.nvisible_faces = rend.nfaces;
 }
@@ -295,6 +305,7 @@ void C2_HOOK_CDECL V1Face_OS_CullTwoSided(br_geometry* self, br_soft_renderer* r
     }
 }
 
+// C2PORT-NONMATCHING: best 41.29% | difftest PASS 2000 trials (spec difftest/specs/00543850_V1Face_Outcode.json) | reason VC5 loop layout and register allocation differ
 // FUNCTION: CARMA2_HW 0x00543850
 void C2_HOOK_CDECL V1Face_Outcode(br_geometry* self, br_soft_renderer* renderer) {
     int f;
@@ -335,15 +346,16 @@ void C2_HOOK_CDECL V1Face_Outcode(br_geometry* self, br_soft_renderer* renderer)
 
 // FUNCTION: CARMA2_HW 0x00543940
 void C2_HOOK_CDECL V1Face_Render(br_geometry* self, br_soft_renderer* renderer) {
+    brp_block* unclipped;
+    brp_block* clipped;
     int f;
-    temp_face_soft* tfp;
     v11face* fp;
-    brp_block* unclipped = renderer->state.cache.face_blocks_onscreen[renderer->state.cache.nface_blocks_onscreen].chain;
-    brp_block* clipped = renderer->state.cache.face_blocks[renderer->state.cache.nface_blocks].chain;
+    temp_face_soft* tfp;
 
-    for (f = 0; f < rend.nfaces; f++) {
-        tfp = &rend.temp_faces[f];
-        fp = &rend.faces[f];
+    unclipped = renderer->state.cache.face_blocks_onscreen[renderer->state.cache.nface_blocks_onscreen].chain;
+    clipped = renderer->state.cache.face_blocks[renderer->state.cache.nface_blocks].chain;
+
+    for (f = 0, fp = rend.faces, tfp = rend.temp_faces; f < rend.nfaces; f++, fp++, tfp++) {
 
         if (!(tfp->flag & TFF_VISIBLE)) {
             continue;

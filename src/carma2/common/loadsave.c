@@ -1,5 +1,6 @@
 #include "loadsave.h"
 
+#include "errors.h"
 #include "globvars.h"
 #include "globvrpb.h"
 #include "loading.h"
@@ -119,7 +120,7 @@ void C2_HOOK_FASTCALL MakeSavedGame(tSave_game* pSave_game) {
 }
 #include "carpocalypse2_types.h"
 
-static __inline void C2_HOOK_FASTCALL Encryptificate(tSave_game* pSave_games, int pCount) {
+void C2_HOOK_FASTCALL Encryptificate(tSave_game* pSave_games, int pCount) {
 
     C2_HOOK_BUG_ON(sizeof(tSave_game) != 0x328);
     SplungeSomeData(pSave_games, pCount * sizeof(tSave_game));
@@ -130,34 +131,60 @@ static __inline void C2_HOOK_FASTCALL Encryptificate(tSave_game* pSave_games, in
 
 // FUNCTION: CARMA2_HW 0x00491ac0
 void C2_HOOK_FASTCALL DoSaveGame(void) {
+#ifndef CARPOCALYPSE2_MATCHING
     tPath_name the_path;
     tSave_game save_game;
     FILE* f;
-    int i;
 
-    C2_HOOK_BUG_ON(sizeof(tSave_game) != 0x328);
+    C2_HOOK_BUG_ON(sizeof(save_game) != 0x328);
 
-    if (gNet_mode != eNet_mode_none) {
-        return;
+    if (gNet_mode == eNet_mode_none) {
+        PathCat(the_path, gApplication_path, "SAVEDGAMES.ARS");
+        PDFileUnlock(the_path);
+        f = DRfopen(the_path, "ab+");
+        dr_dprintf("DoSaveGame(): '%s' %s", the_path, f != NULL ? "opened" : "FAILED to open");
+        if (f != NULL) {
+            PFfseek(f, 0, SEEK_END);
+            gCurrent_APO_potential_levels[0] = gProgram_state.current_car.power_up_slots[0];
+            gCurrent_APO_potential_levels[1] = gProgram_state.current_car.power_up_slots[1];
+            gCurrent_APO_potential_levels[2] = gProgram_state.current_car.power_up_slots[2];
+            gCurrent_APO_levels[0] = gProgram_state.current_car.power_up_levels[0];
+            gCurrent_APO_levels[1] = gProgram_state.current_car.power_up_levels[1];
+            gCurrent_APO_levels[2] = gProgram_state.current_car.power_up_levels[2];
+            MakeSavedGame(&save_game);
+            Encryptificate(&save_game, 1);
+            PFfwrite(&save_game, 1, sizeof(save_game), f);
+            PFfclose(f);
+            gSave_game_out_of_sync = 0;
+        }
     }
-    PathCat(the_path, gApplication_path, "SAVEDGAMES.ARS");
-    PDFileUnlock(the_path);
-    f = DRfopen(the_path, "ab+");
-    if (f == NULL) {
-        return;
+#else
+    tPath_name the_path;
+    tSave_game save_game;
+    FILE* f;
+
+    C2_HOOK_BUG_ON(sizeof(save_game) != 0x328);
+
+    if (gNet_mode == eNet_mode_none) {
+        PathCat(the_path, gApplication_path, "SAVEDGAMES.ARS");
+        PDFileUnlock(the_path);
+        f = DRfopen(the_path, "ab+");
+        if (f != NULL) {
+            PFfseek(f, 0, SEEK_END);
+            gCurrent_APO_potential_levels[0] = gProgram_state.current_car.power_up_slots[0];
+            gCurrent_APO_potential_levels[1] = gProgram_state.current_car.power_up_slots[1];
+            gCurrent_APO_potential_levels[2] = gProgram_state.current_car.power_up_slots[2];
+            gCurrent_APO_levels[0] = gProgram_state.current_car.power_up_levels[0];
+            gCurrent_APO_levels[1] = gProgram_state.current_car.power_up_levels[1];
+            gCurrent_APO_levels[2] = gProgram_state.current_car.power_up_levels[2];
+            MakeSavedGame(&save_game);
+            Encryptificate(&save_game, 1);
+            PFfwrite(&save_game, 1, sizeof(save_game), f);
+            PFfclose(f);
+            gSave_game_out_of_sync = 0;
+        }
     }
-    PFfseek(f, 0, SEEK_END);
-    for (i = 0; i < 3; i++) {
-        gCurrent_APO_potential_levels[i] = gProgram_state.current_car.power_up_slots[i];
-    }
-    for (i = 0; i < 3; i++) {
-        gCurrent_APO_levels[i] = gProgram_state.current_car.power_up_levels[i];
-    }
-    MakeSavedGame(&save_game);
-    Encryptificate(&save_game, 1);
-    PFfwrite(&save_game, 1, sizeof(save_game), f);
-    PFfclose(f);
-    gSave_game_out_of_sync = 0;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00491bb0

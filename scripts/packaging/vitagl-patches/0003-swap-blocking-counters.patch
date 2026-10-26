@@ -1,0 +1,53 @@
+diff --git a/source/gxm.c b/source/gxm.c
+index 3894e19..ff8cd5a 100644
+--- a/source/gxm.c
++++ b/source/gxm.c
+@@ -761,6 +761,9 @@ void vglSetDisplayBufferCount(int count) {
+ 	gxm_display_buffer_count = count;
+ }
+ 
++/* C2 port: cumulative blocking time inside vglSwapBuffers, read by the game log. */
++uint32_t vgl_c2_swap_endscene_us, vgl_c2_swap_queue_us, vgl_c2_swap_gc_us;
++
+ void vglSwapBuffers(GLboolean has_commondialog) {
+ 	THREAD_SAFE()
+ 
+@@ -825,8 +828,11 @@ void vglSwapBuffers(GLboolean has_commondialog) {
+ 	dirty_shader_vert_unifs = GL_TRUE;
+ 	needs_end_scene = GL_FALSE;
+ 
+-	if (!needs_scene_reset)
++	if (!needs_scene_reset) {
++		uint32_t c2_t0 = sceKernelGetProcessTimeLow();
+ 		scene_end();
++		vgl_c2_swap_endscene_us += sceKernelGetProcessTimeLow() - c2_t0;
++	}
+ 
+ 	if (vgl_has_cdlg_support && has_commondialog) {
+ 		// Performing commondialog update
+@@ -944,7 +950,11 @@ void vglSwapBuffers(GLboolean has_commondialog) {
+ #ifdef HAVE_PROFILING
+ 		tick = sceKernelGetProcessTimeLow();
+ #endif
+-		sceGxmDisplayQueueAddEntry(gxm_sync_objects[gxm_front_buffer_index], gxm_sync_objects[gxm_back_buffer_index], &queue_cb_data);
++		{
++			uint32_t c2_t0 = sceKernelGetProcessTimeLow();
++			sceGxmDisplayQueueAddEntry(gxm_sync_objects[gxm_front_buffer_index], gxm_sync_objects[gxm_back_buffer_index], &queue_cb_data);
++			vgl_c2_swap_queue_us += sceKernelGetProcessTimeLow() - c2_t0;
++		}
+ #ifdef HAVE_PROFILING
+ 		gpu_stall_cnt += sceKernelGetProcessTimeLow() - tick;
+ #endif
+@@ -981,7 +991,11 @@ void vglSwapBuffers(GLboolean has_commondialog) {
+ #ifdef HAVE_SINGLE_THREADED_GC
+ 	garbage_collector(0, NULL);
+ #else
+-	sceKernelWaitSema(gc_mutex[1], 1, NULL);
++	{
++		uint32_t c2_t0 = sceKernelGetProcessTimeLow();
++		sceKernelWaitSema(gc_mutex[1], 1, NULL);
++		vgl_c2_swap_gc_us += sceKernelGetProcessTimeLow() - c2_t0;
++	}
+ 	sceKernelSignalSema(gc_mutex[0], 1);
+ #endif
+ }

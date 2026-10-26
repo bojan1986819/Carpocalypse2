@@ -6,6 +6,8 @@
 
 #include "c2_hooks.h"
 
+extern int gMaterials_to_adapt_count;
+
 void C2_HOOK_FASTCALL InitFogificateMaterials(void);
 
 br_material* C2_HOOK_FASTCALL LoadTemporaryMaterial(const char* pName);
@@ -16,7 +18,7 @@ void C2_HOOK_FASTCALL EnableAutoFogification(void);
 
 void C2_HOOK_FASTCALL DisableAutoFogification(void);
 
-void C2_HOOK_FASTCALL AutoFogificateMaterials(tRendererShadingType pShading_type);
+void C2_HOOK_FASTCALL AdaptCachedMaterials(tRendererShadingType pShading_type);
 
 void C2_HOOK_FASTCALL FogificateMaterials(tRendererShadingType pShading_type);
 

@@ -12,6 +12,8 @@ extern int gKey_mapping[77];
 
 extern void C2_HOOK_FASTCALL PollKeys(void);
 
+extern void C2_HOOK_FASTCALL InputNoOp(void);
+
 // CyclePollKeys
 
 // ResetPollKeys
@@ -40,17 +42,21 @@ extern int C2_HOOK_FASTCALL KeyIsDown(int pKey_index);
 
 extern void C2_HOOK_FASTCALL WaitForNoKeys(void);
 
+extern void C2_HOOK_FASTCALL FUN_004835d0(void);
+
 extern void C2_HOOK_FASTCALL GetMousePosition(int *pX, int *pY);
 
 extern void C2_HOOK_FASTCALL InitRollingLetters(void);
 
 extern void C2_HOOK_FASTCALL EndRollingLetters(void);
 
+extern void C2_HOOK_FASTCALL AddRollingString(char* pText, int pX, int pY, tRolling_type pRolling_type);
+
+extern void C2_HOOK_FASTCALL AddRollingNumber(tU32 pNumber, int pWidth, int pX, int pY);
+
 // AddRollingLetter
 
 // ChangeCharTo
-
-extern void C2_HOOK_FASTCALL BlankSlot(int pIndex, int pName_length, int pVisible_length);
 
 extern void C2_HOOK_FASTCALL RevertTyping(int pSlot_index, char* pRevert_str);
 
@@ -90,8 +96,6 @@ extern int gVisible_length;
 extern int gLetter_y_coords[15];
 
 extern int gThe_length;
-
-extern char gCurrent_typing[110];
 
 extern int gCurrent_position;
 

@@ -16,7 +16,7 @@
 #include "c2_string.h"
 
 #include "carpocalypse2_macros.h"
-int NearestPowerOfTwo(int pValue);
+int C2_HOOK_FASTCALL NearestPowerOfTwo(int pValue);
 // FUNCTION: CARMA2_HW 0x00497610
 void C2_HOOK_FASTCALL UpdateMapAndSaveOptions(void) {
     InitMap();

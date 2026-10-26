@@ -149,12 +149,36 @@ void C2_HOOK_FASTCALL DisposeWrecksGallery(void) {
     gFrontend_wrecks_camera = NULL;
 }
 
+// FUNCTION: CARMA2_HW 0x0046eab0
+int C2_HOOK_FASTCALL WrapIndex(int pValue, int pRange) {
+
+    while (pValue < 0) {
+        pValue += pRange;
+    }
+    while (pValue >= pRange) {
+        pValue -= pRange;
+    }
+    return pValue;
+}
+
 // FUNCTION: CARMA2_HW 0x0046ead0
 int C2_HOOK_FASTCALL WrecksOutFunc(tFrontend_spec* pFrontend) {
 
     DisposeWrecksGallery();
     DRS3StartSound(gEffects_outlet, eSoundId_Swingout);
     return 1;
+}
+
+// FUNCTION: CARMA2_HW 0x0046f470
+int C2_HOOK_FASTCALL FUN_0046f470(int* pCar_index) {
+    int i;
+
+    for (i = 0; i < gProgram_state.number_of_cars; i++) {
+        if (gProgram_state.cars_available[i] == *pCar_index) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 // FUNCTION: CARMA2_HW 0x0046f4f0

@@ -1,4 +1,11 @@
+#ifndef CARPOCALYPSE2_MATCHING
+#include "loadprof.h"
+#endif
 #include "loading.h"
+#include "loading1.h"
+#ifndef CARPOCALYPSE2_MATCHING
+#include "packfile.h"
+#endif
 
 #include "brucetrk.h"
 #include "controls.h"
@@ -24,6 +31,7 @@
 #include "temp.h"
 #include "utility.h"
 #include "world.h"
+#include "world3.h"
 
 #include "platform.h"
 
@@ -161,9 +169,6 @@ int gCurrent_race_file_index;
 
 // GLOBAL: CARMA2_HW 0x007634ec
 int gCountRaceGroups;
-
-// GLOBAL: CARMA2_HW 0x0074d5e4
-tRace_group_spec* gRaceGroups2;
 
 
 // GLOBAL: CARMA2_HW 0x00763480
@@ -498,35 +503,58 @@ void C2_HOOK_FASTCALL GetFourFloats(FILE * pF, float* pF1, float* pF2, float* pF
     sscanf(str, "%f", pF4);
 }
 
+// C2PORT-NONMATCHING: best 31.25% | difftest PASS 2000 trials (spec difftest/specs/004b4ac0_DRfgetpos.json) | reason fpos64-unsigned-handle
 // FUNCTION: CARMA2_HW 0x004b4ac0
 int C2_HOOK_FASTCALL DRfgetpos(FILE* pFile, fpos_t* pos) {
+#ifndef CARPOCALYPSE2_MATCHING
+    if ((uintptr_t)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
+        int offset = PFftell(pFile);
+        memset(pos, 0, sizeof(*pos));
+        memcpy(pos, &offset, sizeof(offset));
+        return 0;
+    }
+    return fgetpos(pFile, pos);
+#else
     tTwatVfsFile* twtFile;
+    tS32 file_pos;
 
-    if ((int)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
+    if ((uintptr_t)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
         twtFile = &gTwatVfsFiles[(uintptr_t)pFile];
-        *(tU8 **) pos = twtFile->pos;
+        file_pos = (tS32)(uintptr_t)twtFile->pos;
+        ((tS32*)pos)[0] = file_pos;
+        ((tS32*)pos)[1] = file_pos >> 31;
         twtFile->error = 0;
         return 0;
     }
     return fgetpos(pFile, pos);
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004b4c40
 int C2_HOOK_FASTCALL DRferror(FILE* pFile) {
     tTwatVfsFile* twtFile;
 
+#ifdef CARPOCALYPSE2_MATCHING
     if ((int)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
+#else
+    if ((uintptr_t)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
+#endif
         twtFile = &gTwatVfsFiles[(uintptr_t)pFile];
         return twtFile->error;
     }
     return ferror(pFile);
 }
 
+// C2PORT-NONMATCHING: best 44.44% | difftest PASS 2000 trials (spec 004b4c60_DRclearerr.json) | reason VC5 inverts branch layout and remaps global access
 // FUNCTION: CARMA2_HW 0x004b4c60
 void C2_HOOK_FASTCALL DRclearerr(FILE* pFile) {
     tTwatVfsFile* twtFile;
 
+#ifdef CARPOCALYPSE2_MATCHING
     if ((int)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
+#else
+    if ((uintptr_t)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
+#endif
         twtFile = &gTwatVfsFiles[(uintptr_t)pFile];
         twtFile->error = 0;
         return;
@@ -534,8 +562,16 @@ void C2_HOOK_FASTCALL DRclearerr(FILE* pFile) {
     clearerr(pFile);
 }
 
+// C2PORT-NONMATCHING: best 44.44% | difftest PASS 2000 trials (spec difftest/specs/004b48c0_DRfgetc2.json) | reason compiler branch layout and global addressing
 // FUNCTION: CARMA2_HW 0x004b48c0
 int C2_HOOK_FASTCALL DRfgetc2(FILE* pFile) {
+#ifndef CARPOCALYPSE2_MATCHING
+    if ((uintptr_t)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
+        int ch = PFfgetc(pFile);
+        return ch == EOF ? EOF : (tS8)ch;
+    }
+    return fgetc(pFile);
+#else
     tTwatVfsFile* twtFile;
     int result;
 
@@ -546,36 +582,51 @@ int C2_HOOK_FASTCALL DRfgetc2(FILE* pFile) {
             return EOF;
         }
         twtFile->error = 0;
-        result = *twtFile->pos;
+        result = (tS8)*twtFile->pos;
         twtFile->pos++;
         return result;
     }
     return fgetc(pFile);
+#endif
 }
 
+// C2PORT-NONMATCHING: best 63.16% | difftest PASS 2000 trials (spec difftest/specs/004b4b30_DRfsetpos.json) | reason VC5 register allocation
 // FUNCTION: CARMA2_HW 0x004b4b30
 int C2_HOOK_FASTCALL DRfsetpos(FILE* pF, fpos_t* pos) {
+#ifndef CARPOCALYPSE2_MATCHING
+    if ((uintptr_t)pF < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
+        int offset;
+        memcpy(&offset, pos, sizeof(offset));
+        return PFfseek(pF, offset, SEEK_SET);
+    }
+    return fsetpos(pF, pos);
+#else
     tTwatVfsFile* twtFile;
 
-    if ((int)pF < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
-        twtFile = &gTwatVfsFiles[(uintptr_t)pF];
-        if (twtFile->start <= *(tU8**)pos && *(tU8**)pos <= twtFile->end) {
-            twtFile->pos = *(tU8**)pos;
-            twtFile->error = 0;
-            return 0;
-        }
+    if ((uintptr_t)pF >= CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
+        return fsetpos(pF, pos);
+    }
+    twtFile = &gTwatVfsFiles[(uintptr_t)pF];
+    if ((tU8*)pos < twtFile->start || (tU8*)pos > twtFile->end) {
         twtFile->error = -1;
         return -1;
     }
-    return fsetpos(pF, pos);
+    twtFile->pos = (tU8*)pos;
+    twtFile->error = 0;
+    return 0;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004b4730
 void C2_HOOK_FASTCALL TWT_Unmount(tTWTVFS twt) {
+#ifndef CARPOCALYPSE2_MATCHING
+    ClosePackFile(twt);
+#else
     if (twt >= 0) {
         BrMemFree(gTwatVfsMountPoints[twt].header);
         gTwatVfsMountPoints[twt].header = NULL;
     }
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00487dc0
@@ -705,15 +756,27 @@ int C2_HOOK_FASTCALL CarmaCDinDriveOrFullGameInstalled(void) {
     }
 }
 
+// FUNCTION: CARMA2_HW 0x0048f6d0
+void C2_HOOK_FASTCALL FUN_0048f6d0(tBrender_storage* pStorage_space, FILE* pFile) {
+    int count;
+    char line[256];
+    char* token;
+
+    GetALineAndDontArgue(pFile, line);
+    token = strtok(line, gSkip_lines_delimiters);
+    sscanf(token, gSkip_lines_format, &count);
+    LoadPixelmapsFromListFile(pStorage_space, pFile, count);
+}
+
 // FUNCTION: CARMA2_HW 0x00513970
 br_pixelmap* C2_HOOK_FASTCALL DRPixelmapLoad(char* pFile_name) {
     br_pixelmap* the_map;
 
     the_map = BrPixelmapLoad(pFile_name);
     if (the_map != NULL) {
-        the_map->row_bytes = (br_int_16)((the_map->row_bytes + sizeof(tS32) - 1) & ~(sizeof(tS32) - 1));
         the_map->origin_x = 0;
         the_map->origin_y = 0;
+        the_map->row_bytes = (the_map->row_bytes + sizeof(int32_t) - 1) & ~(sizeof(int32_t) - 1);
     }
     return the_map;
 }
@@ -939,10 +1002,10 @@ void C2_HOOK_FASTCALL LoadRaceInfo(int pRace_index, tRace_info* pRace_info) {
     pRace_info->index = pRace_index;
     pRace_info->race_spec = &gRace_list[pRace_index];
     if (gNet_mode == eNet_mode_none) {
-        pRace_info->number_of_racers = pRace_info->race_spec->count_explicit_opponents;
+        pRace_info->number_of_racers = gRace_list[pRace_index].count_explicit_opponents;
     }
-    pRace_info->total_laps = pRace_info->race_spec->count_laps;
-    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(pRace_info->initial_timer); i++) {
+    pRace_info->total_laps = gRace_list[pRace_index].count_laps;
+    for (i = 0; i < 3; i++) {
         pRace_info->initial_timer[i] = pRace_info->race_spec->initial_timer[i];
         pRace_info->completion_bonus[i] = pRace_info->race_spec->completion_bonus[i];
         pRace_info->completion_bonus_peds[i] = pRace_info->race_spec->completion_bonus_peds[i];
@@ -1284,8 +1347,9 @@ void C2_HOOK_FASTCALL GetDamageProgram(FILE* pF, tCar_spec* pCar_spec, tImpact_l
     }
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004f67a0
-void C2_HOOK_FASTCALL SmoothlySetCarMaterialFlags(tBrender_storage* pStorage, tCar_spec* pCar_spec) {
+void C2_HOOK_FASTCALL UpdateMaterialsForCar(tBrender_storage* pStorage, tCar_spec* pCar_spec) {
     int i;
     br_material* material;
 
@@ -1293,22 +1357,26 @@ void C2_HOOK_FASTCALL SmoothlySetCarMaterialFlags(tBrender_storage* pStorage, tC
         material = pStorage->materials[i];
         if (gNbPixelBits == 16) {
             material->ka = 0.6f;
-            material->flags &= ~BR_MATF_PRELIT;
-            material->flags |= BR_MATF_SMOOTH | BR_MATF_LIGHT;
             material->kd = 0.2f;
+            material->flags &= ~BR_MATF_PRELIT;
+            material->flags |= BR_MATF_LIGHT | BR_MATF_SMOOTH;
             BrMaterialUpdate(material, BR_MATU_ALL);
         }
         material->user = material->colour_map;
     }
 }
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x004f6740
 void C2_HOOK_FASTCALL LoadCarMaterials(tBrender_storage* pStorage, const char* pPath, tCar_spec* pCar_spec) {
 
+    gMaterial_shading_for_callback = kRendererShadingType_Specular;
+    gStorage_for_callbacks = pStorage;
     pCar_spec->old_material_count = pStorage->materials_count;
-    LoadAllMaterialsInDirectory(pStorage, pPath, kRendererShadingType_Specular);
+    PFForEveryFile(pPath, LoadIfItsAMaterial);
     pCar_spec->new_material_count = pStorage->materials_count;
-    SmoothlySetCarMaterialFlags(pStorage, pCar_spec);
+    gMaterial_shading_for_callback = kRendererShadingType_Undefined;
+    UpdateMaterialsForCar(pStorage, pCar_spec);
 }
 
 // FUNCTION: CARMA2_HW 0x00488f00
@@ -1331,6 +1399,10 @@ void C2_HOOK_FASTCALL LoadCarShrapnelMaterials(FILE* pF, tCar_spec* pCar_spec) {
 
 // FUNCTION: CARMA2_HW 0x00488f70
 void C2_HOOK_FASTCALL LoadCar(const char* pCar_name, tDriver pDriver, tCar_spec* pCar_spec, int pOwner, const char* pDriver_name, tBrender_storage* pStorage_space) {
+
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("car");
+#endif
     tBrender_storage* prev_storage;
     tPath_name the_path;
     char load_name[256];
@@ -2174,7 +2246,7 @@ void C2_HOOK_FASTCALL LoadCar(const char* pCar_name, tDriver pDriver, tCar_spec*
     }
     BrMaterialAdd(car_material);
     pCar_spec->car_master_actor->material = car_material;
-    AutoFogificateMaterials(kRendererShadingType_Specular);
+    AdaptCachedMaterials(kRendererShadingType_Specular);
     for (i = pCar_spec->old_material_count; i < pCar_spec->new_material_count; i++) {
         br_material* material;
 
@@ -2185,6 +2257,13 @@ void C2_HOOK_FASTCALL LoadCar(const char* pCar_name, tDriver pDriver, tCar_spec*
         }
     }
     gStorage_for_callbacks = prev_storage;
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
+}
+
+// FUNCTION: CARMA2_HW 0x0048c920
+void C2_HOOK_FASTCALL LoadingNoOp2(void) {
 }
 
 // FUNCTION: CARMA2_HW 0x0048cda0
@@ -2547,6 +2626,7 @@ void C2_HOOK_FASTCALL ReadMechanics(FILE* pF, tCar_spec* c, int pSpec_version) {
     C2_HOOK_ASSERT(strcmp(s, "END OF MECHANICS STUFF") != 0);
 }
 
+// C2PORT-NONMATCHING: best 98.97% | difftest PASS 2000 trials (spec difftest/specs/00488dd0_GetSimpleMaterial.json) | reason delimiter string operand labelled STRING in original, DATA here
 // FUNCTION: CARMA2_HW 0x00488dd0
 br_material* C2_HOOK_FASTCALL GetSimpleMaterial(char* pName, tRendererShadingType pShading_type) {
 
@@ -2554,9 +2634,11 @@ br_material* C2_HOOK_FASTCALL GetSimpleMaterial(char* pName, tRendererShadingTyp
     br_colour colour;
 
     if (pName[0] == 'M') {
-        strtok(pName, "\t ,/");
+        int key;
+        strtok(pName, gSkip_lines_delimiters);
+        key = 10 * (pName[1] - '0') + pName[2] - '0';
         for (i = 0; gSimple_material_colours[i] != 0; i++) {
-            if (10 * (pName[1] - '0') + pName[2] - '0' == (gSimple_material_colours[i] >> 24)) {
+            if ((gSimple_material_colours[i] >> 24) == key) {
                 break;
             }
         }
@@ -2570,23 +2652,19 @@ br_material* C2_HOOK_FASTCALL GetSimpleMaterial(char* pName, tRendererShadingTyp
         colour = (r << 16) | (g << 8) | (b << 0);
     }
 
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gSimple_materials); i++) {
-        if (gSimple_materials[i] == NULL) {
-            break;
-        }
+    for (i = 0; gSimple_materials[i] != NULL; i++) {
         if (gSimple_materials[i]->colour == colour) {
             return gSimple_materials[i];
         }
     }
-    if (i >= CARPOCALYPSE2_ASIZE(gSimple_materials)) {
-        return NULL;
+    if (i < (int)CARPOCALYPSE2_ASIZE(gSimple_materials)) {
+        gSimple_materials[i] = BrMaterialAllocate("Simple");
+        gSimple_materials[i]->colour = colour;
+        gSimple_materials[i]->index_base = FindBestMatchingPaletteIndex(gSimple_materials[i]->colour);
+        gSimple_materials[i]->index_range = 0;
+        GlorifyMaterial(&gSimple_materials[i], 1, pShading_type);
+        BrMaterialAdd(gSimple_materials[i]);
     }
-    gSimple_materials[i] = BrMaterialAllocate("Simple");
-    gSimple_materials[i]->colour = colour;
-    gSimple_materials[i]->index_base = FindBestColourMatch(colour);
-    gSimple_materials[i]->index_range = 0;
-    GlorifyMaterial(&gSimple_materials[i], 1, pShading_type);
-    BrMaterialAdd(gSimple_materials[i]);
     return gSimple_materials[i];
 }
 
@@ -3065,6 +3143,33 @@ intptr_t C2_HOOK_CDECL MrFindy(br_actor* pActor, void* data) {
     return 0;
 }
 
+// FUNCTION: CARMA2_HW 0x00450b50
+tDrone_crush_data* C2_HOOK_FASTCALL GetDroneCrushData(tPhysics_object* pObject) {
+    tDrone_spec* pDrone;
+    int i;
+
+    pDrone = pObject->owner;
+    if (pDrone->form->crushability == gDrone_render_zero) {
+        return NULL;
+    }
+    if (pDrone->field_0xf4 < 0) {
+        for (i = 0; i < pDrone->form->count_models; i++) {
+            if (pDrone->form->field_0x80[i] == 0) {
+                pDrone->form->field_0x80[i] = 1;
+                pDrone->field_0xf4 = i;
+                pDrone->model_actor->model = pDrone->form->models[i];
+                goto selected_model;
+            }
+        }
+        return NULL;
+    }
+selected_model:
+    gDrone_crush_data.model = pDrone->model_actor->model;
+    gDrone_crush_data.crushability = pDrone->form->crushability;
+    gDrone_crush_data.bounds = pDrone->form->field_0x54;
+    return &gDrone_crush_data;
+}
+
 br_actor* C2_HOOK_FASTCALL FindDroneChildActor(tDrone_spec* pDrone, const char* pName) {
     C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tDrone_spec, model_actor, 0xf0);
     return (br_actor*)DRActorEnumRecurse(pDrone->model_actor, MrFindy, (void*)pName);
@@ -3301,7 +3406,7 @@ void C2_HOOK_FASTCALL LoadPerRaceDroneStuff(void) {
 
         form->field_0x6c = 0;
         form->model_start = -1;
-        form->model_end = -1;
+        form->model_end = 0;
         form->model_index = -1;
         form->count_models = 0;
         form->field_0x80 = NULL;
@@ -3309,10 +3414,31 @@ void C2_HOOK_FASTCALL LoadPerRaceDroneStuff(void) {
     }
 
     for (i = 0; i < gCount_drones; i++) {
-        C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tDrone_spec, field_0x6c, 0x6c);
+        tDrone_spec* drone;
+        tPath_name path;
+        tTWTVFS twt;
+        FILE* f;
 
-        gDrone_specs[i].field_0x6c += 1;
-        LoadDrone(i);
+        gDrone_specs[i].form->field_0x6c += 1;
+        drone = &gDrone_specs[i];
+        strcpy(path, gApplication_path);
+        PathCat(path, path, "DRONES");
+        PathCat(path, path, drone->form->name);
+        twt = OpenPackFileAndSetTiffLoading(path);
+        LoadDroneActorsModels(drone);
+        f = OpenDroneFile(drone->form->name);
+        if (!ReadPastBoundsShapesHeader(f)) {
+            FatalError(kFatalError_UnableToOpenDroneFileOrFileCorrupted_S, drone->form->name);
+        } else {
+            DoNotDprintf("DRONE.C: Reading mechanics data for drone of type %s", drone->form->name);
+            ReadMechanicsShapes(&drone->collision_info.shape, f);
+            if (drone->collision_info.shape != NULL) {
+                drone->field_0x46 = 1;
+            }
+        }
+        LoadFunksAndGrooves(drone, f);
+        PFfclose(f);
+        ClosePackFileAndSetTiffLoading(twt);
     }
 
     for (i = 0; i < gCount_drone_forms; i++) {
@@ -3323,15 +3449,15 @@ void C2_HOOK_FASTCALL LoadPerRaceDroneStuff(void) {
         if (form->field_0x6c == 0) {
             continue;
         }
-        count_models = form->crushability == 0.f ? 0 : MIN(10, form->field_0x6c);
+        count_models = form->crushability != gDrone_render_zero ? MIN(10, (int)form->field_0x6c) : 0;
         form->count_models = count_models;
         if (count_models != 0) {
             int j;
 
-            form->models = BrMemCalloc(sizeof(br_model*), count_models, kMem_drone_model_dup);
-            form->field_0x80 = BrMemCalloc(count_models, sizeof(tU8), kMem_drone_model_dup);
+            form->models = BrMemCalloc(form->count_models, sizeof(br_model*), kMem_drone_model_dup);
+            form->field_0x80 = BrMemCalloc(form->count_models, sizeof(tU8), kMem_drone_model_dup);
 
-            for (j = 0; j < count_models; j++) {
+            for (j = 0; j < form->count_models; j++) {
                 br_model* orig_model;
 
                 orig_model = gDroneStorage.models[form->model_index];
@@ -3349,12 +3475,31 @@ void C2_HOOK_FASTCALL LoadPerRaceDroneStuff(void) {
 // FUNCTION: CARMA2_HW 0x00401070
 void C2_HOOK_FASTCALL LoadAIWorldForRace(tRace_info* pRace_info) {
 
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("cars-and-drones");
+#endif
+
     PrintMemoryDump(0,"BEFORE LoadOpponentsCars()");
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("LoadOpponentsCars");
+#endif
     LoadOpponentsCars(pRace_info);
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
     LoadCopCars();
     PrintMemoryDump(0,"AFTER LoadOpponentsCars(), BEFORE LoadPerRaceDroneStuff()");
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("LoadPerRaceDroneStuff");
+#endif
     LoadPerRaceDroneStuff();
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
     PrintMemoryDump(0,"AFTER LoadPerRaceDroneStuff()");
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004010b0

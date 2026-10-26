@@ -94,6 +94,7 @@ void C2_HOOK_STDCALL RenumberActor(br_actor* a, int d) {
     }
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x0051dfe0
 br_actor* C2_HOOK_CDECL BrActorAdd(br_actor* parent, br_actor* a) {
     br_actor* ac;
@@ -107,7 +108,9 @@ br_actor* C2_HOOK_CDECL BrActorAdd(br_actor* parent, br_actor* a) {
     }
     return a;
 }
+#pragma auto_inline(on)
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x0051e070
 br_actor* C2_HOOK_CDECL BrActorRemove(br_actor* a) {
     br_actor* ac;
@@ -121,10 +124,12 @@ br_actor* C2_HOOK_CDECL BrActorRemove(br_actor* a) {
     }
     return a;
 }
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x0051e0d0
 void C2_HOOK_CDECL BrActorRelink(br_actor* parent, br_actor* a) {
     br_matrix34 mat;
+    br_actor* ac;
 
     if (a->parent == parent) {
         return;
@@ -132,8 +137,32 @@ void C2_HOOK_CDECL BrActorRelink(br_actor* parent, br_actor* a) {
 
     BrActorToActorMatrix34(&mat, a, parent);
     BrMatrix34ToTransform(&a->t, &mat);
-    BrActorAdd(parent, BrActorRemove(a));
+    BrSimpleRemove((br_simple_node*)a);
+    a->parent = NULL;
+    a->depth = 0;
+    for (ac = a->children; ac != NULL; ac = ac->next) {
+        RenumberActor(ac, 1);
+    }
+    BrSimpleAddHead((br_simple_list*)&parent->children, (br_simple_node*)a);
+    a->parent = parent;
+    a->depth = parent->depth + 1;
+    for (ac = a->children; ac != NULL; ac = ac->next) {
+        RenumberActor(ac, a->depth + 1);
+    }
 }
+
+#pragma auto_inline(off)
+// FUNCTION: CARMA2_HW 0x0040ca40
+void C2_HOOK_CDECL BrActorRelink_library(br_actor* parent, br_actor* a) {
+    br_matrix34 mat;
+
+    if (a->parent != parent) {
+        BrActorToActorMatrix34(&mat, a, parent);
+        BrMatrix34ToTransform(&a->t, &mat);
+        BrActorAdd(parent, BrActorRemove(a));
+    }
+}
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x0051e1a0
 br_actor* C2_HOOK_CDECL BrActorAllocate(br_uint_8 type, void* type_data) {
@@ -277,7 +306,26 @@ br_token C2_HOOK_STDCALL CameraToScreenMatrix4(br_matrix4* mat, br_actor* camera
     br_matrix34 mat34;
 
     camera_type = camera->type_data;
+	/* case order checked against the original jump table at 0x51e7b0 (type 0 = parallel: frontend, 2D overlays) */
 	switch (camera_type->type) {
+	case BR_CAMERA_PERSPECTIVE_FOV:
+		Matrix4PerspectiveNew(mat,
+			camera_type->field_of_view,
+			camera_type->aspect,
+			-camera_type->hither_z,
+			-camera_type->yon_z,
+			v1db.origin.v[0],
+			v1db.origin.v[1]);
+		return BRT_PERSPECTIVE;
+	case BR_CAMERA_PERSPECTIVE_FOV_OLD:
+		BrMatrix4Perspective(mat,
+			camera_type->field_of_view,
+			camera_type->aspect,
+			-camera_type->hither_z,
+			-camera_type->yon_z);
+		return BRT_PERSPECTIVE;
+	case BR_CAMERA_PERSPECTIVE_WHD:
+		return BRT_PERSPECTIVE;
 	case BR_CAMERA_PARALLEL:
 		if (camera_type->width == 0.f) {
 			BrFailure("Parallel camera has zero width");
@@ -290,9 +338,10 @@ br_token C2_HOOK_STDCALL CameraToScreenMatrix4(br_matrix4* mat, br_actor* camera
         }
 
 		BrMatrix34Scale(&mat34,
-            2.f / (camera_type->width * camera_type->aspect),
-            2.f / camera_type->height,
-            2.f / (camera_type->yon_z - camera_type->hither_z));
+			/* the original computes 1/x and doubles it (fadd st,st): 2/x, as in BRender's BR_DIV(2, x) */
+			2.f / (camera_type->width * camera_type->aspect),
+			2.f / camera_type->height,
+			2.f / (camera_type->yon_z - camera_type->hither_z));
 		BrMatrix34PreTranslate(&mat34,
             0.f,
             0.f,
@@ -303,17 +352,6 @@ br_token C2_HOOK_STDCALL CameraToScreenMatrix4(br_matrix4* mat, br_actor* camera
             0.f);
 		BrMatrix4Copy34(mat, &mat34);
 		return BRT_PARALLEL;
-	case BR_CAMERA_PERSPECTIVE_FOV:
-		Matrix4PerspectiveNew(mat,
-			camera_type->field_of_view,
-            camera_type->aspect,
-			-camera_type->hither_z,
-            -camera_type->yon_z,
-			v1db.origin.v[0],
-            v1db.origin.v[1]);
-		return BRT_PERSPECTIVE;
-    case BR_CAMERA_PERSPECTIVE_WHD:
-        return BRT_PERSPECTIVE;
 	case BR_CAMERA_PARALLEL_OLD:
 		if (camera_type->width == 0.f) {
             BrFailure("Parallel camera has zero width");
@@ -430,6 +468,94 @@ br_uint_16 C2_HOOK_CDECL BrActorToActorMatrix34(br_matrix34* m, br_actor* a, br_
     return BrTransformCombineTypes(at, bt);
 }
 
+// FUNCTION: CARMA2_HW 0x0040c660
+br_uint_8 C2_HOOK_CDECL BrActorToActorMatrix34_Legacy(br_matrix34* m, br_actor* a, br_actor* b) {
+    br_uint_8 transform_type_combine[49] = {
+        0, 0, 0, 0, 0, 0, 0,
+        0, 1, 1, 1, 1, 1, 1,
+        0, 1, 1, 1, 1, 2, 2,
+        0, 1, 1, 1, 1, 3, 3,
+        0, 1, 1, 1, 1, 4, 4,
+        0, 1, 2, 3, 4, 5, 5,
+        0, 1, 2, 3, 4, 5, 6,
+    };
+    br_matrix34 mat_a;
+    br_matrix34 mat_b;
+    br_matrix34 mat_c;
+    br_uint_8 a_type;
+    br_uint_8 b_type;
+
+    if (a == b) {
+        BrMatrix34Identity(m);
+        return BR_TRANSFORM_IDENTITY;
+    }
+    if (a->parent == b) {
+        BrTransformToMatrix34(m, &a->t);
+        return (br_uint_8)a->t.type;
+    }
+    if (b->parent == a) {
+        BrTransformToMatrix34(&mat_b, &b->t);
+        if (b->t.type != BR_TRANSFORM_MATRIX34) {
+            BrMatrix34LPInverse(m, &mat_b);
+        } else {
+            BrMatrix34Inverse(m, &mat_b);
+        }
+        return (br_uint_8)b->t.type;
+    }
+
+    a_type = BR_TRANSFORM_IDENTITY;
+    BrMatrix34Identity(&mat_a);
+    b_type = BR_TRANSFORM_IDENTITY;
+    BrMatrix34Identity(&mat_b);
+
+    while (a != NULL && b != NULL && a != b) {
+        if (a->depth > b->depth) {
+            if (a->t.type != BR_TRANSFORM_IDENTITY) {
+                BrMatrix34PostTransform(&mat_a, &a->t);
+                a_type = transform_type_combine[a_type * 7 + a->t.type];
+            }
+            a = a->parent;
+        } else if (b->depth > a->depth) {
+            if (b->t.type != BR_TRANSFORM_IDENTITY) {
+                BrMatrix34PostTransform(&mat_b, &b->t);
+                b_type = transform_type_combine[b_type * 7 + b->t.type];
+            }
+            b = b->parent;
+        } else {
+            if (a->t.type != BR_TRANSFORM_IDENTITY) {
+                BrMatrix34PostTransform(&mat_a, &a->t);
+                a_type = transform_type_combine[a_type * 7 + a->t.type];
+            }
+            if (b->t.type != BR_TRANSFORM_IDENTITY) {
+                BrMatrix34PostTransform(&mat_b, &b->t);
+                b_type = transform_type_combine[b_type * 7 + b->t.type];
+            }
+            a = a->parent;
+            b = b->parent;
+        }
+    }
+
+    if (b_type == BR_TRANSFORM_IDENTITY) {
+        BrMatrix34Copy(m, &mat_a);
+        return a_type;
+    }
+    if (a_type == BR_TRANSFORM_IDENTITY) {
+        if (b_type != BR_TRANSFORM_MATRIX34) {
+            BrMatrix34LPInverse(m, &mat_b);
+        } else {
+            BrMatrix34Inverse(m, &mat_b);
+        }
+        return b_type;
+    }
+    if (b_type != BR_TRANSFORM_MATRIX34) {
+        BrMatrix34LPInverse(&mat_c, &mat_b);
+    } else {
+        BrMatrix34Inverse(&mat_c, &mat_b);
+    }
+    BrMatrix34Mul(m, &mat_a, &mat_c);
+    return transform_type_combine[a_type * 7 + b_type];
+}
+
 // FUNCTION: CARMA2_HW 0x0051eae0
 void C2_HOOK_CDECL BrActorToScreenMatrix4(br_matrix4* m, br_actor* a, br_actor* camera) {
     br_matrix34 a2c;
@@ -468,10 +594,15 @@ void C2_HOOK_CDECL BrMatrix34ApplyBounds(br_bounds* A, br_bounds* B, br_matrix34
 
 // FUNCTION: CARMA2_HW 0x0051ebc0
 void C2_HOOK_STDCALL ActorToBounds(br_bounds* dest, br_actor* ap, br_model* model) {
-    br_actor* a;
+    br_actor* child;
     br_bounds new;
     br_matrix34 m2v;
+    br_matrix34* C;
+    br_bounds* B;
     int i;
+    int j;
+    br_scalar product_min;
+    br_scalar product_max;
 
     if (ap->model != NULL) {
         model = ap->model;
@@ -481,21 +612,38 @@ void C2_HOOK_STDCALL ActorToBounds(br_bounds* dest, br_actor* ap, br_model* mode
     BrMatrix34PreTransform(&v1db.model_to_view, &ap->t);
 
     if (ap->type == BR_ACTOR_MODEL) {
-        BrMatrix34ApplyBounds(&new, &model->bounds, &v1db.model_to_view);
+        C = &v1db.model_to_view;
+        B = &model->bounds;
+        new.min.v[0] = new.max.v[0] = C->m[3][0];
+        new.min.v[1] = new.max.v[1] = C->m[3][1];
+        new.min.v[2] = new.max.v[2] = C->m[3][2];
+
+        for (i = 0; i < 3; i++) {
+            for (j = 0; j < 3; j++) {
+                product_min = C->m[j][i] * B->min.v[j];
+                product_max = C->m[j][i] * B->max.v[j];
+                if (product_min < product_max) {
+                    new.min.v[i] += product_min;
+                    new.max.v[i] += product_max;
+                } else {
+                    new.min.v[i] += product_max;
+                    new.max.v[i] += product_min;
+                }
+            }
+        }
 
         for (i = 0; i < 3; i++) {
             if (new.min.v[i] < dest->min.v[i]) {
                 dest->min.v[i] = new.min.v[i];
             }
-
             if (new.max.v[i] > dest->max.v[i]) {
                 dest->max.v[i] = new.max.v[i];
             }
         }
     }
 
-    for(a = ap->children; a != NULL; a = a->next) {
-        ActorToBounds(dest, a, model);
+    for(child = ap->children; child != NULL; child = child->next) {
+        ActorToBounds(dest, child, model);
     }
 
     v1db.model_to_view = m2v;

@@ -1,0 +1,23 @@
+--- a/source/utils/mem_utils.c
++++ b/source/utils/mem_utils.c
+@@ -341,7 +341,10 @@
+ 	if (curblk->next)
+ 		curblk->next->prev = curblk->prev;
+ 
+-	if (needed_from_free == curblk->size) {
++	/* A remainder smaller than a header/footer pair cannot hold its metadata.
++	 * Consume the neighbour completely, just like heap_blk_alloc does. */
++	if (curblk->size - needed_from_free < MIN_FREE_BLOCK_SIZE) {
++		new_size = available;
+ 		tm_free[type] -= curblk->size;
+ 		heap_blk_release(curblk);
+ 	} else {
+@@ -391,7 +394,7 @@
+ 	// Everything failed, so alloc a new block of the requested size and move data on it
+ 	void *newptr = heap_alloc(type, size, MEM_ALIGNMENT);
+ 	if (newptr) {
+-		vgl_fast_memcpy(newptr, ptr, block->size - 4);
++		vgl_fast_memcpy(newptr, ptr, block->size - MIN_FREE_BLOCK_SIZE);
+ 		heap_blk_free((uintptr_t)ptr, type);
+ 	}
+ 	return newptr;

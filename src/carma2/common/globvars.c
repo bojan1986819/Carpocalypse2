@@ -244,7 +244,11 @@ br_model* gBlend_model2;
 br_actor* gBlend_actor;
 
 // GLOBAL: CARMA2_HW 0x00660148
-br_token_value* gDAT_00660148;
+br_token_value gSmoke_extra_prims[3] = {
+    { BRT_BLEND_B, { 1 } },
+    { BRT_OPACITY_X, { 0x4b0000 } },
+    { BR_NULL_TOKEN, { 0 } },
+};
 
 // GLOBAL: CARMA2_HW 0x006a87f0
 tBRender_smoke gBR_smoke_structs[35];
@@ -330,8 +334,6 @@ br_actor* gPlayer_car_master_actor;
 // GLOBAL: CARMA2_HW 0x00655de0
 br_vector3 gInitial_position = {{1000.f, 1000.f, 1000.f}};
 
-// GLOBAL: CARMA2_HW 0x0068b85c
-int gArrow_mode;
 
 
 // GLOBAL: CARMA2_HW 0x0074d040
@@ -345,6 +347,8 @@ int gRecover_car;
 
 // GLOBAL: CARMA2_HW 0x0068b874
 int gDisallow_abandon_race;
+// GLOBAL: CARMA2_HW 0x00676914
+int gPed_676914 = 0; /* gAction_replay_mode */
 // GLOBAL: CARMA2_HW 0x0068b890
 int gInterface_within_race_mode;
 // GLOBAL: CARMA2_HW 0x0068b8a8
@@ -440,7 +444,7 @@ int gOn_drugs;
 // GLOBAL: CARMA2_HW 0x00761eec
 int gCheckpoint;
 // GLOBAL: CARMA2_HW 0x00761ee8
-tU32 gTimer;
+int gTimer;
 
 // GLOBAL: CARMA2_HW 0x00761ce8
 int gCheckpoint_count;
@@ -670,4 +674,3 @@ int gNoCutscenes;
 //int gNumber_of_races;
 //char gDir_separator[3] = "";
 
-int gINT_0075bba8;

@@ -248,144 +248,187 @@ br_fixed_ls C2_NAKED C2_HOOK_CDECL BrFixedMul(br_fixed_ls a, br_fixed_ls b) {
 #endif
 }
 
+// C2PORT-NONMATCHING: best 5.56% | difftest PASS 2000 trials (spec 00537131_BrFixedMac2.json) | reason VC5 lowers 64-bit products and shift to runtime helpers
 // FUNCTION: CARMA2_HW 0x00537131
 br_fixed_ls C2_HOOK_CDECL BrFixedMac2(br_fixed_ls a, br_fixed_ls b, br_fixed_ls c, br_fixed_ls d) {
 
     return ((br_int_64)a * (br_int_64)b + (br_int_64)c * (br_int_64)d) >> 16;
 }
 
+// C2PORT-NONMATCHING: best 4.55% | difftest PASS 2000 trials (spec 00537154_BrFixedMac3.json) | reason VC5 lowers 64-bit products and shift to helpers
 // FUNCTION: CARMA2_HW 0x00537154
 br_fixed_ls C2_HOOK_CDECL BrFixedMac3(br_fixed_ls a, br_fixed_ls b, br_fixed_ls c, br_fixed_ls d, br_fixed_ls e, br_fixed_ls f) {
 
     return ((br_int_64)a * (br_int_64)b + (br_int_64)c * (br_int_64)d + (br_int_64)e * (br_int_64)f) >> 16;
 }
 
+// C2PORT-NONMATCHING: best 3.85% | difftest PASS 2000 trials (spec 00537181_BrFixedMac4.json) | reason VC5 lowers 64-bit products and shift to helpers
 // FUNCTION: CARMA2_HW 0x00537181
 br_fixed_ls C2_HOOK_CDECL BrFixedMac4(br_fixed_ls a, br_fixed_ls b, br_fixed_ls c, br_fixed_ls d, br_fixed_ls e, br_fixed_ls f, br_fixed_ls g, br_fixed_ls h) {
 
     return ((br_int_64)a * (br_int_64)b + (br_int_64)c * (br_int_64)d + (br_int_64)e * (br_int_64)f + (br_int_64)g * (br_int_64)h) >> 16;
 }
 
+static br_uint_32 BrISqrt64Port(br_uint_32 low, br_uint_32 high);
+
+// C2PORT-NONMATCHING: best 25.45% | difftest PASS 2000 trials (spec difftest/specs/005371b8_BrFixedLength2.json) | reason sqrt-helper-abi
 // FUNCTION: CARMA2_HW 0x005371b8
 br_fixed_ls C2_HOOK_CDECL BrFixedLength2(br_fixed_ls a, br_fixed_ls b) {
+    uint64_t square_sum;
 
-    return _BrISqrt64((br_int_64)a * (br_int_64)a + (br_int_64)b * (br_int_64)b);
+    square_sum = (uint64_t)((br_int_64)a * (br_int_64)a + (br_int_64)b * (br_int_64)b);
+    return BrISqrt64Port((br_uint_32)square_sum, (br_uint_32)(square_sum >> 32));
 }
 
+// C2PORT-NONMATCHING: best 18.67% | difftest PASS 2000 trials (spec difftest/specs/005371dc_BrFixedLength3.json) | reason helper-abi
 // FUNCTION: CARMA2_HW 0x005371dc
 br_fixed_ls C2_HOOK_CDECL BrFixedLength3(br_fixed_ls a, br_fixed_ls b, br_fixed_ls c) {
+    uint64_t square_sum;
 
-    return _BrISqrt64((br_int_64)a * (br_int_64)a + (br_int_64)b * (br_int_64)b + (br_int_64)c * (br_int_64)c);
+    square_sum = (uint64_t)((br_int_64)a * (br_int_64)a + (br_int_64)b * (br_int_64)b + (br_int_64)c * (br_int_64)c);
+    return BrISqrt64Port((br_uint_32)square_sum, (br_uint_32)(square_sum >> 32));
 }
 
+// C2PORT-NONMATCHING: best 17.39% | difftest PASS 2000 trials (spec 00537209_BrFixedLength4.json) | reason VC5 lowers 64-bit products through __allmul and changes the accumulator spills
 // FUNCTION: CARMA2_HW 0x00537209
 br_fixed_ls C2_HOOK_CDECL BrFixedLength4(br_fixed_ls a, br_fixed_ls b, br_fixed_ls c, br_fixed_ls d) {
+    uint64_t square_sum;
 
-    return _BrISqrt64((br_int_64)a * (br_int_64)a + (br_int_64)b * (br_int_64)b + (br_int_64)c * (br_int_64)c + (br_int_64)d * (br_int_64)d);
+    square_sum = (uint64_t)((br_int_64)a * (br_int_64)a + (br_int_64)b * (br_int_64)b + (br_int_64)c * (br_int_64)c + (br_int_64)d * (br_int_64)d);
+    return BrISqrt64Port((br_uint_32)square_sum, (br_uint_32)(square_sum >> 32));
 }
+
+// C2PORT-NONMATCHING: best 25.45% | difftest PASS 2000 trials (spec 0053723f_BrFixedRLength2.json) | reason VC5 lowers signed 64-bit multiply through __allmul
+static br_uint_32 BrFastRSqrt64FromValue(uint64_t value);
 
 // FUNCTION: CARMA2_HW 0x0053723f
 br_fixed_ls C2_HOOK_CDECL BrFixedRLength2(br_fixed_ls a, br_fixed_ls b) {
 
-    return _BrFastRSqrt64((br_int_64)a * (br_int_64)a + (br_int_64)b * (br_int_64)b);
+    return BrFastRSqrt64FromValue((br_int_64)a * (br_int_64)a + (br_int_64)b * (br_int_64)b);
 }
 
+// C2PORT-NONMATCHING: best 18.67% | difftest PASS 2000 trials (spec difftest/specs/00537263_BrFixedRLength3.json) | reason VC5 lowers signed 64-bit multiplies through __allmul
 // FUNCTION: CARMA2_HW 0x00537263
 br_fixed_ls C2_HOOK_CDECL BrFixedRLength3(br_fixed_ls a, br_fixed_ls b, br_fixed_ls c) {
 
-    return _BrFastRSqrt64((br_int_64)a * (br_int_64)a + (br_int_64)b * (br_int_64)b + (br_int_64)c * (br_int_64)c);
+    return BrFastRSqrt64FromValue((br_int_64)a * (br_int_64)a + (br_int_64)b * (br_int_64)b + (br_int_64)c * (br_int_64)c);
 }
 
+// C2PORT-NONMATCHING: best 17.39% | difftest PASS 2000 trials (spec 00537290_BrFixedRLength4.json) | reason VC5 lowers four 64-bit products through __allmul helpers
 // FUNCTION: CARMA2_HW 0x00537290
 br_fixed_ls C2_HOOK_CDECL BrFixedRLength4(br_fixed_ls a, br_fixed_ls b, br_fixed_ls c, br_fixed_ls d) {
 
-    return _BrFastRSqrt64((br_int_64)a * (br_int_64)a + (br_int_64)b * (br_int_64)b + (br_int_64)c * (br_int_64)c + (br_int_64)d * (br_int_64)d);
+    return BrFastRSqrt64FromValue((br_int_64)a * (br_int_64)a + (br_int_64)b * (br_int_64)b + (br_int_64)c * (br_int_64)c + (br_int_64)d * (br_int_64)d);
 }
 
+// C2PORT-NONMATCHING: best 14.8% | difftest PASS 2000 trials (spec difftest/specs/005372c6_BrFixedDiv.json) | reason compiler-helper-call
 // FUNCTION: CARMA2_HW 0x005372c6
 br_fixed_ls C2_HOOK_CDECL BrFixedDiv(br_fixed_ls a, br_fixed_ls b) {
 
     return (((br_int_64)a) << 16) / (br_int_64)b;
 }
 
+// C2PORT-NONMATCHING: best 10.26% | difftest PASS 2000 trials (spec 005372db_BrFixedDivR.json) | reason VC5 lowers signed 64-bit division through CRT helpers
 // FUNCTION: CARMA2_HW 0x005372db
 br_fixed_ls C2_HOOK_CDECL BrFixedDivR(br_fixed_ls a, br_fixed_ls b) {
 
     return (((br_int_64)a) << 16 | ((((uint32_t)(a)) & 0x80000000) ? 0xffff : 0x0)) / b;
 }
 
+// C2PORT-NONMATCHING: best 18.18% | difftest PASS 2000 trials (spec 005372f1_BrFixedDivF.json) | reason unsigned divide lowered to helpers
 // FUNCTION: CARMA2_HW 0x005372f1
 br_fixed_ls C2_HOOK_CDECL BrFixedDivF(br_fixed_ls a, br_fixed_ls b) {
 
-    return (((br_int_64)a) << 31) / b;
+    return (br_fixed_ls)(br_uint_32)(((br_uint_64)(br_int_64)a << 31) / (br_uint_32)b);
 }
 
+// C2PORT-NONMATCHING: best 17.65% | difftest PASS 2000 trials (spec difftest/specs/00537304_FUN_00537304.json) | reason VC5 lowers the signed 64-bit divide to helpers
+// FUNCTION: CARMA2_HW 0x00537304
+br_fixed_ls C2_HOOK_CDECL FUN_00537304(br_fixed_ls a, br_fixed_ls b) {
+    uint32_t quotient;
+
+    quotient = (uint32_t)((((br_int_64)a) << 30) / b);
+    return (br_fixed_ls)(0x80000000u - (quotient << 1));
+}
+
+// C2PORT-NONMATCHING: best 17.39% | difftest PASS 2000 trials (spec difftest/specs/00537322_BrFixedMulDiv.json) | reason VC5 lowers signed 64-bit division through __alldiv
 // FUNCTION: CARMA2_HW 0x00537322
 br_fixed_ls C2_HOOK_CDECL BrFixedMulDiv(br_fixed_ls a, br_fixed_ls b, br_fixed_ls c) {
 
     return ((br_int_64)a * (br_int_64)b) / (br_int_64)c;
 }
 
+// C2PORT-NONMATCHING: best 16.22% | difftest PASS 2000 trials (spec difftest/specs/00537332_BrFixedMac2Div.json) | reason VC5 uses __alldiv for 64-bit signed division
 // FUNCTION: CARMA2_HW 0x00537332
 br_fixed_ls C2_HOOK_CDECL BrFixedMac2Div(br_fixed_ls a, br_fixed_ls b, br_fixed_ls c, br_fixed_ls d, br_fixed_ls e) {
 
     return ((br_int_64)a * (br_int_64)b + (br_int_64)c * (br_int_64)d) / (br_int_64)e;
 }
 
+// C2PORT-NONMATCHING: best 13.33% | difftest PASS 2000 trials (spec difftest/specs/00537354_BrFixedMac3Div.json) | reason VC5 uses __alldiv for 64-bit signed division
 // FUNCTION: CARMA2_HW 0x00537354
 br_fixed_ls C2_HOOK_CDECL BrFixedMac3Div(br_fixed_ls a, br_fixed_ls b, br_fixed_ls c, br_fixed_ls d, br_fixed_ls e, br_fixed_ls f, br_fixed_ls g) {
 
     return ((br_int_64)a * (br_int_64)b + (br_int_64)c * (br_int_64)d + (br_int_64)e * (br_int_64)f) / (br_int_64)g;
 }
 
+// C2PORT-NONMATCHING: best 11.32% | difftest PASS 2000 trials (spec difftest/specs/00537380_BrFixedMac4Div.json) | reason compiler-helper-call
 // FUNCTION: CARMA2_HW 0x00537380
 br_fixed_ls C2_HOOK_CDECL BrFixedMac4Div(br_fixed_ls a, br_fixed_ls b, br_fixed_ls c, br_fixed_ls d, br_fixed_ls e, br_fixed_ls f, br_fixed_ls g, br_fixed_ls h, br_fixed_ls i) {
 
     return ((br_int_64)a * (br_int_64)b + (br_int_64)c * (br_int_64)d + (br_int_64)e * (br_int_64)f + (br_int_64)g * (br_int_64)h) / (br_int_64)i;
 }
 
+// C2PORT-NONMATCHING: best 5.56% | difftest PASS 2000 trials (spec 005373b6_BrFixedFMac2.json) | reason VC5 lowers the 64-bit shift through __allshr
 // FUNCTION: CARMA2_HW 0x005373b6
 br_fixed_ls C2_HOOK_CDECL BrFixedFMac2(br_fixed_lsf a, br_fixed_ls b, br_fixed_lsf c, br_fixed_ls d) {
 
     return ((br_int_64)a * (br_int_64)b + (br_int_64)c * (br_int_64)d) >> 15;
 }
 
+// C2PORT-NONMATCHING: best 4.35% | difftest PASS 2000 trials (spec difftest/specs/005373db_BrFixedFMac3.json) | reason VC5 lowers the 64-bit shift through __allshr
 // FUNCTION: CARMA2_HW 0x005373db
 br_fixed_ls C2_HOOK_CDECL BrFixedFMac3(br_fixed_lsf a, br_fixed_ls b, br_fixed_lsf c, br_fixed_ls d, br_fixed_lsf e, br_fixed_ls f) {
 
     return ((br_int_64)a * (br_int_64)b + (br_int_64)c * (br_int_64)d + (br_int_64)e * (br_int_64)f) >> 15;
 }
 
+// C2PORT-NONMATCHING: best 3.85% | difftest PASS 2000 trials (spec 0053740b_BrFixedFMac4.json) | reason VC5 lowers 64-bit products and shift to helpers
 // FUNCTION: CARMA2_HW 0x0053740b
 br_fixed_ls C2_HOOK_CDECL BrFixedFMac4(br_fixed_lsf a, br_fixed_ls b, br_fixed_lsf c, br_fixed_ls d, br_fixed_lsf e, br_fixed_ls f, br_fixed_lsf g, br_fixed_ls h) {
 
     return ((br_int_64)a * (br_int_64)b + (br_int_64)c * (br_int_64)d + (br_int_64)e * (br_int_64)f + (br_int_64)g * (br_int_64)h) >> 15;
 }
 
+// C2PORT-NONMATCHING: best 23.53% | difftest PASS 2000 trials (spec 00537446_BrFixedRcp.json) | reason VC5 emits __alldiv for 64-bit division; original uses idiv
 // FUNCTION: CARMA2_HW 0x00537446
 br_fixed_ls C2_HOOK_CDECL BrFixedRcp(br_fixed_ls a) {
 
     return (br_fixed_ls)(((br_int_64)0x100000000) / a);
 }
 
+// C2PORT-NONMATCHING: best 11.1% | difftest PASS 2000 trials (spec difftest/specs/00537457_BrFixedSqr.json) | reason compiler-helper-call
 // FUNCTION: CARMA2_HW 0x00537457
 br_fixed_ls C2_HOOK_CDECL BrFixedSqr(br_fixed_ls a) {
 
     return ((br_int_64)a * (br_int_64)a) >> 16;
 }
 
+// C2PORT-NONMATCHING: best 14.81% | difftest PASS 2000 trials (spec 00537467_BrFixedSqr2.json) | reason VC5 lowers 64-bit products and shift to runtime helpers
 // FUNCTION: CARMA2_HW 0x00537467
 br_fixed_ls C2_HOOK_CDECL BrFixedSqr2(br_fixed_ls a, br_fixed_ls b) {
 
     return ((br_int_64)a * (br_int_64)a + (br_int_64)b * (br_int_64)b) >> 16;
 }
 
+// C2PORT-NONMATCHING: best 10.81% | difftest PASS 2000 trials (spec 00537488_BrFixedSqr3.json) | reason VC5 lowers 64-bit products and shift through runtime helpers
 // FUNCTION: CARMA2_HW 0x00537488
 br_fixed_ls C2_HOOK_CDECL BrFixedSqr3(br_fixed_ls a, br_fixed_ls b, br_fixed_ls c) {
 
     return ((br_int_64)a * (br_int_64)a + (br_int_64)b * (br_int_64)b + (br_int_64)c * (br_int_64)c) >> 16;
 }
 
+// C2PORT-NONMATCHING: best 10.99% | difftest PASS 2000 trials (spec difftest/specs/005374b2_BrFixedSqr4.json) | reason VC5 lowers the 64-bit squares and shift through runtime helpers
 // FUNCTION: CARMA2_HW 0x005374b2
 br_fixed_ls C2_HOOK_CDECL BrFixedSqr4(br_fixed_ls a, br_fixed_ls b, br_fixed_ls c, br_fixed_ls d) {
 
@@ -393,25 +436,28 @@ br_fixed_ls C2_HOOK_CDECL BrFixedSqr4(br_fixed_ls a, br_fixed_ls b, br_fixed_ls 
 }
 
 static int16_t fixed_lut_interpolate(uint16_t *table, uint32_t value) {
-    uint16_t idx = value >> 8;
+    uint8_t idx = (uint8_t)(value >> 8);
     int16_t basew = table[idx];
     int16_t deltaw = table[idx+1] - basew;
     int16_t errw = (deltaw * (value & 0xff)) >> 8;
     return basew + errw;
 }
 
+// C2PORT-NONMATCHING: best 5.13% | difftest PASS 2000 trials (spec 005374e5_BrFixedSin.json) | reason VC5 expands LUT interpolation into wider arithmetic and shifts
 // FUNCTION: CARMA2_HW 0x005374e5
 br_fixed_ls C2_HOOK_CDECL BrFixedSin(br_angle a) {
 
     return 2 * fixed_lut_interpolate(fixed_sin_table, a);
 }
 
+// C2PORT-NONMATCHING: best 5.26% | difftest PASS 2000 trials (spec 00537516_BrFixedCos.json) | reason VC5 widens the 16-bit table interpolation multiply
 // FUNCTION: CARMA2_HW 0x00537516
 br_fixed_ls C2_HOOK_CDECL BrFixedCos(br_angle a) {
 
     return 2 * fixed_lut_interpolate(fixed_cos_table, a);
 }
 
+// C2PORT-NONMATCHING: best 15.79% | difftest PASS 2000 trials (spec 00537547_BrFixedASin.json) | reason VC5 widens signed table interpolation arithmetic
 // FUNCTION: CARMA2_HW 0x00537547
 br_angle C2_HOOK_CDECL BrFixedASin(br_fixed_ls a) {
 
@@ -421,6 +467,7 @@ br_angle C2_HOOK_CDECL BrFixedASin(br_fixed_ls a) {
     return fixed_lut_interpolate(fixed_asin_table, (a+0x10000) >> 1);
 }
 
+// C2PORT-NONMATCHING: best 15.00% | difftest PASS 2000 trials (spec 0053757b_BrFixedACos.json) | reason VC5 widens the 16-bit table interpolation multiply
 // FUNCTION: CARMA2_HW 0x0053757b
 br_angle C2_HOOK_CDECL BrFixedACos(br_fixed_ls a) {
 
@@ -430,8 +477,12 @@ br_angle C2_HOOK_CDECL BrFixedACos(br_fixed_ls a) {
     return fixed_lut_interpolate(fixed_acos_table, (a+0x10000) >> 1);
 }
 
+// C2PORT-NONMATCHING: best 1.5% | difftest PASS 2000 trials (spec 005375af_BrFixedATan2.json) | reason original uses swapped angle axes; VC5 divide code differs
 // FUNCTION: CARMA2_HW 0x005375af
 br_angle C2_HOOK_CDECL BrFixedATan2(br_fixed_ls x, br_fixed_ls y) {
+    br_fixed_ls temp = x;
+    x = y;
+    y = temp;
 
     if (y > 0) {
         if (x >= 0) {
@@ -481,8 +532,13 @@ br_angle C2_HOOK_CDECL BrFixedATan2(br_fixed_ls x, br_fixed_ls y) {
     }
 }
 
+// C2PORT-NONMATCHING: best 2.25% | difftest PASS 2000 trials (spec 005377b3_BrFixedATan2Fast.json) | reason verified argument order and legacy axis results; compiler uses 64-bit divide helpers
 // FUNCTION: CARMA2_HW 0x005377b3
 br_angle C2_HOOK_CDECL BrFixedATan2Fast(br_fixed_ls x, br_fixed_ls y) {
+    br_fixed_ls temp = x;
+    x = y;
+    y = temp;
+
     if (y > 0) {
         if (x >= 0) {
             if (x > y) {
@@ -514,6 +570,9 @@ br_angle C2_HOOK_CDECL BrFixedATan2Fast(br_fixed_ls x, br_fixed_ls y) {
                 return 0xc000 - (((((br_uint_64)x)<<32) / y) >> 19);                                            // 3 * PI / 2 - atan(x / y)
             }
         } else {
+            if (x == 0) {
+                return 0xa000;
+            }
             if (x < y) {
                 return 0xc000 + (((((br_uint_64)x)<<32) / y) >> 19);                                            // 3 * PI / 2 + atan(x / y)
             } else if (x == y) {
@@ -532,6 +591,7 @@ br_angle C2_HOOK_CDECL BrFixedATan2Fast(br_fixed_ls x, br_fixed_ls y) {
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 16.28% | difftest PASS 2000 trials (spec 005378bb_BrISqrt32.json) | reason loop body expanded as unrolled bitwise steps in VC5
 // FUNCTION: CARMA2_HW 0x005378bb
 uint16_t C2_HOOK_CDECL _BrISqrt32(uint32_t a) {
     // Shifting nth root algorithm
@@ -574,21 +634,24 @@ uint16_t C2_HOOK_CDECL _BrISqrt32(uint32_t a) {
     return est;
 }
 
-// FUNCTION: CARMA2_HW 0x00537a13
-br_uint_32 C2_HOOK_FASTCALL _BrISqrt64(uint64_t a) {
+// C2PORT-PORTONLY: original 0x00537a13 _BrISqrt64 takes low in ebx, high in ecx, and clobbers esi; not hooked, for the native port
+static br_uint_32 BrISqrt64Port(br_uint_32 low, br_uint_32 high) {
+    uint64_t a;
+
     // Shifting nth root algorithm
-    uint64_t err;
-    uint64_t est;
-    uint64_t est_2;
+    uint32_t err;
+    uint32_t est;
+    uint32_t est_2;
     int i;
 
+    a = ((uint64_t)high << 32) | low;
     err = 0;
     est = 0;
     est_2 = 0;
 
     // 32 iterations (32 * 2bits)
     for (i = 0; i < 32; i++) {
-        err = (err << 2) | (a >> 62);
+        err = (err << 2) | (uint32_t)(a >> 62);
         a <<= 2;
         est <<= 1;
         est_2 <<= 1;
@@ -601,6 +664,7 @@ br_uint_32 C2_HOOK_FASTCALL _BrISqrt64(uint64_t a) {
     return (br_uint_32)est;
 }
 
+// C2PORT-NONMATCHING: best 4.17% | difftest PASS 2000 trials (spec 00537cba_BrFastSqrt32.json) | reason C normalization loop replaces original BSR and rotate sequence
 // FUNCTION: CARMA2_HW 0x00537cba
 uint16_t C2_HOOK_CDECL _BrFastSqrt32(uint32_t v) {
     uint32_t exp;
@@ -618,6 +682,7 @@ uint16_t C2_HOOK_CDECL _BrFastSqrt32(uint32_t v) {
     return (v << 16) >> (32 - (exp >> 1));
 }
 
+// C2PORT-NONMATCHING: best 8.70% | difftest PASS 2000 trials (spec difftest/specs/00537ce5_BrFastRSqrt32.json) | reason compiler uses a normalization loop instead of BSR/rotate lookup
 // FUNCTION: CARMA2_HW 0x00537ce5
 uint32_t C2_HOOK_CDECL _BrFastRSqrt32(uint32_t v) {
     uint32_t exp;
@@ -633,28 +698,34 @@ uint32_t C2_HOOK_CDECL _BrFastRSqrt32(uint32_t v) {
     return v >> (exp >> 1);
 }
 
-// FUNCTION: CARMA2_HW 0x00537d0e
-br_uint_32 C2_HOOK_FASTCALL _BrFastRSqrt64(uint64_t v) {
-    uint32_t exp;
-    uint32_t tmp;
+// C2PORT-PORTONLY: original 0x00537d0e _BrFastRSqrt64 takes args in ebx, ecx; not hooked, for the native port
+br_uint_32 C2_HOOK_CDECL _BrFastRSqrt64(br_uint_32 low, br_uint_32 high) {
+    br_uint_32 exp;
+    br_uint_32 index;
 
-    if (v == 0) {
+    if (high != 0) {
+        for (exp = 31; (high >> exp) == 0; exp--) {
+        }
+        exp = (31 - exp) & 0xfe;
+        index = high << exp;
+        if (exp != 0) {
+            index |= low >> (32 - exp);
+        }
+        index >>= 24;
+        index = fast_rsqrt_table[index - 0x40];
+        return index >> ((30 - exp) >> 1);
+    }
+    if (low == 0) {
         return 0;
     }
-    tmp = v >> 32;
-    if (tmp != 0) {
-        for (exp = 31; (tmp >> exp) == 0; exp--) {
-        }
-        exp = (31-exp) & 0xfe;
-        v = (v << exp) >> 56;
-        v = fast_rsqrt_table[v-0x40];
-        return (br_uint_32)(v >> ((30 - exp) >> 1));
+    for (exp = 31; (low >> exp) == 0; exp--) {
     }
-    tmp = (br_uint_32)v;
-    for (exp = 31; (tmp >> exp) == 0; exp--) {
-    }
-    exp = exp | 1;
-    v = (v << (31 - exp)) >> 24;
-    v = fast_rsqrt_table[v-0x40];
-    return (br_uint_32)((v << 16) >> (exp >> 1));
+    exp |= 1;
+    index = (low << (31 - exp)) >> 24;
+    index = fast_rsqrt_table[index - 0x40];
+    return index >> (exp >> 1);
+}
+
+static br_uint_32 BrFastRSqrt64FromValue(uint64_t value) {
+    return _BrFastRSqrt64((br_uint_32)value, (br_uint_32)(value >> 32));
 }

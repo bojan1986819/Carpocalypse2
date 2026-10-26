@@ -9,6 +9,7 @@
 
 // GLOBAL: CARMA2_HW 0x006a3940
 extern tQueued_net_smash gQueued_net_smashes[50];
+extern int gINT_006a8294;
 extern int gSize_powerup_queue;
 extern br_scalar gSight_distance_squared;
 extern br_material* gMaterials_to_adapt[200];
@@ -54,7 +55,7 @@ extern const char* gLollipop_names[3];
 extern const char* gGroove_nature_names[2];
 extern const char* gGroove_path_names[2];
 extern const char* gGroove_object_names[4];
-extern tStored_smash* gNet_host_smashes;
+extern tNet_stored_smash* gNet_host_smashes;
 extern int gCount_host_smashes;
 extern tExtra_render gExtra_renders[6];
 extern int gDelete_count;
@@ -76,6 +77,10 @@ void C2_HOOK_FASTCALL SetRoadTexturingLevel(tRoad_texturing_level pLevel);
 tWall_texturing_level C2_HOOK_FASTCALL GetWallTexturingLevel(void);
 
 void C2_HOOK_FASTCALL SetWallTexturingLevel(tWall_texturing_level pLevel);
+
+br_material* C2_HOOK_FASTCALL WallPerspToLinear(br_model* pModel, tU16 pFace);
+
+br_material* C2_HOOK_FASTCALL WallPerspToUntex(br_model* pModel, tU16 pFace);
 
 void C2_HOOK_FASTCALL SetCarSimplificationLevel(int pLevel);
 
@@ -217,8 +222,6 @@ void C2_HOOK_FASTCALL AddGroovidelics(FILE* pF, int pOwner, br_actor* pParent_ac
 
 void C2_HOOK_FASTCALL DisposeGroovidelics(int pOwner);
 
-void C2_HOOK_FASTCALL FUN_004ff030(void);
-
 tSpecial_volume* C2_HOOK_FASTCALL GetDefaultSpecialVolumeForWater(void);
 
 void C2_HOOK_FASTCALL ReadGlobalLightingInfo(FILE* pF);
@@ -313,6 +316,10 @@ void C2_HOOK_FASTCALL MungeMaterialSV(br_matrix34* pMat, br_material* pMat_1, br
 
 br_uint_32 C2_HOOK_FASTCALL ApplyTransToModels(br_actor* pActor, br_matrix34* pMat, void* pData);
 
+intptr_t C2_HOOK_CDECL MoveModelVertices(br_actor* pActor, br_vector3* pOffset);
+
+void C2_HOOK_FASTCALL RecenterActorModels(br_actor* pActor, br_vector3* pOffset);
+
 br_uint_32 C2_HOOK_FASTCALL DeleteBastards(br_actor* pActor, br_matrix34* pMat, void* pData);
 
 void C2_HOOK_FASTCALL PutAdditionalNonCarsOnToAdditionalActors(void);
@@ -322,6 +329,8 @@ void C2_HOOK_FASTCALL PutAdditionalNonCarsOnToNonTrackActor(void);
 void C2_HOOK_FASTCALL DeleteAnyZeroBastards(void);
 
 void C2_HOOK_FASTCALL SaveAdditionalActors(void);
+
+void C2_HOOK_FASTCALL DropActor(int pIndex, int pPowerup);
 
 void C2_HOOK_FASTCALL SaveSpecialVolumes(void);
 
@@ -365,6 +374,8 @@ void C2_HOOK_FASTCALL AddExtraRender(br_actor* pActor, br_material* pMaterial);
 
 void C2_HOOK_FASTCALL ResetGrooveFlags(void);
 
+void C2_HOOK_FASTCALL SetGrooveInterrupt(int pGroove_index, br_matrix34* pMatrix, int pPath_interrupt, int pObject_interrupt, float pPath_resumption, float pObject_resumption);
+
 void C2_HOOK_FASTCALL DisableFunkotronic(int pIndex);
 
 void C2_HOOK_FASTCALL EnableFunkotronic(int pIndex);
@@ -373,7 +384,9 @@ void C2_HOOK_FASTCALL StopGroovidelic(br_actor* actor);
 
 tGroovidelic_spec* C2_HOOK_FASTCALL ActorsGroove(br_actor* pActor);
 
-void C2_HOOK_FASTCALL EnableGroovidelic(br_actor *pActor, tU32 pBlock_flags);
+void C2_HOOK_FASTCALL FUN_0047b390(br_device_pixelmap* pPixelmap, int pWidth, int pHeight, int pMask);
+void C2_HOOK_FASTCALL EnableGroovidelic(br_actor *pActor, tU32 pBlock_flags);
+void C2_HOOK_FASTCALL DisableGroovidelic(br_actor *pActor, tU32 pBlock_flags);
 
 br_uint_32 C2_HOOK_CDECL ZlibFsGetAttributes(void);
 
@@ -406,5 +419,7 @@ void C2_HOOK_FAKE_THISCALL ControlBoundFunkGroove(int pSlot_number, undefined4 p
 float C2_HOOK_FAKE_THISCALL ControlBoundFunkGroovePlus(int pSlot_number, undefined4 pArg2, float pValue);
 
 void C2_HOOK_FASTCALL ProcessTrack(br_actor* pWorld, tTrack_spec* pTrack_spec, br_actor* pCamera, br_matrix34* pCamera_to_world_transform);
+
+void C2_HOOK_FASTCALL FUN_004f0f80(tNet_game_player_info* pRecipient);
 
 #endif // CARPOCALYPSE2_WORLD_H

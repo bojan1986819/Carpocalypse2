@@ -3,12 +3,10 @@
 #include "carpocalypse2_macros.h"
 #include "physics.h"
 
-#include <brender/brender.h>
-
-/* Quaternion APIs used by the packed orientation conversion below. */
+extern const br_scalar gFLOAT_0058a3f8;
+extern const br_scalar gFLOAT_0058a40c;
 extern br_quat* C2_HOOK_CDECL BrQuatNormalise(br_quat* q, const br_quat* qq);
 extern br_matrix34* C2_HOOK_CDECL BrQuatToMatrix34(br_matrix34* mat, const br_quat* q);
-
 // GLOBAL: CARMA2_HW 0x0065d004
 int gPHIL_enabled = 1;
 
@@ -16,57 +14,9 @@ int gPHIL_enabled = 1;
 
 // FractionToScalar
 
-static double C2_HOOK_CDECL PhilOrientationScalar(double value) {
-    union { br_scalar scalar; tU32 word; } bits;
-    volatile tU32 stored;
+// GetOrientationFromMatrix
 
-    /* The integer reload forces the scalar rounding even with MSVC5. */
-    bits.scalar = (br_scalar)value;
-    stored = bits.word;
-    bits.word = stored;
-    return bits.scalar;
-}
-
-// FUNCTION: CARMA2_HW 0x0049be90
-void C2_HOOK_FASTCALL GetOrientationFromMatrix(tU16* pOrientation, const br_matrix34* pMatrix) {
-    br_quat quaternion;
-    double value;
-    int i;
-
-    BrMatrix34ToQuat(&quaternion, pMatrix);
-    for (i = 0; i < 4; i++) {
-        value = (&quaternion.x)[i];
-        if (value > 1.0) {
-            value = 1.0;
-        }
-        /* Original C0 test replaces unordered values with the lower bound. */
-        if (!(value >= -1.0)) {
-            value = -1.0;
-        }
-        value = ((value - -1.0) * 0.5) * 65534.0 - -0.5;
-        pOrientation[i] = (tU16)(br_int_64)value;
-    }
-}
-
-// FUNCTION: CARMA2_HW 0x0049c000
-void C2_HOOK_FASTCALL GetMatrixFromOrientation(br_matrix34* pMatrix, const tU16* pOrientation) {
-    br_quat quaternion;
-    tU16 parts[4];
-    double value;
-    int i;
-
-    parts[0] = pOrientation[0];
-    parts[1] = pOrientation[1];
-    parts[2] = pOrientation[2];
-    parts[3] = pOrientation[3];
-    for (i = 0; i < 4; i++) {
-        /* 0x37800100 is the original scalar; double its product unspilled. */
-        value = (double)parts[i] * 1.5259254723787308e-05;
-        (&quaternion.x)[i] = (br_scalar)PhilOrientationScalar((value + value) - 1.0);
-    }
-    BrQuatNormalise(&quaternion, &quaternion);
-    BrQuatToMatrix34(pMatrix, &quaternion);
-}
+// GetMatrixFromOrientation
 
 // OmegaCompScalarTo16
 
@@ -92,15 +42,103 @@ void C2_HOOK_FASTCALL GetMatrixFromOrientation(br_matrix34* pMatrix, const tU16*
 
 // GetHierarchyNetworkSize
 
-// GetNetworkDataSize
+// FUNCTION: CARMA2_HW 0x0049cee0
+int C2_HOOK_FASTCALL GetNetworkDataSize(tU8* pNet_data) {
+    int size;
+    tU8* next;
+    tU8 more;
+
+    switch (*pNet_data & 0xf) {
+    case 0:
+        size = 0x28;
+        break;
+    case 1:
+    case 4:
+        size = 0xc;
+        break;
+    case 2:
+    case 3:
+        size = 0x10;
+        break;
+    default:
+        PhysicsError(9, "netphys got messed up");
+        size = 0;
+    }
+    more = *pNet_data & 0x80;
+    while (more != 0) {
+        next = pNet_data + size;
+        size += GetNetworkDataSize(next);
+        more = *next & 0x40;
+    }
+    return size;
+}
 
 // GetSingleMatrixFromNetworkData
+
+// C2PORT-NONMATCHING: best 49.42% | difftest PASS 2000 trials (spec difftest/specs/0049cf50_GetSingleMatrixFromNetworkData.json) | reason x87-order
+// FUNCTION: CARMA2_HW 0x0049cf50
+int C2_HOOK_FASTCALL GetSingleMatrixFromNetworkData(tU8* pNet_data, br_matrix34* pMatrix) {
+    br_quat quaternion;
+
+    switch (pNet_data[0] & 0xF) {
+    case 0:
+        quaternion.x = (br_scalar)((const tU16*)(pNet_data + 0x14))[0] * gFLOAT_0058a40c;
+        quaternion.x = quaternion.x + quaternion.x - gFLOAT_0058a3f8;
+        quaternion.y = (br_scalar)((const tU16*)(pNet_data + 0x14))[1] * gFLOAT_0058a40c;
+        quaternion.y = quaternion.y + quaternion.y - gFLOAT_0058a3f8;
+        quaternion.z = (br_scalar)((const tU16*)(pNet_data + 0x14))[2] * gFLOAT_0058a40c;
+        quaternion.z = quaternion.z + quaternion.z - gFLOAT_0058a3f8;
+        quaternion.w = (br_scalar)((const tU16*)(pNet_data + 0x14))[3] * gFLOAT_0058a40c;
+        quaternion.w = quaternion.w + quaternion.w - gFLOAT_0058a3f8;
+        BrQuatNormalise(&quaternion, &quaternion);
+        BrQuatToMatrix34(pMatrix, &quaternion);
+        memcpy(pMatrix->m[3], pNet_data + 0x1C, sizeof(pMatrix->m[3]));
+        return 0x28;
+    case 1:
+    case 4:
+        quaternion.x = (br_scalar)((const tU16*)(pNet_data + 4))[0] * gFLOAT_0058a40c;
+        quaternion.x = quaternion.x + quaternion.x - gFLOAT_0058a3f8;
+        quaternion.y = (br_scalar)((const tU16*)(pNet_data + 4))[1] * gFLOAT_0058a40c;
+        quaternion.y = quaternion.y + quaternion.y - gFLOAT_0058a3f8;
+        quaternion.z = (br_scalar)((const tU16*)(pNet_data + 4))[2] * gFLOAT_0058a40c;
+        quaternion.z = quaternion.z + quaternion.z - gFLOAT_0058a3f8;
+        quaternion.w = (br_scalar)((const tU16*)(pNet_data + 4))[3] * gFLOAT_0058a40c;
+        quaternion.w = quaternion.w + quaternion.w - gFLOAT_0058a3f8;
+        BrQuatNormalise(&quaternion, &quaternion);
+        BrQuatToMatrix34(pMatrix, &quaternion);
+        return 0xC;
+    case 2:
+    case 3:
+        quaternion.x = (br_scalar)((const tU16*)(pNet_data + 8))[0] * gFLOAT_0058a40c;
+        quaternion.x = quaternion.x + quaternion.x - gFLOAT_0058a3f8;
+        quaternion.y = (br_scalar)((const tU16*)(pNet_data + 8))[1] * gFLOAT_0058a40c;
+        quaternion.y = quaternion.y + quaternion.y - gFLOAT_0058a3f8;
+        quaternion.z = (br_scalar)((const tU16*)(pNet_data + 8))[2] * gFLOAT_0058a40c;
+        quaternion.z = quaternion.z + quaternion.z - gFLOAT_0058a3f8;
+        quaternion.w = (br_scalar)((const tU16*)(pNet_data + 8))[3] * gFLOAT_0058a40c;
+        quaternion.w = quaternion.w + quaternion.w - gFLOAT_0058a3f8;
+        BrQuatNormalise(&quaternion, &quaternion);
+        BrQuatToMatrix34(pMatrix, &quaternion);
+        return 0x10;
+    default:
+        PhysicsError(9, "netphys got messed up");
+        return -1;
+    }
+}
+
+// GetNetworkDataSize
 
 // PHILInit
 
 // FUNCTION: CARMA2_HW 0x004b5d20
 void C2_HOOK_FASTCALL PHILDisable(void) {
     gPHIL_enabled = 1;
+}
+
+// FUNCTION: CARMA2_HW 0x004b5d30
+int C2_HOOK_FASTCALL FUN_004b5d30(void) {
+
+    return 100 - gPHIL_count_list_collision_infos;
 }
 
 // PHILAddObject
@@ -181,27 +219,27 @@ tU32 C2_HOOK_FASTCALL PHILReturnObjectStatus(tPhysics_object* pObject) {
     return 0;
 }
 
-// PHILMakeObjectPassive
-
 // FUNCTION: CARMA2_HW 0x004b6040
 int C2_HOOK_FASTCALL PHILMakeObjectPassive(tPhysics_object* pObject) {
-    tPHIL_queued_header* info;
+    tQueued_object_info* object_info;
 
     if (gPHIL_enabled) {
         return 0;
     }
-    info = pObject->field_0x240;
     if (pObject->field_0x239 == 2) {
-        info->field_0x8 = 1;
+        object_info = pObject->field_0x240;
+        object_info->field_0x8 = 1;
         return 0;
     }
-    if (info == NULL) {
-        return 3;
+    object_info = pObject->field_0x240;
+    if (object_info != NULL) {
+        object_info->field_0x8 = 1;
+        pObject->flags |= 0x20;
+        return 0;
     }
-    info->field_0x8 = 1;
-    pObject->flags |= 0x20;
-    return 0;
+    return 3;
 }
+
 
 // PHILMakeObjectActive
 

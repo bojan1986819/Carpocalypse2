@@ -83,12 +83,13 @@ br_uint_32 hitherYonTable[16] = {
     do {                                                                                                                                            \
         if (!((R)->flags & OUTCODES_ALL)) {                                                                                                         \
             br_scalar one_div_w = 1.f / (R)->comp[C_W];                                                                                             \
-            dest1->comp[C_SX] = renderer->state.cache.comp_offsets[C_SX] + renderer->state.cache.comp_scales[C_SX] * (R)->comp[C_X] * one_div_w;    \
-            dest2->comp[C_SY] = renderer->state.cache.comp_offsets[C_SY] + renderer->state.cache.comp_scales[C_SY] * (R)->comp[C_Y] * one_div_w;    \
-            dest3->comp[C_SZ] = renderer->state.cache.comp_offsets[C_SZ] + renderer->state.cache.comp_scales[C_SZ] * (R)->comp[C_Z] * one_div_w;    \
+            (R)->comp[C_SX] = renderer->state.cache.comp_offsets[C_SX] + renderer->state.cache.comp_scales[C_SX] * (R)->comp[C_X] * one_div_w;     \
+            (R)->comp[C_SY] = renderer->state.cache.comp_offsets[C_SY] + renderer->state.cache.comp_scales[C_SY] * (R)->comp[C_Y] * one_div_w;     \
+            (R)->comp[C_SZ] = renderer->state.cache.comp_offsets[C_SZ] + renderer->state.cache.comp_scales[C_SZ] * (R)->comp[C_Z] * one_div_w;     \
         }                                                                                                                                           \
     } while (0)
 
+// C2PORT-NONMATCHING: best 9.1% | difftest PASS 2000 trials (spec difftest/specs/0054c400_averageVerticesOnScreen.json) | reason x87 spills in projected coordinate math
 // FUNCTION: CARMA2_HW 0x0054c400
 void C2_HOOK_CDECL averageVerticesOnScreen(br_soft_renderer* renderer, brp_vertex* dest1, brp_vertex* dest2, brp_vertex* dest3, brp_vertex* src1, brp_vertex* src2, brp_vertex* src3) {
     br_scalar one_div_w1;
@@ -125,18 +126,17 @@ void C2_HOOK_CDECL averageVerticesOnScreen(br_soft_renderer* renderer, brp_verte
 }
 
 static br_uint_32 OUTCODE_ORDINATE(br_uint_32 lValue, br_uint_32 rValue, br_uint_32* tableName1) {
-#if 0
     br_uint_32 ldown = lValue & 0x7fffffff;
     br_uint_32 rdown = rValue & 0x7fffffff;
-#endif
     br_uint_32 idx =
       (rValue & 0x80000000) / 2
     | (lValue & 0x80000000)
-    | (rValue - lValue) / 8
-    | ((lValue - rValue) & 0x80000000) / 4;
+    | (rdown - ldown) / 8
+    | ((ldown - rdown) & 0x80000000) / 4;
     return tableName1[idx >> 28];
 }
 
+// C2PORT-NONMATCHING: best 13.78% | difftest PASS 2000 trials (spec difftest/specs/0054c7ef_averageVertices.json) | reason midpoint and projection x87 spills
 // FUNCTION: CARMA2_HW 0x0054c7ef
 void C2_HOOK_CDECL averageVertices(br_soft_renderer* renderer, brp_vertex* dest1, brp_vertex* dest2, brp_vertex* dest3, brp_vertex* src1, brp_vertex* src2, brp_vertex* src3) {
 
@@ -154,19 +154,19 @@ void C2_HOOK_CDECL averageVertices(br_soft_renderer* renderer, brp_vertex* dest1
     COMPUTE_COMPONENT_MID_POINT_VALUES(C_V);
 
     dest1->flags = OUTCODES_NOT
-            | OUTCODE_ORDINATE(dest1->comp_i[C_X], dest1->comp_i[C_W], rightLeftTable)
-            | OUTCODE_ORDINATE(dest1->comp_i[C_Y], dest1->comp_i[C_W], topBottomTable)
-            | OUTCODE_ORDINATE(dest1->comp_i[C_Z], dest1->comp_i[C_W], hitherYonTable);
+            ^ OUTCODE_ORDINATE(dest1->comp_i[C_X], dest1->comp_i[C_W], rightLeftTable)
+            ^ OUTCODE_ORDINATE(dest1->comp_i[C_Y], dest1->comp_i[C_W], topBottomTable)
+            ^ OUTCODE_ORDINATE(dest1->comp_i[C_Z], dest1->comp_i[C_W], hitherYonTable);
 
     dest2->flags = OUTCODES_NOT
-            | OUTCODE_ORDINATE(dest2->comp_i[C_X], dest2->comp_i[C_W], rightLeftTable)
-            | OUTCODE_ORDINATE(dest2->comp_i[C_Y], dest2->comp_i[C_W], topBottomTable)
-            | OUTCODE_ORDINATE(dest2->comp_i[C_Z], dest2->comp_i[C_W], hitherYonTable);
+            ^ OUTCODE_ORDINATE(dest2->comp_i[C_X], dest2->comp_i[C_W], rightLeftTable)
+            ^ OUTCODE_ORDINATE(dest2->comp_i[C_Y], dest2->comp_i[C_W], topBottomTable)
+            ^ OUTCODE_ORDINATE(dest2->comp_i[C_Z], dest2->comp_i[C_W], hitherYonTable);
 
     dest3->flags = OUTCODES_NOT
-            | OUTCODE_ORDINATE(dest3->comp_i[C_X], dest3->comp_i[C_W], rightLeftTable)
-            | OUTCODE_ORDINATE(dest3->comp_i[C_Y], dest3->comp_i[C_W], topBottomTable)
-            | OUTCODE_ORDINATE(dest3->comp_i[C_Z], dest3->comp_i[C_W], hitherYonTable);
+            ^ OUTCODE_ORDINATE(dest3->comp_i[C_X], dest3->comp_i[C_W], rightLeftTable)
+            ^ OUTCODE_ORDINATE(dest3->comp_i[C_Y], dest3->comp_i[C_W], topBottomTable)
+            ^ OUTCODE_ORDINATE(dest3->comp_i[C_Z], dest3->comp_i[C_W], hitherYonTable);
 
     if (scache.user_clip_active) {
         int i;
@@ -216,4 +216,11 @@ void C2_HOOK_CDECL averageVertices(br_soft_renderer* renderer, brp_vertex* dest1
     TEST_AND_PROJECT_VERTEX(dest1);
     TEST_AND_PROJECT_VERTEX(dest2);
     TEST_AND_PROJECT_VERTEX(dest3);
+}
+
+
+// FUNCTION: CARMA2_HW 0x00560020
+char* FUN_00560020(void) {
+
+    return "1.0.4";
 }

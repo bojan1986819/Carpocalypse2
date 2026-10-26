@@ -8,7 +8,11 @@
 #include "core/std/brstdlib.h"
 
 // GLOBAL: CARMA2_HW 0x00667f48
+#ifdef CARPOCALYPSE2_MATCHING
 br_token_entry predefinedTokens[461] = {
+#else
+br_token_entry predefinedTokens[] = {
+#endif
     { { NULL, NULL }, "ABGR_1_5_5_5",                BRT_NONE,              BRT_ABGR_1_5_5_5,               12  },
     { { NULL, NULL }, "ABGR_4_4_4_4",                BRT_NONE,              BRT_ABGR_4_4_4_4,               12  },
     { { NULL, NULL }, "ABGR_8_8_8_8",                BRT_NONE,              BRT_ABGR_8_8_8_8,               12  },
@@ -470,6 +474,41 @@ br_token_entry predefinedTokens[461] = {
     { { NULL, NULL }, "Z_WRITE_NEVER",               BRT_NONE,              BRT_Z_WRITE_NEVER,              13  },
     { { NULL, NULL }, "Z_WRITE_T",                   BRT_TOKEN,             BRT_Z_WRITE_T,                  7   },
     { { NULL, NULL }, "Z_WRITE_TL",                  BRT_TOKEN_LIST,        BRT_Z_WRITE_TL,                 7   },
+#ifndef CARPOCALYPSE2_MATCHING
+    { { NULL, NULL }, "ALL",                         BRT_NONE,              BRT_ALL,                           3 },
+    { { NULL, NULL }, "BLEND_PREMULTIPLIED",         BRT_NONE,              BRT_BLEND_PREMULTIPLIED,           19 },
+    { { NULL, NULL }, "COLOUR_KEY_B",                BRT_BOOLEAN,           BRT_COLOUR_KEY_B,                  12 },
+    { { NULL, NULL }, "DEPTH_BIAS_F",                BRT_FLOAT,             BRT_DEPTH_BIAS_F,                  12 },
+    { { NULL, NULL }, "DEPTH_BIAS_X",                BRT_FIXED,             BRT_DEPTH_BIAS_X,                  12 },
+    { { NULL, NULL }, "DIVERT_T",                    BRT_TOKEN,             BRT_DIVERT_T,                      8 },
+    { { NULL, NULL }, "FACE_GROUP_COUNT_U32",        BRT_UINT_32,           BRT_FACE_GROUP_COUNT_U32,          20 },
+    { { NULL, NULL }, "FOG_B",                       BRT_BOOLEAN,           BRT_FOG_B,                         5 },
+    { { NULL, NULL }, "FORCE_BACK_B",                BRT_BOOLEAN,           BRT_FORCE_BACK_B,                  12 },
+    { { NULL, NULL }, "HITHER_Z_F",                  BRT_FLOAT,             BRT_HITHER_Z_F,                    10 },
+    { { NULL, NULL }, "HITHER_Z_X",                  BRT_FIXED,             BRT_HITHER_Z_X,                    10 },
+    { { NULL, NULL }, "MSAA_SAMPLES_I32",            BRT_INT_32,            BRT_MSAA_SAMPLES_I32,              16 },
+    { { NULL, NULL }, "OPENGL_CALLBACKS_P",          BRT_POINTER,           BRT_OPENGL_CALLBACKS_P,            18 },
+    { { NULL, NULL }, "OPENGL_FRAGMENT_SHADER_STR",  BRT_STRING,            BRT_OPENGL_FRAGMENT_SHADER_STR,    26 },
+    { { NULL, NULL }, "OPENGL_PROFILE_CORE",         BRT_NONE,              BRT_OPENGL_PROFILE_CORE,           19 },
+    { { NULL, NULL }, "OPENGL_PROFILE_COMPATIBILITY", BRT_NONE,              BRT_OPENGL_PROFILE_COMPATIBILITY,  28 },
+    { { NULL, NULL }, "OPENGL_PROFILE_ES",           BRT_NONE,              BRT_OPENGL_PROFILE_ES,             17 },
+    { { NULL, NULL }, "OPENGL_PROFILE_T",            BRT_TOKEN,             BRT_OPENGL_PROFILE_T,              16 },
+    { { NULL, NULL }, "OPENGL_RENDERER_CSTR",        BRT_CONSTANT_STRING,   BRT_OPENGL_RENDERER_CSTR,          20 },
+    { { NULL, NULL }, "OPENGL_VENDOR_CSTR",          BRT_CONSTANT_STRING,   BRT_OPENGL_VENDOR_CSTR,            18 },
+    { { NULL, NULL }, "OPENGL_VERSION_CSTR",         BRT_CONSTANT_STRING,   BRT_OPENGL_VERSION_CSTR,           19 },
+    { { NULL, NULL }, "OPENGL_VERSION_MAJOR_U8",     BRT_UINT_8,            BRT_OPENGL_VERSION_MAJOR_U8,       23 },
+    { { NULL, NULL }, "OPENGL_VERSION_MINOR_U8",     BRT_UINT_8,            BRT_OPENGL_VERSION_MINOR_U8,       23 },
+    { { NULL, NULL }, "OPENGL_VERTEX_SHADER_STR",    BRT_STRING,            BRT_OPENGL_VERTEX_SHADER_STR,      24 },
+    { { NULL, NULL }, "PRELIGHTING_B",               BRT_BOOLEAN,           BRT_PRELIGHTING_B,                 13 },
+    { { NULL, NULL }, "STORED_ONLY_B",               BRT_BOOLEAN,           BRT_STORED_ONLY_B,                 13 },
+    { { NULL, NULL }, "TRIANGLES_DRAWN_COUNT_U32",   BRT_UINT_32,           BRT_TRIANGLES_DRAWN_COUNT_U32,     25 },
+    { { NULL, NULL }, "TRIANGLES_RENDERED_COUNT_U32", BRT_UINT_32,           BRT_TRIANGLES_RENDERED_COUNT_U32,  28 },
+    { { NULL, NULL }, "VERTICES_RENDERED_COUNT_U32", BRT_UINT_32,           BRT_VERTICES_RENDERED_COUNT_U32,   27 },
+    { { NULL, NULL }, "WINDOW_MONITOR_I32",          BRT_INT_32,            BRT_WINDOW_MONITOR_I32,            18 },
+    { { NULL, NULL }, "YON_Z_F",                     BRT_FLOAT,             BRT_YON_Z_F,                       7 },
+    { { NULL, NULL }, "YON_Z_X",                     BRT_FIXED,             BRT_YON_Z_X,                       7 },
+    { { NULL, NULL }, "AMBIENT",                     BRT_NONE,              BRT_AMBIENT,                       7 },
+#endif
 };
 
 // GLOBAL: CARMA2_HW 0x0066aa80

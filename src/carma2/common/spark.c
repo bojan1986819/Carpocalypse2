@@ -2,8 +2,10 @@
 
 #include "car.h"
 #include "depth.h"
+#include "displays.h"
 #include "errors.h"
 #include "globvars.h"
+#include "globvrkm.h"
 #include "globvrpb.h"
 #include "graphics.h"
 #include "loading.h"
@@ -11,6 +13,7 @@
 #include "pedestrn.h"
 #include "physics.h"
 #include "piping.h"
+#include "raycast.h"
 #include "replay.h"
 #include "trig.h"
 #include "utility.h"
@@ -18,13 +21,10 @@
 #include "carpocalypse2_macros.h"
 
 #include "c2_string.h"
+#ifndef CARPOCALYPSE2_MATCHING
+#include <stdlib.h>
+#endif
 #include "spark.h"
-
-#include "funks.h"
-
-extern tCar_spec* gRecalc_mass_car;
-
-void C2_HOOK_FASTCALL SingleSplash(tPhysics_object* pObject, const br_matrix34* pMatrix, const br_vector3* pVelocity, const br_vector3* pNormal_velocity, const br_vector3* pOmega, const br_vector3* pPoint, const br_vector3* pNormal, tU32 pTime);
 
 #define CHARS1_TO_INT(A)            ((A) - '0')
 #define CHARS2_TO_INT(A, B)         (10 * CHARS1_TO_INT(A) + CHARS1_TO_INT(B))
@@ -73,15 +73,8 @@ tShrapnel gShrapnel[30];
 
 // GLOBAL: CARMA2_HW 0x006aa59c
 int gColumn_flags;
-
 // GLOBAL: CARMA2_HW 0x006aa5a0
-int gColumn_next;
-
-// GLOBAL: CARMA2_HW 0x006a82ac
-int gSplash_next;
-
-// GLOBAL: CARMA2_HW 0x006aa578
-int gSpark_next;
+int gNext_column;
 
 // GLOBAL: CARMA2_HW 0x006aa380
 br_model* gLollipop_model;
@@ -107,6 +100,9 @@ br_material* gSplash_material[20];
 // GLOBAL: CARMA2_HW 0x006a82b8
 tSplash gSplash[32];
 
+// GLOBAL: CARMA2_HW 0x006a82ac
+int gNext_splash;
+
 // GLOBAL: CARMA2_HW 0x006aa57c
 int gSpark_flags;
 
@@ -130,6 +126,93 @@ int gAFE_color_cycle;
 
 // GLOBAL: CARMA2_HW 0x006aa584
 int gShrapnel_flags;
+
+// GLOBAL: CARMA2_HW 0x006aa580
+int gShrapnel_index;
+
+// GLOBAL: CARMA2_HW 0x006aa578
+int gNext_spark;
+
+// GLOBAL: CARMA2_HW 0x0058aff0
+const br_scalar gFLOAT_0058aff0 = 10.0f;
+
+// GLOBAL: CARMA2_HW 0x0058b008
+const br_scalar gFLOAT_0058b008 = 0.0f;
+
+// GLOBAL: CARMA2_HW 0x0058b010
+const double gDOUBLE_0058b010 = 1.0;
+
+// GLOBAL: CARMA2_HW 0x0058b018
+const br_scalar gFLOAT_0058b018 = -0.5f;
+
+// GLOBAL: CARMA2_HW 0x0058b020
+const double gDOUBLE_0058b020 = 0.7;
+
+// GLOBAL: CARMA2_HW 0x0058b028
+const br_scalar gFLOAT_0058b028 = 0.01f;
+
+// GLOBAL: CARMA2_HW 0x0058b02c
+const br_scalar gFLOAT_0058b02c = -0.1f;
+
+// GLOBAL: CARMA2_HW 0x0058b030
+const br_scalar gFLOAT_0058b030 = 0.7f;
+
+// GLOBAL: CARMA2_HW 0x0058b034
+const br_scalar gFLOAT_0058b034 = 0.3f;
+
+// GLOBAL: CARMA2_HW 0x0058b038
+const br_scalar gFLOAT_0058b038 = 0.1f;
+
+// GLOBAL: CARMA2_HW 0x0058b03c
+const br_scalar gFLOAT_0058b03c = -20.0f;
+
+// GLOBAL: CARMA2_HW 0x0058b040
+const br_scalar gFLOAT_0058b040 = 3.0f;
+
+// GLOBAL: CARMA2_HW 0x0058b044
+const br_scalar gFLOAT_0058b044 = 0.005f;
+
+// GLOBAL: CARMA2_HW 0x0058b048
+const double gDOUBLE_0058b048 = 0.3;
+
+// GLOBAL: CARMA2_HW 0x0058b0d8
+const float gFLOAT_0058b0d8 = 0.003f;
+
+// GLOBAL: CARMA2_HW 0x0058b0e0
+const double gDOUBLE_0058b0e0 = 11.594202898550725;
+
+// GLOBAL: CARMA2_HW 0x0058afdc
+const br_scalar gFLOAT_0058afdc = 1.0f;
+
+// GLOBAL: CARMA2_HW 0x0058afec
+const br_scalar gFLOAT_0058afec = 0.5f;
+
+// GLOBAL: CARMA2_HW 0x0058b054
+const br_scalar gFLOAT_0058b054 = 6.9f;
+
+// GLOBAL: CARMA2_HW 0x0058b060
+const br_scalar gFLOAT_0058b060 = 0.14492753148078918f;
+
+// GLOBAL: CARMA2_HW 0x0058b0c8
+const double gDOUBLE_0058b0c8 = 6.9;
+
+// GLOBAL: CARMA2_HW 0x0058b0f0
+const double gDOUBLE_0058b0f0 = -0.2;
+
+// GLOBAL: CARMA2_HW 0x0058b0f8
+const double gDOUBLE_0058b0f8 = 0.07;
+
+// GLOBAL: CARMA2_HW 0x0058b108
+const double gDOUBLE_0058b108 = 47.61000000000001;
+
+// GLOBAL: CARMA2_HW 0x0058b110
+const br_scalar gFLOAT_0058b110 = 0.0000002384185791015625f;
+
+// GLOBAL: CARMA2_HW 0x0058b114
+const br_scalar gFLOAT_0058b114 = -0.028985507786273956f;
+
+// GLOBAL: CARMA2_HW 0x0058b118
+const double gDOUBLE_0058b118 = 0.01;
 
 // GLOBAL: CARMA2_HW 0x006a82b0
 br_camera* gSpark_cam;
@@ -162,116 +245,40 @@ br_material* gBlack_material;
 // GLOBAL: CARMA2_HW 0x00660110
 int gSmoke_on = 1;
 
-static br_scalar C2_HOOK_CDECL SmokeScalarRound(double pValue) {
-    volatile union { br_scalar scalar; tU32 bits; } stored;
-    union { br_scalar scalar; tU32 bits; } result;
-
-    stored.scalar = (br_scalar)pValue;
-    result.bits = stored.bits;
-    return result.scalar;
-}
-
-static tU32 C2_HOOK_CDECL SmokeScalarBits(const br_scalar* pValue) {
-    tU32 bits;
-
-    memcpy(&bits, pValue, sizeof(bits));
-    return bits;
-}
-
-static double C2_HOOK_CDECL SplashSubtractFromScalar(double pValue, const br_scalar* pScalar) {
-    double result;
-
-#if defined(_MSC_VER) && defined(_M_IX86)
-    __asm {
-        mov ecx, pScalar
-        fld pValue
-        fsubr dword ptr [ecx]
-        fstp result
-    }
-#elif defined(__GNUC__) && defined(__i386__)
-    __asm__ volatile (
-        "fldl %[value]\n\t"
-        "fsubrs %[scalar]\n\t"
-        "fstpl %[result]\n\t"
-        : [result] "=m" (result)
-        : [value] "m" (pValue), [scalar] "m" (*pScalar)
-        : "st", "memory");
-#else
-    result = (double)*pScalar - pValue;
-#endif
-    return result;
-}
-
-static int C2_HOOK_CDECL SplashReplayMoving(void) {
-    br_scalar rate;
-    tU32 bits;
-
-    rate = ARGetReplayRate();
-    bits = SmokeScalarBits(&rate) & 0x7fffffffu;
-    return bits != 0 && bits <= 0x7f800000u;
-}
-
-static tS32 C2_HOOK_CDECL SparkFtol(double pValue) {
-    tU32 words[2];
-
-    memcpy(words, &pValue, sizeof(words));
-    if ((words[1] & 0x7fffffffu) >= 0x43e00000u) {
-        return 0;
-    }
-    return (tS32)(tU32)(br_int_64)pValue;
-}
-
-static int C2_HOOK_CDECL SparkClipInteger(int pOrigin, int pOther, int pAmount, int pDivisor) {
-    tS32 product;
-
-    product = (tS32)(((tU32)pOrigin - (tU32)pOther) * (tU32)pAmount);
-    return (tS32)((tU32)pOrigin - (tU32)(product / pDivisor));
-}
-
-static void C2_HOOK_CDECL SparkClipDepth(br_vector3* pPoint, const br_vector3* pOther, int pAmount, int pDivisor) {
-    pPoint->v[2] = SmokeScalarRound((double)pOther->v[2]
-        - (((double)pOther->v[2] - pPoint->v[2]) * pAmount) / pDivisor);
-}
-
+// C2PORT-NONMATCHING: best 40.48% | difftest PASS 2000 trials (spec 004fb910_GenerateSmokeShades.json) | reason byte-pack instruction scheduling
 // FUNCTION: CARMA2_HW 0x004fb910
 void C2_HOOK_FASTCALL GenerateSmokeShades(void) {
-    // GLOBAL: CARMA2_HW 0x006aa5b4
-    static int rb = 0;
-    // GLOBAL: CARMA2_HW 0x006aa5b8
-    static int gb = 0;
-    // GLOBAL: CARMA2_HW 0x006aa5bc
-    static int bb = 0;
-    // GLOBAL: CARMA2_HW 0x00660160
+    static int rb = 0x00;
+    static int gb = 0x00;
+    static int bb = 0x00;
+
     static int rl = 0x40;
-    // GLOBAL: CARMA2_HW 0x00660164
     static int gl = 0x40;
-    // GLOBAL: CARMA2_HW 0x00660168
     static int bl = 0x40;
-    // GLOBAL: CARMA2_HW 0x00660178
+
     static int rs = 0xc8;
-    // GLOBAL: CARMA2_HW 0x0066017c
     static int gs = 0xc8;
-    // GLOBAL: CARMA2_HW 0x00660180
     static int bs = 0xc8;
-    // GLOBAL: CARMA2_HW 0x0066016c
+
     static int rm = 0x80;
-    // GLOBAL: CARMA2_HW 0x00660170
     static int gm = 0x80;
-    // GLOBAL: CARMA2_HW 0x00660174
     static int bm = 0x80;
-    // GLOBAL: CARMA2_HW 0x00660184
+
     static int rd = 0xfe;
-    // GLOBAL: CARMA2_HW 0x00660188
     static int gd = 0xdf;
-    // GLOBAL: CARMA2_HW 0x0066018c
     static int bd = 0x43;
 
-    gShade_list[0] = BR_COLOUR_RGB(rb, gb, bb);
-    gShade_list[1] = BR_COLOUR_RGB(rl, gl, bl);
-    gShade_list[2] = BR_COLOUR_RGB(rm, gm, bm);
-    gShade_list[3] = BR_COLOUR_RGB(rs, gs, bs);
+#define RGB(R, G, B) (((R) << 16) | ((G) << 8) | ((B) << 0))
+
+    gShade_list[0] = RGB(rb, gb, bb);
+    gShade_list[1] = RGB(rl, gl, bl);
+    gShade_list[3] = RGB(rs, gs, bs);
     gShade_list[4] = gShade_list[3];
-    gShade_list[7] = BR_COLOUR_RGB(rd, gd, bd);
+    gShade_list[2] = RGB(rm, gm, bm);
+    gShade_list[7] = RGB(rd, gd, bd);
+
+#undef RGB
+
 }
 
 // FUNCTION: CARMA2_HW 0x004fdb70
@@ -296,7 +303,6 @@ void C2_HOOK_FASTCALL GetSmokeShadeTables(FILE* f) {
     }
 }
 
-// FUNCTION: CARMA2_HW 0x00516240
 void C2_HOOK_FASTCALL ModelScale(br_model* pModel, float pScale) {
     int i;
 
@@ -313,12 +319,38 @@ void C2_HOOK_FASTCALL ResetSparks(void) {
     gSpark_flags = 0;
 }
 
+// FUNCTION: CARMA2_HW 0x004f8630
+void C2_HOOK_FASTCALL CreateSingleSpark(int pIndex_and_colour, br_vector3* pPos, br_vector3* pLength) {
+    int index;
+
+    index = pIndex_and_colour & 0xff;
+    gSpark_flags |= 1 << pIndex_and_colour;
+    if (gSparks[index].car != NULL) {
+        br_vector3 position;
+        br_actor* car_actor;
+
+        car_actor = gSparks[index].car->car_master_actor;
+        position.v[0] = pPos->v[0] - car_actor->t.t.translate.t.v[0];
+        position.v[1] = pPos->v[1] - car_actor->t.t.translate.t.v[1];
+        position.v[2] = pPos->v[2] - car_actor->t.t.translate.t.v[2];
+        BrMatrix34TApplyV(&gSparks[index].pos, &position, &car_actor->t.t.mat);
+    } else {
+        gSparks[index].pos.v[0] = pPos->v[0];
+        gSparks[index].pos.v[1] = pPos->v[1];
+        gSparks[index].pos.v[2] = pPos->v[2];
+    }
+    gSparks[index].length.v[0] = pLength->v[0];
+    gSparks[index].length.v[1] = pLength->v[1];
+    gSparks[index].length.v[2] = pLength->v[2];
+    gSparks[index].colour = (char)(pIndex_and_colour >> 8);
+}
+
 void C2_HOOK_FASTCALL LoadInShrapnel(void) {
 
     gShrapnel_model[0] = LoadModel("FRAG4.DAT");
-    ModelScale(gShrapnel_model[0], 0.5f);
+    DRScaleModel(gShrapnel_model[0], 0.5f);
     gShrapnel_model[1] = LoadModel("FRAG5.DAT");
-    ModelScale(gShrapnel_model[1], 0.5f);
+    DRScaleModel(gShrapnel_model[1], 0.5f);
     BrModelAdd(gShrapnel_model[0]);
     BrModelAdd(gShrapnel_model[1]);
     gBlack_material = GetSimpleMaterial("M14.MAT", 4);
@@ -344,6 +376,33 @@ void C2_HOOK_FASTCALL InitShrapnel(void) {
             FRandomBetween(-1.f, 1.f));
         BrVector3Normalise(&gShrapnel[i].axis, &gShrapnel[i].axis);
     }
+}
+
+// C2PORT-NONMATCHING: best 96.97% | difftest PASS 2000 trials (spec difftest/specs/upstream_20261015/004fc2e0_DisposeFlameResources.json) | reason loop layout; resource callees stubbed
+// FUNCTION: CARMA2_HW 0x004fc2e0
+void C2_HOOK_FASTCALL DisposeFlameResources(void) {
+    int i;
+    int j;
+    br_actor* child;
+
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gFlame_map); i++) {
+        BrMapRemove(gFlame_map[i]);
+        BrPixelmapFree(gFlame_map[i]);
+    }
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gSmoke_column); i++) {
+        if ((gColumn_flags & (1u << i)) != 0 && gSmoke_column[i].colour == 0) {
+            BrActorRemove(gSmoke_column[i].flame_actor);
+        }
+        child = gSmoke_column[i].flame_actor->children;
+        for (j = 0; j < 3; j++) {
+            BrMaterialRemove(child->material);
+            BrMaterialFree(child->material);
+            child = child->next;
+        }
+        BrActorFree(gSmoke_column[i].flame_actor);
+    }
+    BrModelRemove(gLollipop_model);
+    BrModelFree(gLollipop_model);
 }
 
 // FUNCTION: CARMA2_HW 0x004fc3a0
@@ -485,135 +544,133 @@ void C2_HOOK_FASTCALL FreeSmokeShadeTables(void) {
 
 // FUNCTION: CARMA2_HW 0x004fdc10
 void C2_HOOK_FASTCALL LoadInKevStuff(FILE* pF) {
+    int i;
+    tShrapnel* shrapnel;
+    br_vector3* axis;
+    FILE* volatile saved_file;
 
+    saved_file = pF;
     PackFileRevertTiffLoading();
     PossibleService();
     LoadInShrapnel();
     PossibleService();
-    InitShrapnel();
+    i = 0;
+    shrapnel = &gShrapnel[0];
+    do {
+        shrapnel->actor = BrActorAllocate(BR_ACTOR_MODEL, NULL);
+        shrapnel->actor->parent = NULL;
+        shrapnel->actor->model = gShrapnel_model[i & 1];
+        shrapnel->actor->render_style = BR_RSTYLE_DEFAULT;
+        shrapnel->actor->t.type = BR_TRANSFORM_MATRIX34;
+        shrapnel->actor->material = BrMaterialFind("DEBRIS.MAT");
+        shrapnel->age = 0;
+        shrapnel->shear1 = FRandomBetween(-2.f, 2.f);
+        shrapnel->shear2 = FRandomBetween(-2.f, 2.f);
+        axis = &shrapnel->axis;
+        BrVector3SetFloat(axis,
+            FRandomBetween(-1.f, 1.f),
+            FRandomBetween(-1.f, 1.f),
+            FRandomBetween(-1.f, 1.f));
+        BrVector3Normalise(axis, axis);
+        shrapnel++;
+        i++;
+    } while (shrapnel < &gShrapnel[CARPOCALYPSE2_ASIZE(gShrapnel)]);
     PossibleService();
     InitFlame();
     PossibleService();
-    InitSplash(pF);
+    InitSplash(saved_file);
     PackFileRerevertTiffLoading();
-}
-
-// UNLABELED: CARMA2_HW 0x004fc2e0
-void C2_HOOK_FASTCALL DisposeFlames(void) {
-    int i;
-    int j;
-    br_actor* child;
-
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gFlame_map); i++) {
-        BrMapRemove(gFlame_map[i]);
-        BrPixelmapFree(gFlame_map[i]);
-    }
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gSmoke_column); i++) {
-        if ((gColumn_flags & (1 << i)) != 0 && gSmoke_column[i].colour == 0) {
-            BrActorRemove(gSmoke_column[i].flame_actor);
-        }
-        child = gSmoke_column[i].flame_actor->children;
-        for (j = 0; j < 3; j++) {
-            BrMaterialRemove(child->material);
-            BrMaterialFree(child->material);
-            child = child->next;
-        }
-        BrActorFree(gSmoke_column[i].flame_actor);
-    }
-    BrModelRemove(gLollipop_model);
-    BrModelFree(gLollipop_model);
 }
 
 // FUNCTION: CARMA2_HW 0x004fe180
 void C2_HOOK_FASTCALL DisposeKevStuff(void) {
     int i;
+    tShrapnel* shrapnel;
+    tSplash* splash;
 
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gShrapnel); i++) {
-        if ((gShrapnel_flags & (1 << i)) != 0 && gShrapnel[i].actor->parent != NULL) {
-            BrActorRemove(gShrapnel[i].actor);
+    i = 0;
+    shrapnel = &gShrapnel[0];
+    do {
+        if (((gShrapnel_flags & (1 << i)) != 0) && (shrapnel->actor->parent != NULL)) {
+            BrActorRemove(shrapnel->actor);
         }
-        BrActorFree(gShrapnel[i].actor);
-    }
+        BrActorFree(shrapnel->actor);
+        shrapnel++;
+        i++;
+    } while ((int)shrapnel < (int)(gShrapnel + CARPOCALYPSE2_ASIZE(gShrapnel)));
+    gShrapnel_flags = 0;
     BrModelRemove(gShrapnel_model[0]);
     BrModelRemove(gShrapnel_model[1]);
     BrModelFree(gShrapnel_model[0]);
     BrModelFree(gShrapnel_model[1]);
-    DisposeFlames();
+    DisposeFlameResources();
     for (i = 0; i < gNum_splash_types; i++) {
         BrMapRemove(gSplash_material[i]->colour_map);
         BrPixelmapFree(gSplash_material[i]->colour_map);
         BrMaterialRemove(gSplash_material[i]);
         BrMaterialFree(gSplash_material[i]);
     }
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gSplash); i++) {
-        if ((gSplash_flags & (1 << i)) != 0 && gSplash[i].actor->parent != NULL) {
-            BrActorRemove(gSplash[i].actor);
+    i = 0;
+    splash = &gSplash[0];
+    do {
+        if (((gSplash_flags & (1 << i)) != 0) && (splash->actor->parent != NULL)) {
+            BrActorRemove(splash->actor);
         }
-        BrActorFree(gSplash[i].actor);
-    }
+        BrActorFree(splash->actor);
+        splash++;
+        i++;
+    } while ((int)splash < (int)(gSplash + CARPOCALYPSE2_ASIZE(gSplash)));
     BrModelRemove(gSplash_model);
     BrModelFree(gSplash_model);
 }
 
-// UNLABELED: CARMA2_HW 0x004f9180
-void C2_HOOK_CDECL AFEModelUpdate(br_actor* pActor, br_model* pModel, br_material* pMaterial, void* pOrder_table, br_uint_8 pStyle, int pOn_screen) {
+// FUNCTION: CARMA2_HW 0x004fe2c0
+void C2_HOOK_FASTCALL RemoveCarFromEffects(tCar_spec* pCar) {
     int i;
-    int j;
-    int time;
-    int fade;
-    v11model* prepared;
-    v11group* group;
-    br_vertex* vertex;
 
-    if (gAFE_color_cycle) {
-        time = (int)GetTotalTime() >> 1;
-        if (pModel != NULL) {
-            prepared = pModel->prepared;
-            if (prepared->ngroups != 0) {
-                for (i = 0; i < prepared->ngroups; i++) {
-                    group = &prepared->groups[i];
-                    for (j = 0; j < group->nvertices; j++) {
-                        vertex = &pModel->vertices[group->vertex_user[j]];
-                        if (vertex == NULL) {
-                            continue;
-                        }
-                        fade = time & 0x3fff;
-                        if (fade >= 0x100) {
-                            fade = 0x3ff - fade;
-                        }
-                        vertex->red = (br_uint_8)fade;
-                        fade = (time + 0x100) & 0x3ff;
-                        if (fade >= 0x100) {
-                            fade = 0x3ff - fade;
-                        }
-                        vertex->grn = (br_uint_8)fade;
-                        fade = (time - 0x200) & 0x3ff;
-                        if (fade >= 0x100) {
-                            fade = 0x3ff - fade;
-                        }
-                        vertex->blu = (br_uint_8)fade;
-                    }
-                }
-            }
-            if (pModel->flags & BR_MODF_UPDATEABLE) {
-                BrModelUpdate(pModel, BR_MODU_VERTICES);
-            }
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gSmoke_column); i++) {
+        if (gSmoke_column[i].core.car == pCar) {
+            gSmoke_column[i].lifetime = 0;
+            gSmoke_column[i].core.car = NULL;
+            gSmoke_column[i].core.car_actor = NULL;
         }
     }
-    BrZsModelRender(pActor, pModel, pMaterial, pOrder_table, pStyle, BrOnScreenCheck(&pModel->bounds), 0);
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gSparks); i++) {
+        if ((gSpark_flags & (1 << i)) != 0 && gSparks[i].car == pCar) {
+            gSparks[i].count = 0;
+            gSpark_flags &= ~(1 << i);
+        }
+    }
+    if (pCar == gCar_to_view) {
+        gCamera_yaw = 0;
+        gCar_to_view = &gProgram_state.current_car;
+        InitialiseExternalCamera();
+        PositionExternalCamera(gCar_to_view, 200);
+        gCar_to_view = &gProgram_state.current_car;
+    }
 }
 
-// UNLABELED: CARMA2_HW 0x004f95e0
-int C2_HOOK_FASTCALL SetModelAFEUpdateCB(br_model* pModel) {
+typedef int C2_HOOK_FASTCALL tStopCarBeingItModel_cbfn(br_model* pModel);
 
-    pModel->flags |= BR_MODF_CUSTOM;
-    pModel->custom = AFEModelUpdate;
+intptr_t C2_HOOK_CDECL StopCarBeingItActorCallback(br_actor* pActor, tStopCarBeingItModel_cbfn* pCallback);
+int C2_HOOK_FASTCALL StopCarBeingItModelCallback(br_model* pModel);
+int C2_HOOK_FASTCALL StopCarBeingItMaterialCallback(br_material* pMaterial);
+
+typedef int C2_HOOK_FASTCALL tCarModelColorCycle_cbfn(br_model* pModel);
+
+intptr_t C2_HOOK_CDECL ActorFunks(br_actor* pActor, void* pCallback);
+void C2_HOOK_FASTCALL MasterDisableFunkotronic(int pFunk_index);
+void C2_HOOK_CDECL CarModelColorCycleRender(br_actor* pActor, br_model* pModel, br_material* pMaterial, void* pRender_data, br_uint_8 pStyle, int pOn_screen);
+
+// FUNCTION: CARMA2_HW 0x004f95e0
+int C2_HOOK_FASTCALL SetCarModelColorCycle(br_model* pModel) {
+    pModel->flags |= 0x20;
+    pModel->custom = (void*)CarModelColorCycleRender;
     return 1;
 }
 
 // UNLABELED: CARMA2_HW 0x004f9600
 int C2_HOOK_FASTCALL SetMaterialPrelitCB(br_material* pMaterial) {
-
     if (pMaterial->flags & BR_MATF_PRELIT) {
         return 0;
     }
@@ -622,31 +679,9 @@ int C2_HOOK_FASTCALL SetMaterialPrelitCB(br_material* pMaterial) {
     return 1;
 }
 
-// UNLABELED: CARMA2_HW 0x004fec30
-intptr_t C2_HOOK_CDECL ForEveryActorModelNoGrooves(br_actor* pActor, void* pContext) {
-    tUser_crush_data* user_crush_data;
-    tModelUpdate_cbfn* callback;
-
-    callback = pContext;
-    if (pActor->type != BR_ACTOR_MODEL) {
-        return 0;
-    }
-    if (pActor->model == NULL) {
-        return 0;
-    }
-    user_crush_data = pActor->user;
-    if (user_crush_data == NULL) {
-        return 0;
-    }
-    if (user_crush_data->groove != NULL) {
-        return 0;
-    }
-    callback(pActor->model);
-    return 0;
-}
-
+// C2PORT-NONMATCHING: best 52.50% | difftest PASS 2000 trials (spec difftest/specs/004fe360_FUN_004fe360.json) | reason regalloc-loop
 // FUNCTION: CARMA2_HW 0x004fe360
-void C2_HOOK_FASTCALL DisposeKevStuffCar(tCar_spec* pCar) {
+void C2_HOOK_FASTCALL FUN_004fe360(tCar_spec* pCar) {
     int i;
     int j;
     tCar_crush_spec* spec;
@@ -711,250 +746,211 @@ void C2_HOOK_FASTCALL DisposeKevStuffCar(tCar_spec* pCar) {
     gRecalc_mass_car = pCar;
     pCar->field_0x1960 = solid_mat->colour_map;
     ForEveryCarMaterial(pCar, SetMaterialPrelitCB, 1);
-    pCar->shell_model->custom = AFEModelUpdate;
+    pCar->shell_model->custom = CarModelColorCycleRender;
     pCar->shell_model->flags |= BR_MODF_CUSTOM;
     user = (tUser_crush_data*)pCar->car_model_actor->user;
     model = user->models[1];
     if (model != NULL) {
         model->flags |= BR_MODF_CUSTOM;
-        model->custom = AFEModelUpdate;
+        model->custom = CarModelColorCycleRender;
     }
-    DRActorEnumRecurse(pCar->car_model_actor, ForEveryActorModelNoGrooves, (void*)SetModelAFEUpdateCB);
+    DRActorEnumRecurse(pCar->car_model_actor, StopCarBeingItActorCallback, (void*)SetCarModelColorCycle);
     for (i = 0; i < spec->field_0x270; i++) {
         model = spec->field_0x274[i].field_0x0->model;
         model->flags |= BR_MODF_CUSTOM;
-        model->custom = AFEModelUpdate;
+        model->custom = CarModelColorCycleRender;
     }
     for (i = 0; i < spec->field_0x2b0; i++) {
         model = spec->field_0x2b4[i].field_0x0->model;
         model->flags |= BR_MODF_CUSTOM;
-        model->custom = AFEModelUpdate;
+        model->custom = CarModelColorCycleRender;
     }
-}
-
-// UNLABELED: CARMA2_HW 0x004f9390
-int C2_HOOK_FASTCALL FUN_004f9390(br_model* pModel) {
-
-    pModel->flags &= ~BR_MODF_CUSTOM;
-    pModel->custom = NULL;
-    return 1;
-}
-
-// UNLABELED: CARMA2_HW 0x004fec30
-int C2_HOOK_CDECL FUN_004fec30(br_actor* pActor, void* pCallback) {
-
-    if (pActor->type != 1) {
-        return 0;
-    }
-    if (pActor->model == NULL) {
-        return 0;
-    }
-    if (pActor->user == NULL) {
-        return 0;
-    }
-    if (((tUser_crush_data*)pActor->user)->groove == NULL) {
-        return 0;
-    }
-    ((int (C2_HOOK_FASTCALL*)(br_model*))pCallback)(pActor->model);
-    return 0;
-}
-
-// UNLABELED: CARMA2_HW 0x004f93b0
-int C2_HOOK_FASTCALL FUN_004f93b0(br_material* pMaterial) {
-
-    if ((pMaterial->flags & 2) == 0) {
-        return 0;
-    }
-    pMaterial->flags &= ~2u;
-    BrMaterialUpdate(pMaterial, 6);
-    return 1;
 }
 
 // FUNCTION: CARMA2_HW 0x004fe570
 void C2_HOOK_FASTCALL StopCarBeingIt(tCar_spec* pCar) {
-
-    if (gAFE == 0) {
-        return;
-    }
-    pCar->shell_model->flags &= ~BR_MODF_CUSTOM;
-    pCar->shell_model->custom = NULL;
-    {
-        tUser_crush_data* user = (tUser_crush_data*)pCar->car_model_actor->user;
-
-        if (user->models[1] != NULL) {
-            user->models[1]->flags &= ~BR_MODF_CUSTOM;
-            user->models[1]->custom = NULL;
-        }
-    }
-    DRActorEnumRecurse(pCar->car_model_actor, FUN_004fec30, (void*)FUN_004f9390);
-    {
-        tCar_crush_spec* crush = pCar->car_crush_spec;
-        int j;
-
-        for (j = 0; j < crush->field_0x270; j++) {
-            br_model* model = crush->field_0x274[j].field_0x0->model;
-
-            model->flags &= ~BR_MODF_CUSTOM;
-            model->custom = NULL;
-        }
-        for (j = 0; j < crush->field_0x2b0; j++) {
-            br_model* model = crush->field_0x2b4[j].field_0x0->model;
-
-            model->flags &= ~BR_MODF_CUSTOM;
-            model->custom = NULL;
-        }
-    }
-    ForEveryCarMaterial(pCar, FUN_004f93b0, 1);
-}
-
-void C2_HOOK_FASTCALL MungeSplash(tU32 pTime) {
-
-    if (gNum_splash_types == 0) {
-        return;
-    }
-    if (gAction_replay_mode && ARGetReplayRate() != 0.f) {
-        tVehicle_type type;
-        int i;
-
-        for (type = eVehicle_net_player; type <= eVehicle_rozzer; type++) {
-
-            for (i = 0; i < (type == eVehicle_self ? 1 : GetCarCount(type)); i++) {
-                tCar_spec* car;
-
-                if (type == eVehicle_self) {
-                    car = &gProgram_state.current_car;
-                } else {
-                    car = GetCarSpec(type, i);
-                }
-                if (car->collision_info->water_d != 10000.f && !(car != NULL && car->driver == eDriver_local_human)) {
-                    CreateSplash(car->collision_info, pTime);
-                }
-            }
-        }
-        if (gProgram_state.current_car.collision_info->water_d != 10000.f) {
-            CreateSplash(gProgram_state.current_car.collision_info, pTime);
-        }
-        for (i = 0; i < CARPOCALYPSE2_ASIZE(gReplay_splashes); i++) {
-            tReplay_splash *replay_splash = &gReplay_splashes[i];
-
-            if (gReplay_splash_flags & (1 << i)) {
-                switch (replay_splash->type) {
-                case 1:
-                    {
-                        const char* ident = replay_splash->object.actor->identifier;
-                        tPipe_chunk_data *chunk_non_car = FindNextChunk(ePipe_chunk_non_car, CHARS4_TO_INT(ident[4], ident[5], ident[6], ident[7]));
-                        if (chunk_non_car != NULL) {
-                            br_vector3 vel;
-                            br_vector3 rot;
-
-                            GetVelocitiesFromMatrices(&vel, &rot, &replay_splash->object.actor->t.t.mat, &chunk_non_car->data.non_car.matrix, pTime);
-                            GeneralCreateSplash(NULL, &vel, &rot, &replay_splash->normal, replay_splash->water_density, &replay_splash->bb, &replay_splash->object.actor->t.t.mat, pTime);
-                        }
-                    }
-                    break;
-                case 2:
-                    {
-                        int id = (replay_splash->object.ped - gPedestrian_array) | (replay_splash->object.ped->field_0x06 << 16);
-                        br_actor* actor = GetCharacterActorPtr(replay_splash->object.ped->character);
-                        tPipe_chunk_data *chunk_ped_physics = FindNextChunk(ePipe_chunk_ped_physics, id);
-                        if (chunk_ped_physics != NULL) {
-                            br_vector3 vel;
-                            br_vector3 rot;
-
-                            GetVelocitiesFromMatrices(&vel, &rot, &actor->t.t.mat, &chunk_ped_physics->data.ped_physics.matrix, pTime);
-                            GeneralCreateSplash(NULL, &vel, &rot, &replay_splash->normal, replay_splash->water_density, &replay_splash->bb, &replay_splash->object.actor->t.t.mat, pTime);
-                        }
-                    }
-                    break;
-                case 255:
-                    {
-                        tPipe_chunk_data *chunk_ped_phil_object = FindNextChunk(ePipe_chunk_phil_object, (uintptr_t)replay_splash->object.phil_object);
-                        if (chunk_ped_phil_object != NULL) {
-                            br_vector3 vel;
-                            br_vector3 rot;
-
-                            GetVelocitiesFromMatrices(&vel, &rot, &replay_splash->object.actor->t.t.mat, &chunk_ped_phil_object->data.phil_object.matrix, pTime);
-                            GeneralCreateSplash(NULL, &vel, &rot, &replay_splash->normal, replay_splash->water_density, &replay_splash->bb, &replay_splash->object.actor->t.t.mat, pTime);
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-    } else if (!gAction_replay_mode) {
-        tPhysics_object* object;
-
-        for (object = PHILGetFirstObject(); object != NULL; object = PHILGetNextObject(object)) {
-
-            if (object->water_d != 10000.f && object->last_special_volume != NULL && object->last_special_volume->gravity_multiplier < 1.f) {
-                if (object != NULL && object->owner != NULL && object->flags_0x238 == 1 && object->owner != NULL && ((tCar_spec*)object->owner)->driver == eDriver_local_human) {
-                    CreateSplash(object, 100);
-                } else {
-                    CreateSplash(object, pTime);
-                }
-            }
-        }
-    }
-    if (gSplash_flags) {
-        int i;
-
-        for (i = 0; i < CARPOCALYPSE2_ASIZE(gSplash); i++) {
-            tSplash *splash = &gSplash[i];
-
-            if (!(gSplash_flags & (1 << i))) {
-                continue;
-            }
-            if (splash->just_done || (gAction_replay_mode && ARGetReplayRate() == 0.f)) {
-                br_scalar dt;
-
-                dt = splash->size * splash->scale_x;
-                BrVector3Scale((br_vector3*)splash->actor->t.t.mat.m[0], (br_vector3*)gCamera_to_world.m[0], dt);
-                BrVector3Scale((br_vector3*)splash->actor->t.t.mat.m[1], (br_vector3*)gCamera_to_world.m[1], splash->size);
-                BrVector3Scale((br_vector3*)splash->actor->t.t.mat.m[2], (br_vector3*)gCamera_to_world.m[2], splash->size);
-                if (gProgram_state.cockpit_on) {
-                    br_scalar ts;
-
-                    ts = sqrtf(CARPOCALYPSE2_SQR(gCamera_to_world.m[0][2]) + CARPOCALYPSE2_SQR(gCamera_to_world.m[0][0]));
-                    DRMatrix34PreRotateZ(&splash->actor->t.t.mat, -FastScalarArcTan2Angle(gCamera_to_world.m[0][1], ts));
-                }
-                splash->just_done = 0;
-            } else {
-                gSplash_flags &= ~(1 << i);
-                if (splash->actor->parent != NULL) {
-                    BrActorRemove(splash->actor);
-                }
-            }
-        }
-    }
-}
-
-void C2_HOOK_FASTCALL ReplayShrapnel(tU32 pTime) {
+    tCar_crush_spec* crush_spec;
+    tUser_crush_data* user_crush_data;
+    br_model* model;
     int i;
-    br_matrix34* mat;
 
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gShrapnel); i++) {
-        mat = &gShrapnel[i].actor->t.t.mat;
-        if (gShrapnel_flags & (1 << i)) {
-            gShrapnel[i].age += (tU32)(ARGetReplayRate() * (float)pTime);
-            DrMatrix34Rotate(mat, gShrapnel[i].age * BR_ANGLE_DEG(1), &gShrapnel[i].axis);
-            BrMatrix34PreShearX(mat, gShrapnel[i].shear1, gShrapnel[i].shear2);
+    if (gAFE) {
+        model = pCar->shell_model;
+        crush_spec = pCar->car_crush_spec;
+        model->custom = NULL;
+        model->flags &= ~0x20;
+
+        user_crush_data = pCar->car_model_actor->user;
+        model = user_crush_data->models[1];
+        if (model != NULL) {
+            model->flags &= ~0x20;
+            model->custom = NULL;
         }
+        DRActorEnumRecurse(pCar->car_model_actor, StopCarBeingItActorCallback, StopCarBeingItModelCallback);
+
+        for (i = 0; i < crush_spec->field_0x270; i++) {
+            model = crush_spec->field_0x274[i].field_0x0->model;
+            model->flags &= ~0x20;
+            model->custom = NULL;
+        }
+        for (i = 0; i < crush_spec->field_0x2b0; i++) {
+            model = crush_spec->field_0x2b4[i].field_0x0->model;
+            model->flags &= ~0x20;
+            model->custom = NULL;
+        }
+        ForEveryCarMaterial(pCar, StopCarBeingItMaterialCallback, 1);
     }
 }
 
-void C2_HOOK_FASTCALL KillShrapnel(int i) {
+// FUNCTION: CARMA2_HW 0x004fec30
+intptr_t C2_HOOK_CDECL StopCarBeingItActorCallback(br_actor* pActor, tStopCarBeingItModel_cbfn* pCallback) {
+    tUser_crush_data* user_crush_data;
 
-    if (gShrapnel[i].actor->parent != NULL) {
-        BrActorRemove(gShrapnel[i].actor);
+    if (pActor->type != BR_ACTOR_MODEL || pActor->model == NULL) {
+        return 0;
     }
-    gShrapnel_flags &= ~(1 << i);
+    user_crush_data = pActor->user;
+    if (user_crush_data == NULL || user_crush_data->groove != NULL) {
+        return 0;
+    }
+    pCallback(pActor->model);
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x004f9390
+int C2_HOOK_FASTCALL StopCarBeingItModelCallback(br_model* pModel) {
+    pModel->flags &= ~0x20;
+    pModel->custom = NULL;
+    return 1;
+}
+
+// FUNCTION: CARMA2_HW 0x004f93b0
+int C2_HOOK_FASTCALL StopCarBeingItMaterialCallback(br_material* pMaterial) {
+    if (pMaterial->flags & 2) {
+        pMaterial->flags &= ~2;
+        BrMaterialUpdate(pMaterial, BR_MATU_RENDERING | BR_MATU_LIGHTING);
+        return 1;
+    }
+    return 0;
 }
 
 // FUNCTION: CARMA2_HW 0x004f9790
 void C2_HOOK_FASTCALL MungeShrapnel(tU32 pTime) {
+    br_vector3 vel;
+    br_vector3 rot;
 
     MungeSmokeColumn(pTime);
-    MungeSplash(pTime);
+    if (gNum_splash_types != 0) {
+        if (gAction_replay_mode && ARGetReplayRate() != gFLOAT_0058b008) {
+            tVehicle_type type;
+            int i;
+
+            for (type = eVehicle_net_player; type <= eVehicle_rozzer; type++) {
+
+                for (i = 0; i < (type == eVehicle_self ? 1 : GetCarCount(type)); i++) {
+                    tCar_spec* car;
+
+                    if (type == eVehicle_self) {
+                        car = &gProgram_state.current_car;
+                    } else {
+                        car = GetCarSpec(type, i);
+                    }
+                    if (car->collision_info->water_d != 10000.f && !(car != NULL && car->driver == eDriver_local_human)) {
+                        GeneralCreateSplash(car->collision_info, &car->collision_info->v, &car->collision_info->omega,
+                            &car->collision_info->water_normal, car->collision_info->water_d,
+                            &car->collision_info->bb1, &car->collision_info->actor->t.t.mat, pTime);
+                    }
+                }
+            }
+            if (gProgram_state.current_car.collision_info->water_d != 10000.f) {
+                CreateSplash(gProgram_state.current_car.collision_info, pTime);
+            }
+            for (i = 0; i < CARPOCALYPSE2_ASIZE(gReplay_splashes); i++) {
+                tReplay_splash *replay_splash = &gReplay_splashes[i];
+
+                if (gReplay_splash_flags & (1 << i)) {
+                    switch (replay_splash->type) {
+                    case 1:
+                        {
+                            const char* ident = replay_splash->object.actor->identifier;
+                            tPipe_chunk_data *chunk_non_car = FindNextChunk(ePipe_chunk_non_car, CHARS4_TO_INT(ident[4], ident[5], ident[6], ident[7]));
+                            if (chunk_non_car != NULL) {
+                                GetVelocitiesFromMatrices(&vel, &rot, &replay_splash->object.actor->t.t.mat, &chunk_non_car->data.non_car.matrix, pTime);
+                                GeneralCreateSplash(NULL, &vel, &rot, &replay_splash->normal, replay_splash->water_density, &replay_splash->bb, &replay_splash->object.actor->t.t.mat, pTime);
+                            }
+                        }
+                        break;
+                    case 2:
+                        {
+                            tPedestrian* ped = replay_splash->object.character->ped;
+                            br_actor* actor = GetCharacterActorPtr(replay_splash->object.character);
+                            int id = (ped - gPedestrian_array) | ((tU32)(tS32)ped->field_0x06 << 16);
+                            tPipe_chunk_data *chunk_ped_physics = FindNextChunk(ePipe_chunk_ped_physics, id);
+                            if (chunk_ped_physics != NULL) {
+                                GetVelocitiesFromMatrices(&vel, &rot, &actor->t.t.mat, &chunk_ped_physics->data.ped_physics.matrix, pTime);
+                                GeneralCreateSplash(NULL, &vel, &rot, &replay_splash->normal, replay_splash->water_density, &replay_splash->bb, &actor->t.t.mat, pTime);
+                            }
+                        }
+                        break;
+                    case 255:
+                        {
+                            br_actor* actor = replay_splash->object.phil_object->actor;
+                            tPipe_chunk_data *chunk_ped_phil_object = FindNextChunk(ePipe_chunk_phil_object, (uintptr_t)replay_splash->object.phil_object);
+                            if (chunk_ped_phil_object != NULL) {
+                                GetVelocitiesFromMatrices(&vel, &rot, &actor->t.t.mat, &chunk_ped_phil_object->data.phil_object.matrix, pTime);
+                                GeneralCreateSplash(NULL, &vel, &rot, &replay_splash->normal, replay_splash->water_density, &replay_splash->bb, &actor->t.t.mat, pTime);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        } else if (!gAction_replay_mode) {
+            tPhysics_object* object;
+
+            for (object = PHILGetFirstObject(); object != NULL; object = PHILGetNextObject(object)) {
+
+                if (object->water_d != 10000.f && object->last_special_volume != NULL && object->last_special_volume->gravity_multiplier < 1.f) {
+                    if (object != NULL && object->owner != NULL && object->flags_0x238 == 1 && object->owner != NULL && ((tCar_spec*)object->owner)->driver == eDriver_local_human) {
+                        CreateSplash(object, 100);
+                    } else {
+                        CreateSplash(object, pTime);
+                    }
+                }
+            }
+        }
+        if (gSplash_flags) {
+            int i;
+
+            for (i = 0; i < CARPOCALYPSE2_ASIZE(gSplash); i++) {
+                tSplash *splash = &gSplash[i];
+
+                if (!(gSplash_flags & (1 << i))) {
+                    continue;
+                }
+                if (splash->just_done || (gAction_replay_mode && ARGetReplayRate() == gFLOAT_0058b008)) {
+                    br_scalar dt;
+
+                    dt = splash->size * splash->scale_x;
+                    BrVector3Scale((br_vector3*)splash->actor->t.t.mat.m[0], (br_vector3*)gCamera_to_world.m[0], dt);
+                    BrVector3Scale((br_vector3*)splash->actor->t.t.mat.m[1], (br_vector3*)gCamera_to_world.m[1], splash->size);
+                    BrVector3Scale((br_vector3*)splash->actor->t.t.mat.m[2], (br_vector3*)gCamera_to_world.m[2], splash->size);
+                    if (gProgram_state.cockpit_on) {
+                        br_scalar ts;
+
+                        ts = sqrtf(CARPOCALYPSE2_SQR(gCamera_to_world.m[0][0]) + CARPOCALYPSE2_SQR(gCamera_to_world.m[0][2]));
+                        DRMatrix34PreRotateZ(&splash->actor->t.t.mat, -FastScalarArcTan2Angle(gCamera_to_world.m[0][1], ts));
+                    }
+                    splash->just_done = 0;
+                } else {
+                    gSplash_flags &= ~(1 << i);
+                    if (splash->actor->parent != NULL) {
+                        BrActorRemove(splash->actor);
+                    }
+                }
+            }
+        }
+    }
 
     if (gAFE) {
         tU32 now = GetTotalTime();
@@ -966,7 +962,17 @@ void C2_HOOK_FASTCALL MungeShrapnel(tU32 pTime) {
         }
     }
     if (gAction_replay_mode) {
-        ReplayShrapnel(pTime);
+        int i;
+        br_matrix34* mat;
+
+        for (i = 0; i < CARPOCALYPSE2_ASIZE(gShrapnel); i++) {
+            mat = &gShrapnel[i].actor->t.t.mat;
+            if (gShrapnel_flags & (1 << i)) {
+                gShrapnel[i].age = (tU32)(gShrapnel[i].age + ARGetReplayRate() * pTime);
+                DrMatrix34Rotate(mat, gShrapnel[i].age * BR_ANGLE_DEG(1), &gShrapnel[i].axis);
+                BrMatrix34PreShearX(mat, gShrapnel[i].shear1, gShrapnel[i].shear2);
+            }
+        }
     } else {
         int i;
 
@@ -980,24 +986,27 @@ void C2_HOOK_FASTCALL MungeShrapnel(tU32 pTime) {
                 continue;
             }
             if (gShrapnel[i].age == -1) {
-                KillShrapnel(i);
+                if (gShrapnel[i].actor->parent != NULL) {
+                    BrActorRemove(gShrapnel[i].actor);
+                }
+                gShrapnel_flags &= ~(1 << i);
             } else {
                 br_vector3 disp;
 
                 if (gShrapnel[i].time_sync != 0) {
-                    BrVector3Scale(&disp, &gShrapnel[i].v, (float)gShrapnel[i].time_sync / 1000.f);
+                    BrVector3Scale(&disp, &gShrapnel[i].v, (float)gShrapnel[i].time_sync * 0.001f);
                     gShrapnel[i].time_sync = 0;
                 } else {
-                    BrVector3Scale(&disp, &gShrapnel[i].v, pTime / 1000.0f);
+                    BrVector3Scale(&disp, &gShrapnel[i].v, (float)pTime * 0.001f);
                     gShrapnel[i].age += pTime;
                 }
                 BrVector3Accumulate((br_vector3*)mat->m[3], &disp);
-                gShrapnel[i].v.v[1] -= (float)(10 * pTime) / 1000.f / WORLD_SCALE; /* Fall acceleration */
+                gShrapnel[i].v.v[1] -= (float)(10 * pTime) * 0.00014492752961814404f; /* Fall acceleration */
                 DrMatrix34Rotate(mat, BR_ANGLE_DEG(gShrapnel[i].age), &gShrapnel[i].axis);
                 BrMatrix34PreShearX(mat, gShrapnel[i].shear1, gShrapnel[i].shear2);
-                ts = 1.f - BrVector3Length(&gShrapnel[i].v) / 1.4f * (float)pTime / 1000.f;
-                if (ts < .1f) {
-                    ts = .1f;
+                ts = gFLOAT_0058afdc - (float)pTime * (BrVector3Length(&gShrapnel[i].v) * 0.7142857313156128f) * 0.001f;
+                if (ts < 0.1f) {
+                    ts = 0.1f;
                 }
                 BrVector3Scale(&gShrapnel[i].v, &gShrapnel[i].v, ts);
                 AddShrapnelToPipingSession(i + ((gShrapnel[i].age > 1000 || pTime > gShrapnel[i].age) << 15), (br_vector3*)mat->m[3], gShrapnel[i].age - pTime, gShrapnel[i].actor->material);
@@ -1100,6 +1109,78 @@ void C2_HOOK_FASTCALL ForEveryCarMaterial(tCar_spec* pCar_spec, tMaterialMaybeUp
     }
     for (i = 0; i < pCrush_spec->field_0x2b0; i++) {
         ForEveryModelMaterial(pCrush_spec->field_0x2b4[i].field_0x0->model, pCallback);
+    }
+}
+
+// C2PORT-NONMATCHING: best 84.31% | difftest PASS 2000 trials (spec difftest/specs/004fe9c0_ForEveryCarVertex.json) | reason stack-layout
+// FUNCTION: CARMA2_HW 0x004fe9c0
+void C2_HOOK_FASTCALL ForEveryCarVertex(tCar_spec* pCar_spec, tCar_vertex_cbfn* pCallback, int pUnknown) {
+    int i;
+    tCar_crush_spec* crush_spec;
+    int group_index;
+    int vertex_index;
+    int did_callback;
+    int crush_did_callback;
+    br_model* model;
+    br_vertex* vertex;
+    tUser_crush_data* user_crush_data;
+
+    crush_spec = pCar_spec->car_crush_spec;
+    did_callback = 0;
+    model = pCar_spec->shell_model;
+    if (model != NULL) {
+        for (group_index = 0; group_index < model->prepared->ngroups; group_index++) {
+            for (vertex_index = 0; vertex_index < model->prepared->groups[group_index].nvertices; vertex_index++) {
+                vertex = &model->vertices[model->prepared->groups[group_index].vertex_user[vertex_index]];
+                if (vertex != NULL) {
+                    did_callback |= pCallback(vertex);
+                }
+            }
+        }
+    }
+
+    did_callback = 0;
+    user_crush_data = pCar_spec->car_model_actor->user;
+    model = user_crush_data->models[1];
+    if (model != NULL) {
+        for (group_index = 0; group_index < model->prepared->ngroups; group_index++) {
+            for (vertex_index = 0; vertex_index < model->prepared->groups[group_index].nvertices; vertex_index++) {
+                vertex = &model->vertices[model->prepared->groups[group_index].vertex_user[vertex_index]];
+                if (vertex != NULL) {
+                    did_callback |= pCallback(vertex);
+                }
+            }
+        }
+    }
+
+    for (i = 0; i < crush_spec->field_0x270; i++) {
+        crush_did_callback = 0;
+        model = crush_spec->field_0x274[i].field_0x0->model;
+        if (model != NULL) {
+            for (group_index = 0; group_index < model->prepared->ngroups; group_index++) {
+                for (vertex_index = 0; vertex_index < model->prepared->groups[group_index].nvertices; vertex_index++) {
+                    vertex = &model->vertices[model->prepared->groups[group_index].vertex_user[vertex_index]];
+                    if (vertex != NULL) {
+                        crush_did_callback |= pCallback(vertex);
+                    }
+                }
+            }
+        }
+    }
+
+    for (i = 0; i < crush_spec->field_0x2b0; i++) {
+        crush_did_callback = 0;
+        model = crush_spec->field_0x2b4[i].field_0x0->model;
+        if (model != NULL) {
+            for (group_index = 0; group_index < model->prepared->ngroups; group_index++) {
+                for (vertex_index = 0; vertex_index < model->prepared->groups[group_index].nvertices; vertex_index++) {
+                    vertex = &model->vertices[model->prepared->groups[group_index].vertex_user[vertex_index]];
+                    if (vertex != NULL) {
+                        crush_did_callback |= pCallback(vertex);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1337,6 +1418,7 @@ void C2_HOOK_FASTCALL GenerateContinuousSmoke(tCar_spec* pCar, int pWheel, tU32 
     CreatePuffOfSmoke(&pos, &v, decay_factor, 2 * decay_factor, colour + 8);
 }
 
+// C2PORT-NONMATCHING: best 65.6% | difftest PASS 2000 trials (spec 004fb330_CreatePuffOfSmoke.json) | reason smoke distance gates, velocity offset and strength clamp were wrong
 // FUNCTION: CARMA2_HW 0x004fb330
 void C2_HOOK_FASTCALL CreatePuffOfSmoke(br_vector3* pPos, br_vector3* pV, float pStrength, float pDecay_factor, int pType) {
     br_vector3 d;
@@ -1346,17 +1428,25 @@ void C2_HOOK_FASTCALL CreatePuffOfSmoke(br_vector3* pPos, br_vector3* pV, float 
         return;
     }
 
-    d.v[0] = pPos->v[0] - gCamera_to_world.m[3][0];
-    d.v[1] = pPos->v[1] - gCamera_to_world.m[3][1];
-    d.v[2] = pPos->v[2] - gCamera_to_world.m[3][2];
-    if (BrVector3LengthSquared(&d) <= 625.f) {
-        return;
+    d.v[0] = pPos->v[0] - gProgram_state.current_car.pos.v[0];
+    d.v[1] = pPos->v[1] - gProgram_state.current_car.pos.v[1];
+    d.v[2] = pPos->v[2] - gProgram_state.current_car.pos.v[2];
+    if (BrVector3LengthSquared(&d) > 625.f) {
+        if (gCar_to_view == &gProgram_state.current_car) {
+            return;
+        }
+        d.v[0] = pPos->v[0] - gCar_to_view->pos.v[0];
+        d.v[1] = pPos->v[1] - gCar_to_view->pos.v[1];
+        d.v[2] = pPos->v[2] - gCar_to_view->pos.v[2];
+        if (BrVector3LengthSquared(&d) > 625.f) {
+            return;
+        }
     }
 
     i = gN_smoke;
-    gSmoke[i].v.v[0] = pV->v[0] * 0.1449275f;
-    gSmoke[i].v.v[1] = pV->v[1] * 0.1449275f - 2948170.25f;
-    gSmoke[i].v.v[2] = pV->v[2] * 0.1449275f;
+    gSmoke[i].v.v[0] = pV->v[0] * 0.14492753f;
+    gSmoke[i].v.v[1] = pV->v[1] * 0.14492753f + 0.14492753623188406;
+    gSmoke[i].v.v[2] = pV->v[2] * 0.14492753f;
     gSmoke[i].pos = *pPos;
     if ((pType & 0xf) == 7) {
         gSmoke[i].radius = 0.1f;
@@ -1364,7 +1454,7 @@ void C2_HOOK_FASTCALL CreatePuffOfSmoke(br_vector3* pPos, br_vector3* pV, float 
         gSmoke[i].radius = 0.05f;
         gSmoke[i].pos.v[1] += 0.04f;
     }
-    gSmoke[i].strength = (pStrength < 1.f) ? 1.f : pStrength;
+    gSmoke[i].strength = (pStrength > 1.f) ? 1.f : pStrength;
     gSmoke[i].pos.v[1] += 0.04f;
     gSmoke[i].time_sync = gPHIL_mechanics_time_sync;
     gSmoke[i].decay_factor = pDecay_factor;
@@ -1378,92 +1468,140 @@ void C2_HOOK_FASTCALL CreatePuffOfSmoke(br_vector3* pPos, br_vector3* pV, float 
     }
 }
 
+// C2PORT-NONMATCHING: best 88.55% | difftest PASS 2000 trials (spec difftest/specs/004fee70_ClearSplashes.json) | reason compiler-loop-layout
 // FUNCTION: CARMA2_HW 0x004fee70
 void C2_HOOK_FASTCALL ClearSplashes(tPhysics_object* pObject) {
-
-    NOT_IMPLEMENTED();
-}
-
-// FUNCTION: CARMA2_HW 0x004fedd0
-void C2_HOOK_FASTCALL ClearSplashReplay(uintptr_t pObject) {
-    int flags;
     int i;
+    int replay_splash_flags;
+    tReplay_splash* replay_splash;
+    void* splash_object;
 
-    flags = gReplay_splash_flags;
-    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gReplay_splashes); i++) {
-        uintptr_t object;
-
-        memcpy(&object, &gReplay_splashes[i].object, sizeof(object));
-        if (object == pObject) {
-            flags &= ~(1 << i);
+    if (pObject->water_d == 10000.f) {
+        return;
+    }
+    pObject->water_d = 10000.f;
+    if (PHILGetObjectProperty(pObject, 6) != gFLOAT_0058b008) {
+        splash_object = pObject;
+        goto check_splashes;
+    }
+    if (pObject != NULL && pObject->owner != NULL && pObject->flags_0x238 == 1) {
+        splash_object = pObject->actor;
+        goto check_splashes;
+    }
+    if (pObject != NULL && pObject->owner != NULL
+            && pObject->flags_0x238 >= 2 && pObject->flags_0x238 <= 4) {
+        splash_object = pObject->owner;
+        goto check_splashes;
+    }
+    splash_object = NULL;
+check_splashes:
+    if (splash_object == NULL) {
+        return;
+    }
+    i = 0;
+    replay_splash_flags = gReplay_splash_flags;
+    replay_splash = gReplay_splashes;
+    while ((replay_splash_flags & (1 << i)) == 0 || splash_object != replay_splash->object.actor) {
+        replay_splash++;
+        i++;
+        if (replay_splash >= gReplay_splashes + CARPOCALYPSE2_ASIZE(gReplay_splashes)) {
+            return;
         }
     }
-    gReplay_splash_flags = flags;
+    ARStartPipingSession(0x3b);
+    AddExtendedSplashToPipingSession(pObject, splash_object);
+    AREndPipingSession();
 }
 
-// FUNCTION: CARMA2_HW 0x004fb630
-void C2_HOOK_FASTCALL CreateSmokeColumn2(int pType, br_actor* pActor, tCar_spec* pCar, tPhysics_object* pObject, int pColour, int pVertex, tU32 pLifetime) {
-    tSmoke_column* old_column;
-    tSmoke_column* column;
-    tSmoke_column_core core;
+// FUNCTION: CARMA2_HW 0x004fb580
+void C2_HOOK_FASTCALL SetupSmokeColumn(int pIndex, const tSmoke_column_core* pCore, int pVertex_index, int pColour) {
+    int bit;
     br_actor* flame;
     int i;
 
-    old_column = &gSmoke_column[gColumn_next];
-    if (pObject == NULL) {
-        pObject = pCar == NULL ? NULL : pCar->collision_info;
+    bit = 1 << pIndex;
+    gColumn_flags = gColumn_flags ^ bit;
+    gSmoke_column[pIndex].core = *pCore;
+    gSmoke_column[pIndex].vertex_index = pVertex_index;
+    gSmoke_column[pIndex].colour = pColour;
+    for (i = 0; i < 3; i++) {
+        gSmoke_column[pIndex].frame_count[i] = 100;
     }
-    core.field_0x0 = pType;
-    core.car = pCar;
-    core.collision_info = pObject;
-    core.car_actor = pActor;
-    if (!gSmoke_on) {
+    if (pColour == 0) {
+        flame = gSmoke_column[pIndex].flame_actor;
+        if ((gColumn_flags & bit) != 0) {
+            BrActorAdd(gNon_track_actor, flame);
+            return;
+        }
+        if (flame->depth != 0) {
+            BrActorRemove(flame);
+        }
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x004fb630
+void C2_HOOK_FASTCALL CreateSmokeColumn2(undefined4 pArg1, br_actor* pActor, tCar_spec* pCar, tPhysics_object* pObject, undefined4 pColour, undefined4 pVertex_index, undefined4 pLifetime) {
+    tSmoke_column_core new_core;
+    tSmoke_column* column;
+    br_actor* actor;
+    int i;
+
+    column = &gSmoke_column[gNext_column];
+    if (pObject == NULL) {
+        pObject = pCar != NULL ? pCar->collision_info : NULL;
+    }
+    new_core.car = pCar;
+    new_core.field_0x0 = pArg1;
+    new_core.collision_info = pObject;
+    new_core.car_actor = pActor;
+    if (gSmoke_on == 0) {
         return;
     }
-    if ((gColumn_flags & (1u << (gColumn_next & 31))) != 0) {
-        ARStartPipingSession((tPipe_chunk_type)17);
-        column = &gSmoke_column[gColumn_next];
-        AddSmokeColumnToPipingSession(gColumn_next, &column->core, column->vertex_index, column->colour);
+    if ((gColumn_flags & (1 << gNext_column)) != 0) {
+        ARStartPipingSession(0x11);
+        AddSmokeColumnToPipingSession(gNext_column, &gSmoke_column[gNext_column],
+            gSmoke_column[gNext_column].vertex_index, gSmoke_column[gNext_column].colour);
         AREndPipingSession();
-        if (gSmoke_column[gColumn_next].colour == 0) {
-            ARStartPipingSession((tPipe_chunk_type)18);
-            flame = old_column->flame_actor->children;
+        if (gSmoke_column[gNext_column].colour == 0) {
+            ARStartPipingSession(0x12);
+            actor = column->flame_actor->children;
             for (i = 0; i < 3; i++) {
-                if (flame->type == 1) {
-                    AddFlameToPipingSession((gColumn_next << 4) + i, old_column->frame_count[i],
-                        old_column->scale_x[i], old_column->scale_y[i], old_column->offset_x[i], old_column->offset_z[i]);
+                if (actor->type == BR_ACTOR_MODEL) {
+                    FUN_004c70f0(16 * gNext_column + i, column->frame_count[i],
+                        *(undefined4*)&column->scale_x[i], *(undefined4*)&column->scale_y[i],
+                        *(undefined4*)&column->offset_x[i], *(undefined4*)&column->offset_z[i]);
                 }
-                flame->type = 0;
-                flame = flame->next;
+                actor->type = BR_ACTOR_NONE;
+                actor = actor->next;
             }
             AREndPipingSession();
         }
     }
-    if (pColour == 0) {
-        if ((gColumn_flags & (1u << (gColumn_next & 31))) == 0 || gSmoke_column[gColumn_next].colour != 0) {
-            BrActorAdd(gNon_track_actor, gSmoke_column[gColumn_next].flame_actor);
-        }
-    } else if ((gColumn_flags & (1u << (gColumn_next & 31))) != 0 && gSmoke_column[gColumn_next].colour == 0) {
-        BrActorRemove(gSmoke_column[gColumn_next].flame_actor);
+    if (pColour == 0
+        && ((gColumn_flags & (1 << gNext_column)) == 0 || gSmoke_column[gNext_column].colour != 0)) {
+        BrActorAdd(gNon_track_actor, gSmoke_column[gNext_column].flame_actor);
     }
-    ARStartPipingSession((tPipe_chunk_type)17);
-    AddSmokeColumnToPipingSession(gColumn_next, &core, pVertex, pColour);
+    if (pColour != 0
+        && (gColumn_flags & (1 << gNext_column)) != 0 && gSmoke_column[gNext_column].colour == 0) {
+        BrActorRemove(gSmoke_column[gNext_column].flame_actor);
+    }
+    ARStartPipingSession(0x11);
+    AddSmokeColumnToPipingSession(gNext_column, (tSmoke_column*)&new_core, pVertex_index, pColour);
     AREndPipingSession();
-    column = &gSmoke_column[gColumn_next];
-    column->core = core;
-    column->colour = pColour;
-    column->lifetime = pLifetime;
-    column->time = 0;
-    column->smudge_timer = 1000;
-    column->vertex_index = pVertex;
-    column->upright = 1;
-    gColumn_flags |= 1u << (gColumn_next & 31);
-    column->frame_count[0] = 100;
-    column->frame_count[1] = 100;
-    column->frame_count[2] = 100;
-    gColumn_next++;
-    if (gColumn_next >= 10) {
-        gColumn_next = 0;
+    gSmoke_column[gNext_column].core = new_core;
+    gSmoke_column[gNext_column].lifetime = pLifetime;
+    gSmoke_column[gNext_column].colour = pColour;
+    gSmoke_column[gNext_column].time = 0;
+    gSmoke_column[gNext_column].smudge_timer = 1000;
+    gSmoke_column[gNext_column].vertex_index = pVertex_index;
+    gSmoke_column[gNext_column].upright = 1;
+    gColumn_flags |= (1 << gNext_column);
+    for (i = 0; i < 3; i++) {
+        gSmoke_column[gNext_column].frame_count[i] = 100;
+    }
+    gNext_column += 1;
+    if (gNext_column >= 10) {
+        gNext_column = 0;
     }
 }
 
@@ -1482,306 +1620,341 @@ void C2_HOOK_FASTCALL ReplaySmokeColumn(tU32 pTime) {
     }
 }
 
+// C2PORT-NONMATCHING: best 32.24% | difftest PASS 2000 trials (spec difftest/specs/004fba40_MungeSmokeColumn.json) | reason VC5 register, stack layout, and x87 scheduling
 // FUNCTION: CARMA2_HW 0x004fba40
 void C2_HOOK_FASTCALL MungeSmokeColumn(tU32 pTime) {
     int i;
+    tSmoke_column* column;
 
-    if (gColumn_flags == 0) {
-        return;
-    }
-    if (gAction_replay_mode) {
-        ReplaySmokeColumn(pTime);
-        return;
-    }
-
-    gPHIL_mechanics_time_sync = 1;
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gSmoke_column); i++) {
-        if (!(gColumn_flags & (1 << i))) {
-            continue;
-        }
-        if (gSmoke_column[i].lifetime >= pTime) {
-            tPhysics_object* object;
-            tCar_spec* c;
-            br_vector3 car_pos;
-
-            gSmoke_column[i].lifetime -= pTime;
-            object = gSmoke_column[i].core.collision_info;
-            c = gSmoke_column[i].core.car;
-            DoSmokeColumn(i, pTime, &car_pos);
-            if (gSmoke_column[i].core.field_0x0 == 1 && c->car_crush_spec->field_0x4b8 != 0) {
-                if (IsOnNonCarHalf(c, &car_pos)) {
-                    gSmoke_column[i].lifetime = 0;
+    if (gColumn_flags != 0) {
+        if (gAction_replay_mode) {
+            ReplaySmokeColumn(pTime);
+        } else {
+            gPHIL_mechanics_time_sync = 1;
+            for (i = 0, column = gSmoke_column; i < CARPOCALYPSE2_ASIZE(gSmoke_column); i++, column++) {
+                if (!(gColumn_flags & (1 << i))) {
+                    continue;
                 }
-            }
-            if (gSmoke_column[i].colour == 0) {
-                FlameAnimate(i, &gSmoke_column[i].pos, pTime);
-                if (gSmoke_column[i].core.field_0x0 == 1) {
-                    if (gSmoke_column[i].smudge_timer >= pTime) {
-                        gSmoke_column[i].smudge_timer -= pTime;
-                    } else {
-                        gSmoke_column[i].smudge_timer += 2000;
-                        SmudgeCar(c, gSmoke_column[i].vertex_index);
-                        if (c->knackered) {
-                            int plane;
+                if ((*column).lifetime >= pTime) {
+                    tPhysics_object* object;
+                    tCar_spec* c;
+                    br_vector3 car_pos;
 
-                            plane = IRandomBetween(0, CARPOCALYPSE2_ASIZE(gSmoke_column[i].core.car->fire_vertex) - 1);
-                            SmudgeCar(c, gSmoke_column[i].core.car->fire_vertex[plane]);
+                    (*column).lifetime -= pTime;
+                    object = (*column).core.collision_info;
+                    c = (*column).core.car;
+                    DoSmokeColumn(i, pTime, &car_pos);
+                    if ((*column).core.field_0x0 == 1 && c->car_crush_spec->field_0x4b8 != 0) {
+                        if (IsOnNonCarHalf(c, &car_pos)) {
+                            (*column).lifetime = 0;
                         }
                     }
-                }
-            }
-            gSmoke_column[i].time += pTime;
-            if (gSmoke_column[i].time > 200) {
-                br_vector3 pos;
-                br_vector3 v;
-                br_scalar decay_factor;
+                    if ((*column).colour == 0) {
+                        FlameAnimate(i, &(*column).pos, pTime);
+                        if ((*column).core.field_0x0 == 1) {
+                            if ((*column).smudge_timer >= pTime) {
+                                (*column).smudge_timer -= pTime;
+                            } else {
+                                (*column).smudge_timer += 2000;
+                                SmudgeCar(c, (*column).vertex_index);
+                                if (c->knackered) {
+                                    int plane;
 
-                gSmoke_column[i].time -= pTime;
-                gSmoke_column[i].count += 1;
-                pos.v[0] = gSmoke_column[i].pos.v[0] + SRandomBetween(-.03f, .03f);
-                pos.v[1] = gSmoke_column[i].pos.v[1] + (gSmoke_column[i].colour == 0) * .05f;
-                pos.v[2] = gSmoke_column[i].pos.v[2] + SRandomBetween(-.03f, .03f);
-                if (!(gSmoke_column[i].whiter & 0x2) || IRandomBetween(0, 3)) {
-                    if (gSmoke_column[i].whiter > 0) {
-                        gSmoke_column[i].whiter = 2;
-                    } else {
-                        gSmoke_column[i].whiter = -2;
+                                    plane = IRandomBetween(0, CARPOCALYPSE2_ASIZE((*column).core.car->fire_vertex) - 1);
+                                    SmudgeCar(c, (*column).core.car->fire_vertex[plane]);
+                                }
+                            }
+                        }
+                    }
+                    (*column).time += pTime;
+                    if ((*column).time > 200) {
+                        br_vector3 pos;
+                        br_vector3 v;
+                        br_scalar decay_factor;
+
+                        (*column).time -= pTime;
+                        (*column).count += 1;
+                        pos.v[0] = (*column).pos.v[0] + SRandomBetween(-.03f, .03f);
+                        pos.v[1] = (*column).pos.v[1] + ((*column).colour == 0) * .05f;
+                        pos.v[2] = (*column).pos.v[2] + SRandomBetween(-.03f, .03f);
+                        if (!((*column).whiter & 0x2) || IRandomBetween(0, 3)) {
+                            if ((*column).whiter > 0) {
+                                (*column).whiter = 2;
+                            } else {
+                                (*column).whiter = -1;
+                            }
+                        } else {
+                            (*column).whiter &= 0x1;
+                        }
+                        decay_factor = ((float)((*column).whiter > 0) + 1.f) / 2.f;
+                        if ((*column).lifetime < 4000) {
+                            decay_factor = (*column).lifetime * decay_factor / 4000.0f;
+                        }
+                        if ((*column).core.collision_info == NULL) {
+                            BrVector3SetFloat(&v, 0.f, 2.8985507f, 0.f);
+                        } else {
+                            BrVector3Cross(&v, &object->omega, &car_pos);
+                            BrMatrix34ApplyV(&car_pos, &v, &object->actor->t.t.mat);
+                            v.v[0] = object->v.v[0] * gDOUBLE_0058b0c8 + car_pos.v[0];
+                            v.v[1] = object->v.v[1] * gDOUBLE_0058b0c8 + car_pos.v[1];
+                            v.v[2] = object->v.v[2] * gDOUBLE_0058b0c8 + car_pos.v[2];
+                        }
+                        CreatePuffOfSmoke(&pos, &v, decay_factor, decay_factor, (*column).colour + 16);
                     }
                 } else {
-                    gSmoke_column[i].whiter &= 0x1;
+                    if ((*column).core.field_0x0 != 0) {
+                        ARStartPipingSession(ePipe_chunk_smoke_column);
+                        AddSmokeColumnToPipingSession(i, column, (*column).vertex_index, (*column).colour);
+                        AREndPipingSession();
+                    }
+                    gColumn_flags &= ~(1 << i);
+                    if ((*column).colour == 0) {
+                        BrActorRemove((*column).flame_actor);
+                    }
                 }
-                decay_factor = ((float)(gSmoke_column[i].whiter > 0) + 1.f) / 2.f;
-                if (gSmoke_column[i].lifetime < 4000) {
-                    decay_factor = gSmoke_column[i].lifetime * decay_factor / 4000.0f;
-                }
-                if (gSmoke_column[i].core.collision_info == NULL) {
-                    BrVector3SetFloat(&v, 0.f, 2.8985507f, 0.f);
-                } else {
-                    BrVector3Cross(&v, &object->omega, &car_pos);
-                    BrMatrix34ApplyV(&car_pos, &v, &object->actor->t.t.mat);
-                    v.v[0] = car_pos.v[0] + WORLD_SCALE * object->v.v[0];
-                    v.v[1] = car_pos.v[1] + WORLD_SCALE * object->v.v[1];
-                    v.v[2] = car_pos.v[2] + WORLD_SCALE * object->v.v[2];
-                }
-                CreatePuffOfSmoke(&pos, &v, decay_factor, decay_factor, gSmoke_column[i].colour + 16);
-            }
-        } else {
-            if (gSmoke_column[i].core.field_0x0 != 0) {
-                ARStartPipingSession(ePipe_chunk_smoke_column);
-                AddSmokeColumnToPipingSession(i, &gSmoke_column[i], gSmoke_column[i].vertex_index, gSmoke_column[i].colour);
-                AREndPipingSession();
-            }
-            gColumn_flags &= ~(1 << i);
-            if (gSmoke_column[i].colour == 0) {
-                BrActorRemove(gSmoke_column[i].flame_actor);
             }
         }
     }
 }
 
+void C2_HOOK_FASTCALL SingleSplash(tPhysics_object* pObject, br_matrix34* pMat, br_vector3* pVelocity, br_vector3* pOrigin, br_vector3* pOmega, float* pVertices, float* pAxes, tU32 pTime);
+
+// C2PORT-NONMATCHING: best 27.54% | difftest PASS 2000 trials (spec difftest/specs/004fcbb0_GeneralCreateSplash.json) | reason stack-layout and x87 codegen
 // FUNCTION: CARMA2_HW 0x004fcbb0
-void C2_HOOK_FASTCALL GeneralCreateSplash(tPhysics_object* pObject, const br_vector3* pVelocity, const br_vector3* pOmega, const br_vector3* pNormal, br_scalar pWater_distance, const br_bounds3* pBounds, const br_matrix34* pMatrix, tU32 pTime) {
-    br_vector3 local_normal;
-    br_vector3 world_min;
-    br_vector3 local_velocity;
-    /* Original spills this projection, but passes local_velocity below. */
-    volatile br_vector3 normal_velocity;
-    br_vector3 point;
-    br_vector3 minimum_point;
-    br_vector3 maximum_point;
-    br_vector3 span;
-    br_vector3 side;
-    br_vector3 offset;
-    br_bounds3 bounds;
-    tCar_spec* car;
-    br_scalar plane_distance;
-    br_scalar minimum_projection;
-    br_scalar maximum_projection;
-    br_scalar projection;
-    br_scalar length;
-    br_scalar near_distance;
-    br_scalar far_distance;
-    br_scalar height;
-    double side_wide[3];
-    double wide_height;
-    double wide_near;
-    double coordinate;
-    double wide_projection;
-    double lower;
-    double upper;
-    double dot;
-    double value;
-    double random;
-    double second_random;
-    double multiplier;
-    int start;
-    int axis;
-    int a;
-    int b;
-    int corner;
-    int pattern;
-    int i;
+void C2_HOOK_FASTCALL GeneralCreateSplash(tPhysics_object* pObject, br_vector3* pVel, br_vector3* pOmega, br_vector3* pNormal, float pWater_density, br_bounds3* pBounds, br_matrix34* pMat, tU32 pTime) {
+    float fVar1;
+    float fVar2;
+    float fVar3;
+    float fVar4;
+    float fVar5;
+    int iVar6;
+    tU32 uVar7;
+    int iVar8;
+    float* pfVar9;
+    float* in_EDX;
+    float fVar10;
+    double fVar11;
+    double fVar12;
+    br_vector3 local_88;
+    union {
+        float scalar;
+        float* pointer;
+    } local_7c;
+    float local_78;
+    tU32 local_74;
+    float local_70;
+    float local_6c;
+    float local_68[6];
+    float local_50[6];
+    br_vector3 local_38;
+    br_vector3 local_2c;
+    float local_20;
+    float local_1c;
+    float local_18[6];
 
-    value = ((double)pVelocity->v[1] * pVelocity->v[1] + (double)pVelocity->v[2] * pVelocity->v[2])
-        + (double)pVelocity->v[0] * pVelocity->v[0];
-    if (!(value * 47.61000000000001 >= 1.0)) {
+    in_EDX = (float*)pVel;
+    local_7c.scalar = in_EDX[1];
+    local_70 = in_EDX[2];
+    local_68[3] = 0.0f;
+    local_68[4] = 0.0f;
+    if (gDOUBLE_0058b010 > (pVel->v[0] * pVel->v[0] + local_70 * local_70 + local_7c.scalar * local_7c.scalar) * gDOUBLE_0058b108) {
         return;
     }
-    BrMatrix34TApplyV(&local_normal, pNormal, pMatrix);
-    BrMatrix34ApplyP(&world_min, &pBounds->min, pMatrix);
-    lower = ((double)pNormal->v[1] * world_min.v[1] + (double)pNormal->v[2] * world_min.v[2])
-        + (double)pNormal->v[0] * world_min.v[0] - pWater_distance;
-    upper = lower;
-    for (i = 0; i < 3; i++) {
-        value = ((double)pBounds->max.v[i] - pBounds->min.v[i]) * local_normal.v[i];
-        if (local_normal.v[i] > 0.f) {
-            upper += value;
-        } else {
-            lower += value;
-        }
-    }
-    if (lower * upper > 0.0) {
-        return;
-    }
-    dot = ((double)pVelocity->v[1] * pNormal->v[1] + (double)pVelocity->v[2] * pNormal->v[2])
-        + (double)pVelocity->v[0] * pNormal->v[0];
-    for (i = 0; i < 3; i++) {
-        normal_velocity.v[i] = SmokeScalarRound(dot * local_normal.v[i]);
-    }
-    (void)&normal_velocity;
-    memcpy(&bounds, pBounds, sizeof(bounds));
-    bounds.min.v[1] = .01f;
-    BrMatrix34TApplyV(&local_velocity, pVelocity, pMatrix);
-    plane_distance = SmokeScalarRound((double)pWater_distance
-        - (((double)pMatrix->m[3][2] * pNormal->v[2] + (double)pMatrix->m[3][1] * pNormal->v[1])
-            + (double)pMatrix->m[3][0] * pNormal->v[0]));
-    minimum_projection = 0.f;
-    maximum_projection = 0.f;
-    start = IRandomBetween(0, 3);
-    for (axis = 0; axis < 3; axis++) {
-        a = (axis + 1) % 3;
-        b = (axis + 2) % 3;
-        for (corner = 0; corner < 4; corner++) {
-            pattern = start ^ corner;
-            point.v[a] = SmokeScalarRound((pattern & 1) ? bounds.min.v[a] : bounds.max.v[a]);
-            point.v[b] = SmokeScalarRound((pattern & 2) ? bounds.min.v[b] : bounds.max.v[b]);
-            coordinate = (((double)plane_distance - (double)point.v[a] * local_normal.v[a])
-                - (double)point.v[b] * local_normal.v[b]) / local_normal.v[axis];
-            value = SmokeScalarRound(coordinate);
-            if (!(coordinate >= bounds.min.v[axis]) || value > bounds.max.v[axis]) {
-                continue;
-            }
-            point.v[axis] = SmokeScalarRound(value);
-            wide_projection = ((double)local_velocity.v[0] * point.v[0] + (double)local_velocity.v[1] * point.v[1])
-                + (double)local_velocity.v[2] * point.v[2];
-            projection = SmokeScalarRound(wide_projection);
-            if (!(wide_projection >= minimum_projection)) {
-                if (!(maximum_projection >= 0.f)) {
-                    SingleSplash(pObject, pMatrix, pVelocity, &local_velocity, pOmega, &maximum_point, &local_normal, pTime);
-                }
-                maximum_projection = minimum_projection;
-                minimum_projection = projection;
-                memcpy(&maximum_point, &minimum_point, sizeof(maximum_point));
-                memcpy(&minimum_point, &point, sizeof(minimum_point));
-            } else if (!(projection >= maximum_projection)) {
-                if (!(maximum_projection >= 0.f)) {
-                    SingleSplash(pObject, pMatrix, pVelocity, &local_velocity, pOmega, &maximum_point, &local_normal, pTime);
-                }
-                maximum_projection = projection;
-                memcpy(&maximum_point, &point, sizeof(maximum_point));
+    {
+        BrMatrix34TApplyV((br_vector3*)(float*)local_50, pNormal, pMat);
+        BrMatrix34ApplyP(&local_88, (const br_vector3*)pBounds, pMat);
+        fVar10 = (local_88.v[0] * pNormal->v[0] + pNormal->v[2] * local_88.v[2] + pNormal->v[1] * local_88.v[1]) - pWater_density;
+        pfVar9 = (float*)pBounds;
+        fVar1 = fVar10;
+        iVar8 = 3;
+        do {
+            fVar2 = (pfVar9[3] - *pfVar9) * *(float*)(((int)local_50 - (int)pBounds) + (int)pfVar9);
+            if (*(float*)(((int)local_50 - (int)pBounds) + (int)pfVar9) <= gFLOAT_0058b008) {
+                fVar10 = fVar2 + fVar10;
             } else {
-                SingleSplash(pObject, pMatrix, pVelocity, &local_velocity, pOmega, &point, &local_normal, pTime);
+                fVar1 = fVar2 + fVar1;
             }
-        }
-    }
-    if (!(maximum_projection >= 0.f)) {
-        for (i = 0; i < 3; i++) {
-            span.v[i] = SmokeScalarRound((double)maximum_point.v[i] - minimum_point.v[i]);
-        }
-        random = SRandomBetween(.4f, .6f);
-        point.v[0] = SmokeScalarRound((double)minimum_point.v[0] + random * span.v[0]);
-        point.v[1] = SmokeScalarRound((double)minimum_point.v[1] + SmokeScalarRound(random * span.v[1]));
-        point.v[2] = SmokeScalarRound((double)minimum_point.v[2] + SmokeScalarRound(random * span.v[2]));
-        random = SRandomBetween(.2f, .3f);
-        for (i = 0; i < 3; i++) {
-            minimum_point.v[i] = SmokeScalarRound(random * span.v[i] + minimum_point.v[i]);
-        }
-        second_random = SRandomBetween(.2f, .3f);
-        random = SmokeScalarRound(-second_random);
-        dot = -(((double)local_velocity.v[2] * local_normal.v[2] + (double)local_velocity.v[1] * local_normal.v[1])
-            + (double)local_velocity.v[0] * local_normal.v[0]);
-        for (i = 0; i < 3; i++) {
-            side_wide[i] = (double)local_velocity.v[i] + SmokeScalarRound((double)local_normal.v[i] * dot);
-            side.v[i] = SmokeScalarRound(side_wide[i]);
-        }
-        length = SmokeScalarRound(sqrt((side_wide[0] * side.v[0] + side_wide[1] * side.v[1])
-            + (double)side.v[2] * side.v[2]));
-        if (!(length > 2.384185791015625e-7f)) {
-            side.v[0] = 1.f;
-            side.v[1] = 0.f;
-            side.v[2] = 0.f;
-            side_wide[0] = 1.0;
-            side_wide[1] = 0.0;
-            side_wide[2] = 0.0;
-        } else {
-            multiplier = 1.0 / length;
-            for (i = 0; i < 3; i++) {
-                side_wide[i] = multiplier * side.v[i];
-                side.v[i] = SmokeScalarRound(side_wide[i]);
-                if (i == 2) {
-                    side_wide[i] = side.v[i];
+            pfVar9++;
+            iVar8--;
+        } while (iVar8 != 0);
+        if (fVar1 * fVar10 <= gFLOAT_0058b008) {
+            local_18[3] = pBounds->max.v[0];
+            local_18[0] = pBounds->min.v[0];
+            local_18[2] = pBounds->min.v[2];
+            local_18[4] = pBounds->max.v[1];
+            local_18[5] = pBounds->max.v[2];
+            local_88.v[2] = pVel->v[0] * pNormal->v[0] + pVel->v[2] * pNormal->v[2] + pNormal->v[1] * pVel->v[1];
+            local_88.v[0] = local_88.v[2] * local_50[0];
+            local_88.v[1] = local_88.v[2] * local_50[1];
+            local_88.v[2] = local_88.v[2] * local_50[2];
+            local_18[1] = 0.01f;
+            BrMatrix34TApplyV(&local_2c, pVel, pMat);
+            local_20 = pWater_density - (pMat->m[3][0] * pNormal->v[0] + pMat->m[3][1] * pNormal->v[1] + pNormal->v[2] * pMat->m[3][2]);
+            local_1c = (float)IRandomBetween(0, 3);
+            local_6c = 0.0f;
+            local_7c.pointer = (float*)3;
+            iVar8 = 2;
+            do {
+                local_70 = 0.0f;
+                iVar6 = (int)local_7c.pointer - iVar8;
+                fVar10 = local_6c;
+                do {
+                    uVar7 = (tU32)local_1c ^ (tU32)local_70;
+                    if ((uVar7 & 1) == 0) {
+                        fVar1 = local_18[iVar6 + 3];
+                    } else {
+                        fVar1 = local_18[iVar6];
+                    }
+                    local_68[iVar6] = fVar1;
+                    if ((uVar7 & 2) == 0) {
+                        fVar1 = local_18[iVar8 + 3];
+                    } else {
+                        fVar1 = local_18[iVar8];
+                    }
+                    fVar2 = local_50[iVar6];
+                    local_68[iVar8] = fVar1;
+                    fVar5 = local_2c.v[2];
+                    fVar4 = local_2c.v[1];
+                    fVar3 = local_2c.v[0];
+                    local_78 = ((local_20 - local_68[iVar6] * fVar2) - fVar1 * local_50[iVar8]) / local_50[(int)fVar10];
+                    if ((local_18[(int)fVar10] <= local_78) && (local_78 <= local_18[(int)fVar10 + 3])) {
+                        local_68[(int)fVar10] = local_78;
+                        local_78 = fVar5 * local_68[2] + fVar4 * local_68[1] + fVar3 * local_68[0];
+                        if (local_68[3] <= local_78) {
+                            if (local_68[4] <= local_78) {
+                                SingleSplash(pObject, pMat, pVel, &local_2c, pOmega, (float*)local_68, (float*)local_50, pTime);
+                                fVar10 = local_6c;
+                            } else {
+                                if (local_68[4] < gFLOAT_0058b008) {
+                                    SingleSplash(pObject, pMat, pVel, &local_2c, pOmega, (float*)&local_38, (float*)local_50, pTime);
+                                    fVar10 = local_6c;
+                                }
+                                local_68[4] = local_78;
+                                local_38.v[0] = local_68[0];
+                                local_38.v[1] = local_68[1];
+                                local_38.v[2] = local_68[2];
+                            }
+                        } else {
+                            if (local_68[4] < gFLOAT_0058b008) {
+                                SingleSplash(pObject, pMat, pVel, &local_2c, pOmega, (float*)&local_38, (float*)local_50, pTime);
+                                fVar10 = local_6c;
+                            }
+                            local_68[4] = local_68[3];
+                            local_68[3] = local_78;
+                            local_38.v[0] = local_50[3];
+                            local_38.v[1] = local_50[4];
+                            local_38.v[2] = local_50[5];
+                            local_50[3] = local_68[0];
+                            local_50[4] = local_68[1];
+                            local_50[5] = local_68[2];
+                        }
+                    }
+                    local_70 = (float)((int)local_70 + 1);
+                } while ((int)local_70 < 4);
+                local_6c = (float)((int)fVar10 + 1);
+                local_7c.pointer = (float*)((int)local_7c.pointer - 1);
+                iVar8 = (int)fVar10;
+            } while (0 < (int)local_7c.pointer);
+            if (gFLOAT_0058b008 <= local_68[4]) {
+                uVar7 = (tU32)pObject;
+                if (local_68[3] < gFLOAT_0058b008) {
+                    SingleSplash(pObject, pMat, pVel, &local_2c, pOmega, &local_50[3], (float*)local_50, pTime);
+                    uVar7 = (tU32)pObject;
+                }
+            } else {
+                local_88.v[0] = local_38.v[0] - local_50[3];
+                local_88.v[1] = local_38.v[1] - local_50[4];
+                local_88.v[2] = local_38.v[2] - local_50[5];
+                fVar11 = SRandomBetween(0.4f, 0.6f);
+                local_68[1] = (float)(local_50[4] + fVar11 * local_88.v[1]);
+                local_68[0] = (float)(local_50[3] + fVar11 * local_88.v[0]);
+                local_68[2] = (float)(local_50[5] + fVar11 * local_88.v[2]);
+                fVar11 = SRandomBetween(0.2f, 0.3f);
+                local_50[3] = (float)(fVar11 * local_88.v[0] + local_50[3]);
+                local_50[4] = (float)(fVar11 * local_88.v[1] + local_50[4]);
+                local_50[5] = (float)(fVar11 * local_88.v[2] + local_50[5]);
+                fVar12 = SRandomBetween(0.2f, 0.3f);
+                local_78 = (float)-fVar12;
+                fVar11 = local_88.v[0];
+                fVar1 = local_78 * local_88.v[1];
+                fVar2 = local_78 * local_88.v[2];
+                fVar10 = -(local_2c.v[2] * local_50[2] + local_2c.v[1] * local_50[1] + local_2c.v[0] * local_50[0]);
+                local_68[3] = local_2c.v[0] + local_50[0] * fVar10;
+                local_68[4] = local_2c.v[1] + local_50[1] * fVar10;
+                local_68[5] = local_2c.v[2] + local_50[2] * fVar10;
+                local_1c = sqrtf(local_68[5] * local_68[5] + local_68[4] * local_68[4] + local_68[3] * local_68[3]);
+                if (local_1c <= gFLOAT_0058b110) {
+                    local_88.v[2] = 0.0f;
+                    fVar10 = gFLOAT_0058b008;
+                    fVar3 = gFLOAT_0058afdc;
+                } else {
+                    fVar3 = (float)gDOUBLE_0058b010 / local_1c;
+                    local_88.v[2] = fVar3 * local_68[5];
+                    fVar10 = fVar3 * local_68[4];
+                    fVar3 = fVar3 * local_68[3];
+                }
+                fVar4 = local_88.v[2] * gFLOAT_0058b114;
+                local_88.v[0] = fVar3 * gFLOAT_0058b114 * gFLOAT_0058afec;
+                local_88.v[1] = fVar10 * gFLOAT_0058b114 * gFLOAT_0058afec;
+                local_88.v[2] = fVar4 * gFLOAT_0058afec;
+                local_68[0] = fVar3 * gFLOAT_0058b114 + local_68[0];
+                local_68[1] = fVar10 * gFLOAT_0058b114 + local_68[1];
+                local_68[2] = fVar4 + local_68[2];
+                local_50[3] = local_50[3] + local_88.v[0];
+                local_50[4] = local_50[4] + local_88.v[1];
+                local_50[5] = local_50[5] + local_88.v[2];
+                local_38.v[0] = (float)(-fVar12 * fVar11 + local_38.v[0] + local_88.v[0]);
+                local_38.v[1] = fVar1 + local_38.v[1] + local_88.v[1];
+                local_38.v[2] = fVar2 + local_38.v[2] + local_88.v[2];
+                SingleSplash(pObject, pMat, pVel, &local_2c, pOmega, (float*)local_68, (float*)local_50, pTime);
+                SingleSplash(pObject, pMat, pVel, &local_2c, pOmega, &local_50[3], (float*)local_50, pTime);
+                SingleSplash(pObject, pMat, pVel, &local_2c, pOmega, (float*)&local_38, (float*)local_50, pTime);
+                uVar7 = (tU32)pObject;
+            }
+            local_20 = local_20 * gFLOAT_0058b054;
+            if (uVar7 != 0) {
+                iVar8 = *(int*)(uVar7 + 0x23c);
+                if ((iVar8 == 0) || (*(char*)(uVar7 + 0x238) != '\x01')) {
+                    iVar8 = 0;
+                }
+                if ((iVar8 != 0) && (5 < *(int*)(iVar8 + 0xc))) {
+                    local_7c.pointer = (float*)(iVar8 + 0x122c);
+                    local_74 = 0;
+                    do {
+                        iVar8 = *(int*)(uVar7 + 0x20);
+                        if ((local_74 & 1) == 0) {
+                            fVar10 = *(float*)(iVar8 + 4);
+                        } else {
+                            fVar10 = *(float*)(iVar8 + 0x10);
+                        }
+                        local_68[4] = *(float*)(iVar8 + 0x14) * (float)gDOUBLE_0058b0c8;
+                        local_6c = local_20 - (*local_7c.pointer * local_50[2] + local_68[4] * local_50[1] + fVar10 * (float)gDOUBLE_0058b0c8 * local_50[0]);
+                        local_70 = (*(float*)(iVar8 + 0x14) - gFLOAT_0058b028) * local_50[1] * gFLOAT_0058b054 + local_6c;
+                        if ((gFLOAT_0058b008 < local_6c) != (gFLOAT_0058b008 < local_70)) {
+                            local_88.v[0] = fVar10 * (float)gDOUBLE_0058b0c8 * gFLOAT_0058b060;
+                            local_88.v[1] = (local_68[4] - (local_68[4] - (float)gDOUBLE_0058b118) * (local_6c / (local_6c - local_70))) * gFLOAT_0058b060;
+                            local_88.v[2] = *local_7c.pointer * gFLOAT_0058b060;
+                            SingleSplash(pObject, pMat, pVel, &local_2c, pOmega, (float*)&local_88, (float*)local_50, pTime);
+                        }
+                        local_74++;
+                        local_7c.pointer += 3;
+                    } while ((int)local_74 < 4);
                 }
             }
         }
-        for (i = 0; i < 3; i++) {
-            value = side_wide[i] * -.028985507786273956f;
-            offset.v[i] = SmokeScalarRound(value * .5f);
-            point.v[i] = SmokeScalarRound((double)point.v[i] + SmokeScalarRound(value));
-            minimum_point.v[i] = SmokeScalarRound((double)minimum_point.v[i] + offset.v[i]);
-            maximum_point.v[i] = SmokeScalarRound((double)maximum_point.v[i]
-                + (i == 0 ? -second_random : random) * span.v[i]);
-            maximum_point.v[i] = SmokeScalarRound((double)maximum_point.v[i] + offset.v[i]);
-        }
-        SingleSplash(pObject, pMatrix, pVelocity, &local_velocity, pOmega, &point, &local_normal, pTime);
-        SingleSplash(pObject, pMatrix, pVelocity, &local_velocity, pOmega, &minimum_point, &local_normal, pTime);
-        SingleSplash(pObject, pMatrix, pVelocity, &local_velocity, pOmega, &maximum_point, &local_normal, pTime);
-    } else if (!(minimum_projection >= 0.f)) {
-        SingleSplash(pObject, pMatrix, pVelocity, &local_velocity, pOmega, &minimum_point, &local_normal, pTime);
     }
-    plane_distance = SmokeScalarRound((double)plane_distance * 6.900000095367432f);
-    if (pObject != NULL && pObject->flags_0x238 == 1 && pObject->owner != NULL) {
-        car = pObject->owner;
-        if (car->driver > 5) {
-            for (i = 0; i < 4; i++) {
-                value = (i & 1) ? pObject->shape->common.bb.max.v[0] : pObject->shape->common.bb.min.v[0];
-                wide_height = (double)pObject->shape->common.bb.max.v[1] * 6.9;
-                height = SmokeScalarRound(wide_height);
-                wide_near = (double)plane_distance
-                    - (((double)car->wpos[i].v[2] * local_normal.v[2] + wide_height * local_normal.v[1])
-                        + value * 6.9 * local_normal.v[0]);
-                near_distance = SmokeScalarRound(wide_near);
-                far_distance = SmokeScalarRound(((double)pObject->shape->common.bb.max.v[1] - .01f)
-                    * local_normal.v[1] * 6.900000095367432f + near_distance);
-                if ((wide_near > 0.f) != (far_distance > 0.f)) {
-                    point.v[0] = SmokeScalarRound(value * 6.9 * .14492753148078918f);
-                    point.v[1] = SmokeScalarRound(((double)height - (wide_height - .01)
-                        * ((double)near_distance / ((double)near_distance - far_distance))) * .14492753148078918f);
-                    point.v[2] = SmokeScalarRound((double)car->wpos[i].v[2] * .14492753148078918f);
-                    SingleSplash(pObject, pMatrix, pVelocity, &local_velocity, pOmega, &point, &local_normal, pTime);
-                }
-            }
-        }
-    }
+
 }
 
-#pragma inline_depth(0)
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004fda40
 void C2_HOOK_FASTCALL CreateSplash(tPhysics_object* pObject, tU32 pTime) {
 
     GeneralCreateSplash(pObject, &pObject->v, &pObject->omega, &pObject->water_normal, pObject->water_d,
         &pObject->bb1, &pObject->actor->t.t.mat, pTime);
 }
-#pragma inline_depth()
+
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x004fda70
 void C2_HOOK_FASTCALL GetVelocitiesFromMatrices(br_vector3* pVel, br_vector3* pRot, br_matrix34* pMat_now, br_matrix34* pMat_prev, tU32 pTime) {
@@ -1802,6 +1975,7 @@ void C2_HOOK_FASTCALL GetVelocitiesFromMatrices(br_vector3* pVel, br_vector3* pR
     pRot->v[2] = 2 * quat_speed.z / ts;
 }
 
+// C2PORT-NONMATCHING: best 27.55% | difftest PASS 2000 trials (spec difftest/specs/004f9e80_DrMatrix34Rotate.json) | reason x87 scheduling of the 3x3 products, values agree to 2e-6 abs
 // FUNCTION: CARMA2_HW 0x004f9e80
 void C2_HOOK_FASTCALL DrMatrix34Rotate(br_matrix34* mat, br_angle r, br_vector3* a) {
     br_scalar t;
@@ -1834,150 +2008,118 @@ void C2_HOOK_FASTCALL DrMatrix34Rotate(br_matrix34* mat, br_angle r, br_vector3*
     mat->m[2][2] = a->v[2] * a->v[2] * t + c;
 }
 
+// C2PORT-NONMATCHING: best 42.42% | difftest PASS 2000 trials (spec difftest/specs/004fc0e0_DoSmokeColumn.json) | reason regalloc,nested-graph,x87-order
 // FUNCTION: CARMA2_HW 0x004fc0e0
 void C2_HOOK_FASTCALL DoSmokeColumn(int i, tU32 pTime, br_vector3* pRet_car_pos) {
-    tSmoke_column* column;
+    br_actor* pCar_actor;
     static const br_scalar upright_tilt_threshold = 0.1f;
     static const br_scalar descent_tilt_threshold = -0.1f;
 
-    column = &gSmoke_column[i];
-    if (column->core.field_0x0 == 1) {
-        if (column->core.car->car_master_actor->t.t.mat.m[1][1] > upright_tilt_threshold) {
-            column->upright = 1;
+    if (gSmoke_column[i].core.field_0x0 == 1) {
+        if (gSmoke_column[i].core.car->car_master_actor->t.t.mat.m[1][1] > upright_tilt_threshold) {
+            gSmoke_column[i].upright = 1;
         }
-        if (column->core.car->car_master_actor->t.t.mat.m[1][1] < descent_tilt_threshold) {
-            column->upright = 0;
+        if (gSmoke_column[i].core.car->car_master_actor->t.t.mat.m[1][1] < descent_tilt_threshold) {
+            gSmoke_column[i].upright = 0;
         }
-        pRet_car_pos->v[0] = column->core.car->car_actor->model->prepared->groups->vertices[column->vertex_index].p.v[0]
-            + column->core.car->car_actor->t.t.mat.m[3][0];
-        pRet_car_pos->v[1] = column->core.car->car_actor->model->prepared->groups->vertices[column->vertex_index].p.v[1]
-            + column->core.car->car_actor->t.t.mat.m[3][1];
-        pRet_car_pos->v[2] = column->core.car->car_actor->model->prepared->groups->vertices[column->vertex_index].p.v[2]
-            + column->core.car->car_actor->t.t.mat.m[3][2];
+        pCar_actor = gSmoke_column[i].core.car->car_actor;
+        pRet_car_pos->v[0] = pCar_actor->model->prepared->groups->vertices[gSmoke_column[i].vertex_index].p.v[0]
+            + pCar_actor->t.t.mat.m[3][0];
+        pRet_car_pos->v[1] = pCar_actor->model->prepared->groups->vertices[gSmoke_column[i].vertex_index].p.v[1]
+            + pCar_actor->t.t.mat.m[3][1];
+        pRet_car_pos->v[2] = pCar_actor->model->prepared->groups->vertices[gSmoke_column[i].vertex_index].p.v[2]
+            + pCar_actor->t.t.mat.m[3][2];
     } else {
-        column->upright = 1;
-        pRet_car_pos->v[0] = column->core.car_actor->model->prepared->groups->vertices[column->vertex_index].p.v[0];
-        pRet_car_pos->v[1] = column->core.car_actor->model->prepared->groups->vertices[column->vertex_index].p.v[1];
-        pRet_car_pos->v[2] = column->core.car_actor->model->prepared->groups->vertices[column->vertex_index].p.v[2];
+        gSmoke_column[i].upright = 1;
+        pRet_car_pos->v[0] = gSmoke_column[i].core.car_actor->model->prepared->groups->vertices[gSmoke_column[i].vertex_index].p.v[0];
+        pRet_car_pos->v[1] = gSmoke_column[i].core.car_actor->model->prepared->groups->vertices[gSmoke_column[i].vertex_index].p.v[1];
+        pRet_car_pos->v[2] = gSmoke_column[i].core.car_actor->model->prepared->groups->vertices[gSmoke_column[i].vertex_index].p.v[2];
     }
-    if (column->core.field_0x0 == 1 && gProgram_state.cockpit_on && column->core.car != NULL
-            && column->core.car->driver == eDriver_local_human
-            && *(float*)((char*)column->core.car + 0x484) > pRet_car_pos->v[2]) {
-        BrMatrix34ApplyP(pRet_car_pos, &column->core.car_actor->model->prepared->groups->vertices[column->vertex_index].p,
-            &column->core.car_actor->t.t.mat);
-    } else {
-        pRet_car_pos->v[1] -= 0.0f;
+    if (gSmoke_column[i].core.field_0x0 == 1 && gProgram_state.cockpit_on && gSmoke_column[i].core.car != NULL
+            && gSmoke_column[i].core.car->driver == eDriver_local_human) {
+        if (*(float*)((char*)gSmoke_column[i].core.car + 0x484) - gDOUBLE_0058b0f0 <= pRet_car_pos->v[2]) {
+            pRet_car_pos->v[1] -= gDOUBLE_0058b0f8;
+        } else {
+            BrMatrix34ApplyP(pRet_car_pos, &pCar_actor->model->prepared->groups->vertices[gSmoke_column[i].vertex_index].p,
+                &pCar_actor->t.t.mat);
+        }
     }
-    if (column->upright == 0) {
-        pRet_car_pos->v[1] = column->core.car->collision_info->shape->common.bb.min.v[1] * 0.14492754f;
+    if (gSmoke_column[i].upright == 0) {
+        pRet_car_pos->v[1] = BR_MUL(gSmoke_column[i].core.car->collision_info->shape->common.bb.min.v[1], gFLOAT_0058b060);
     }
-    BrMatrix34ApplyP(&column->pos, pRet_car_pos, &column->core.car_actor->t.t.mat);
-    column->pos.v[1] -= 0.03f;
+    BrMatrix34ApplyP(&gSmoke_column[i].pos, pRet_car_pos, &gSmoke_column[i].core.car_actor->t.t.mat);
+    gSmoke_column[i].pos.v[1] -= 0.03f;
 }
 
-// GLOBAL: CARMA2_HW 0x00660118
-static tU8 gFlame_frame_size[20][2] = {
-    { 20, 25 }, { 24, 32 }, { 24, 34 }, { 28, 44 }, { 28, 49 },
-    { 32, 53 }, { 28, 61 }, { 28, 69 }, { 24, 61 }, { 28, 64 },
-    { 24, 70 }, { 20, 65 }, { 20, 64 }, { 20, 74 }, { 28, 55 },
-    { 24, 62 }, { 28, 47 }, { 20, 51 }, { 20, 45 }, { 20, 45 },
-};
-
 // FUNCTION: CARMA2_HW 0x004fbdd0
-void C2_HOOK_FASTCALL FlameAnimate(int pColumn, const br_vector3* pPos, tU32 pTime) {
+void C2_HOOK_FASTCALL FlameAnimate(int c, br_vector3* pPos, tU32 pTime) {
     tSmoke_column* column;
     br_actor* actor;
-    br_actor* flame;
     br_pixelmap* map;
-    tPhysics_object* physics;
-    tU32 bits;
+    float scale;
+    int sign;
     int i;
-    int width;
-    int height;
-    int direction;
-    br_scalar scale;
-    br_scalar sx;
-    br_scalar sy;
-    double speed_squared;
-    int can_start;
-    typedef void (C2_HOOK_FASTCALL* raw_flame_fn)(int, int, tU32, tU32, tU32, tU32);
-    volatile uintptr_t record_address;
 
-    column = &gSmoke_column[pColumn];
+    column = &gSmoke_column[c];
     actor = column->flame_actor;
     DRMatrix34RotateY(&actor->t.t.mat, FastScalarArcTan2Angle(gCamera_to_world.m[2][0], gCamera_to_world.m[2][2]));
-    memcpy(&actor->t.t.mat.m[3][0], &pPos->v[0], sizeof(br_scalar));
-    memcpy(&actor->t.t.mat.m[3][1], &pPos->v[1], sizeof(br_scalar));
-    bits = SmokeScalarBits(&pPos->v[2]);
-    flame = actor->children;
-    memcpy(&actor->t.t.mat.m[3][2], &bits, sizeof(bits));
-    if (gAction_replay_mode) {
+    BrVector3Copy(&actor->t.t.translate.t, pPos);
+    actor = actor->children;
+    if (gAction_replay_mode != 0) {
         for (i = 0; i < 3; i++) {
-            column->frame_count[i] = (tS32)(tU32)(br_int_64)((double)ARGetReplayRate() + column->frame_count[i]);
-            if (column->frame_count[i] >= 0 && column->frame_count[i] < 20) {
-                flame->type = 1;
-                flame->material->colour_map = gFlame_map[column->frame_count[i]];
-                BrMaterialUpdate(flame->material, 0x7fff);
-                map = gFlame_map[column->frame_count[i]];
-                height = (tU16)map->height;
-                width = (tU16)map->width;
-                sy = SmokeScalarRound((double)height * column->scale_y[i]);
-                sx = SmokeScalarRound((double)width * column->scale_x[i]);
-                BrMatrix34Scale(&flame->t.t.mat, sx, sy, 1.0f);
-                memcpy(&flame->t.t.mat.m[3][0], &column->offset_x[i], sizeof(br_scalar));
-                memcpy(&flame->t.t.mat.m[3][2], &column->offset_z[i], sizeof(br_scalar));
+            column->frame_count[i] = (int)(ARGetReplayRate() + column->frame_count[i]);
+            if (column->frame_count[i] < 0 || column->frame_count[i] >= 20) {
+                actor->type = BR_ACTOR_NONE;
             } else {
-                flame->type = 0;
+                actor->type = BR_ACTOR_MODEL;
+                map = gFlame_map[column->frame_count[i]];
+                actor->material->colour_map = map;
+                BrMaterialUpdate(actor->material, BR_MATU_ALL);
+                BrMatrix34Scale(&actor->t.t.mat, map->width * column->scale_x[i], map->height * column->scale_y[i], 1.0f);
+                actor->t.t.mat.m[3][0] = column->offset_x[i];
+                actor->t.t.mat.m[3][2] = column->offset_z[i];
             }
-            flame = flame->next;
+            actor = actor->next;
         }
         return;
     }
-    record_address = (uintptr_t)AddFlameToPipingSession;
     for (i = 0; i < 3; i++) {
-        column->frame_count[i] = (tS32)((tU32)column->frame_count[i] + 1u);
+        column->frame_count[i]++;
         if (column->frame_count[i] >= 20) {
-            ARStartPipingSession((tPipe_chunk_type)18);
-            ((raw_flame_fn)record_address)((pColumn << 4) + i, (tS32)((tU32)column->frame_count[i] + 1u), SmokeScalarBits(&column->scale_x[i]), SmokeScalarBits(&column->scale_y[i]), SmokeScalarBits(&column->offset_x[i]), SmokeScalarBits(&column->offset_z[i]));
+            ARStartPipingSession(0x12);
+            FUN_004c70f0(16 * c + i, column->frame_count[i] + 1, *(undefined4*)&column->scale_x[i], *(undefined4*)&column->scale_y[i], *(undefined4*)&column->offset_x[i], *(undefined4*)&column->offset_z[i]);
             AREndPipingSession();
             column->frame_count[i] = IRandomBetween(-5, -1);
-            scale = SmokeScalarRound(SRandomBetween(1.0f, 1.5f) * .003000000026077032f);
-            direction = IRandomBetween(0, 1) * 2 - 1;
-            column->scale_x[i] = SmokeScalarRound((double)direction * scale);
-            column->scale_y[i] = SmokeScalarRound(SRandomBetween(.5f, 1.0f) * .003000000026077032f);
-            column->offset_x[i] = SmokeScalarRound(SRandomPosNeg(.03f));
-            column->offset_z[i] = SmokeScalarRound(SRandomBetween(-.03f, 0.0f));
-            flame->type = 0;
+            scale = SRandomBetween(1.0f, 1.5f) * gFLOAT_0058b0d8;
+            sign = IRandomBetween(0, 1) * 2 - 1;
+            column->scale_x[i] = sign * scale;
+            column->scale_y[i] = SRandomBetween(0.5f, 1.0f) * gFLOAT_0058b0d8;
+            column->offset_x[i] = SRandomPosNeg(0.03f);
+            column->offset_z[i] = SRandomBetween(-0.03f, 0.0f);
+            actor->type = BR_ACTOR_NONE;
         }
         if (column->frame_count[i] == 0) {
-            can_start = 1;
-            if (column->core.car != NULL) {
-                physics = column->core.car->collision_info;
-                speed_squared = (double)physics->v.v[0] * physics->v.v[0] + (double)physics->v.v[1] * physics->v.v[1];
-                speed_squared += (double)physics->v.v[2] * physics->v.v[2];
-                can_start = !(speed_squared >= 11.594202898550725);
-            }
-            if (can_start && pTime * 30u < column->lifetime) {
-                flame->type = 1;
-                ARStartPipingSession((tPipe_chunk_type)18);
-                ((raw_flame_fn)record_address)((pColumn << 4) + i, (tS32)((tU32)column->frame_count[i] - 1u), SmokeScalarBits(&column->scale_x[i]), SmokeScalarBits(&column->scale_y[i]), SmokeScalarBits(&column->offset_x[i]), SmokeScalarBits(&column->offset_z[i]));
+            if (column->core.car != NULL
+                    && BrVector3LengthSquared(&column->core.car->collision_info->v) >= gDOUBLE_0058b0e0) {
+                column->frame_count[i] = -5;
+            } else if (pTime * 30 < column->lifetime) {
+                actor->type = BR_ACTOR_MODEL;
+                ARStartPipingSession(0x12);
+                FUN_004c70f0(16 * c + i, column->frame_count[i] - 1, *(undefined4*)&column->scale_x[i], *(undefined4*)&column->scale_y[i], *(undefined4*)&column->offset_x[i], *(undefined4*)&column->offset_z[i]);
                 AREndPipingSession();
             } else {
                 column->frame_count[i] = -5;
             }
         }
         if (column->frame_count[i] >= 0) {
-            flame->material->colour_map = gFlame_map[column->frame_count[i]];
-            BrMaterialUpdate(flame->material, 0x7fff);
-            height = gFlame_frame_size[column->frame_count[i]][1];
-            width = gFlame_frame_size[column->frame_count[i]][0];
-            sy = SmokeScalarRound((double)height * column->scale_y[i]);
-            sx = SmokeScalarRound((double)width * column->scale_x[i]);
-            BrMatrix34Scale(&flame->t.t.mat, sx, sy, 1.0f);
-            memcpy(&flame->t.t.mat.m[3][0], &column->offset_x[i], sizeof(br_scalar));
-            memcpy(&flame->t.t.mat.m[3][2], &column->offset_z[i], sizeof(br_scalar));
+            map = gFlame_map[column->frame_count[i]];
+            actor->material->colour_map = map;
+            BrMaterialUpdate(actor->material, BR_MATU_ALL);
+            BrMatrix34Scale(&actor->t.t.mat, map->width * column->scale_x[i], map->height * column->scale_y[i], 1.0f);
+            actor->t.t.mat.m[3][0] = column->offset_x[i];
+            actor->t.t.mat.m[3][2] = column->offset_z[i];
         }
-        flame = flame->next;
+        actor = actor->next;
     }
 }
 
@@ -2018,18 +2160,6 @@ void C2_HOOK_FASTCALL SetLineModelCols(tU8 pCol) {
     BrModelUpdate(gLine_model, BR_MODU_ALL);
 }
 
-// UNLABELED: CARMA2_HW 0x004f7d60
-void C2_HOOK_FASTCALL FUN_004f7d60(br_vector3* pPoint, br_vector3* pVelocity, br_vector3* pForce, br_scalar pSparkiness, tCar_spec* pOwner) {
-
-    NOT_IMPLEMENTED();
-}
-
-// UNLABELED: CARMA2_HW 0x004f8290
-void C2_HOOK_FASTCALL FUN_004f8290(br_vector3* pPoint, br_vector3* pVelocity, br_vector3* pForce, tCar_spec* pOwner1, tCar_spec* pOwner2) {
-
-    NOT_IMPLEMENTED();
-}
-
 // FUNCTION: CARMA2_HW 0x004f6de0
 int C2_HOOK_FASTCALL DrawLine3DThroughBRender(br_vector3* start, br_vector3* end, br_pixelmap* pScreen, br_pixelmap* pDepth_buffer, float scale, br_pixelmap* shade_table);
 
@@ -2046,6 +2176,20 @@ int C2_HOOK_FASTCALL DrawLine3D(br_vector3* start, br_vector3* end, br_pixelmap*
         gLine_model->vertices[1].p.v[1] = end->v[1];
         gLine_model->vertices[1].p.v[2] = end->v[2];
         BrModelUpdate(gLine_model, BR_MODU_VERTEX_POSITIONS);
+#ifndef CARPOCALYPSE2_MATCHING
+        if (getenv("C2_OBJLOG") != NULL) {
+            static tU32 last_line_log;
+            tU32 now = GetTotalTime();
+            if (now - last_line_log >= 1000) {
+                v11model* prepared = gLine_model->prepared;
+                v11group* group = prepared != NULL && prepared->ngroups != 0 ? &prepared->groups[0] : NULL;
+                last_line_log = now;
+                dr_dprintf("LINELOG groups=%u vertices=%u edges=%u start=%.7g,%.7g,%.7g end=%.7g,%.7g,%.7g",
+                    prepared != NULL ? prepared->ngroups : 0, group != NULL ? group->nvertices : 0,
+                    group != NULL ? group->nedges : 0, start->v[0], start->v[1], start->v[2], end->v[0], end->v[1], end->v[2]);
+            }
+        }
+#endif
         BrZbsSceneRenderAdd(gLine_actor);
         return 0x3e7;
     }
@@ -2098,6 +2242,7 @@ project:
         pScreen, pDepth_buffer, 1.0f, shade_table);
 }
 
+// C2PORT-NONMATCHING: best 37.35% | difftest PASS 2000 trials (spec difftest/specs/004f6de0_DrawLine3DThroughBRender.json) | reason scanline register and stack codegen
 // FUNCTION: CARMA2_HW 0x004f6de0
 int C2_HOOK_FASTCALL DrawLine3DThroughBRender(br_vector3* start, br_vector3* end, br_pixelmap* pScreen, br_pixelmap* pDepth_buffer, float scale, br_pixelmap* shade_table) {
     int xe;
@@ -2466,36 +2611,37 @@ int C2_HOOK_CDECL CmpSmokeZ(const void* p1, const void* p2) {
     }
 }
 
+// C2PORT-NONMATCHING: best 51.46% | difftest PASS 2000 trials (spec difftest/specs/004fb1b0_RenderRecordedSmokeCircles.json) | reason VC5 loop and colour temporaries layout; logic verified against asm
 // FUNCTION: CARMA2_HW 0x004fb1b0
 void C2_HOOK_FASTCALL RenderRecordedSmokeCircles(void) {
     int i;
     int j;
     tBRender_smoke* smoke;
-    br_model* model;
     tU8 red;
     tU8 grn;
     tU8 blu;
 
-    BrQsort(gBR_smoke_pointers, gN_BR_smoke_structs, sizeof(gBR_smoke_pointers[0]), CmpSmokeZ);
+    BrQsort(gBR_smoke_pointers, gN_BR_smoke_structs, sizeof(void*), CmpSmokeZ);
+
     for (i = gN_BR_smoke_structs - 1; i >= 0; i--) {
         smoke = gBR_smoke_pointers[i];
         BrVector3Copy(&gBlend_actor->t.t.translate.t, &smoke->pos);
         gBlend_actor->t.t.mat.m[0][0] = smoke->r;
         gBlend_actor->t.t.mat.m[1][1] = smoke->r / smoke->aspect;
         gBlend_actor->material = smoke->material;
-        smoke->material->extra_prim[1].v.x = BrFloatToFixed(smoke->strength * 150.f);
-        BrMaterialUpdate(smoke->material, BR_MATU_EXTRA_PRIM);
-        red = BR_RED(smoke->col);
-        grn = BR_GRN(smoke->col);
-        blu = BR_BLU(smoke->col);
-        model = gBR_smoke_pointers[i]->model;
-        for (j = 0; j < model->nvertices; j++) {
-            model->vertices[j].red = red;
-            model->vertices[j].grn = grn;
-            model->vertices[j].blu = blu;
+        gBlend_actor->material->extra_prim[1].v.x = BrFloatToFixed(smoke->strength * 150.f);
+        BrMaterialUpdate(gBlend_actor->material, BR_MATU_EXTRA_PRIM);
+
+        red = (tU8)((smoke->col >> 16) & 0xff);
+        grn = (tU8)((smoke->col >> 8) & 0xff);
+        blu = (tU8)(smoke->col & 0xff);
+        for (j = 0; j < smoke->model->nvertices; j++) {
+            smoke->model->vertices[j].red = red;
+            smoke->model->vertices[j].grn = grn;
+            smoke->model->vertices[j].blu = blu;
         }
-        BrModelUpdate(model, BR_MODU_VERTEX_COLOURS);
-        gBlend_actor->model = model;
+        BrModelUpdate(smoke->model, BR_MODU_VERTEX_COLOURS);
+        gBlend_actor->model = smoke->model;
         BrZbsSceneRenderAdd(gBlend_actor);
     }
 }
@@ -2567,6 +2713,16 @@ void C2_HOOK_FASTCALL ReplaySmoke(br_pixelmap* pRender_screen, br_pixelmap* pDep
             }
         }
     }
+}
+
+// FUNCTION: CARMA2_HW 0x004fa8d0
+void C2_HOOK_FASTCALL DustRotate(void) {
+
+    gDust_rotate++;
+    if (gDust_rotate >= gNum_dust_tables) {
+        gDust_rotate = 0;
+    }
+    NewTextHeadupSlot(4, 0, 1000, -4, "Dust colour rotated");
 }
 
 // FUNCTION: CARMA2_HW 0x004fa910
@@ -2726,6 +2882,272 @@ void C2_HOOK_FASTCALL RenderSmoke(br_pixelmap* pRender_screen, br_pixelmap* pDep
 
 // CreateShrapnelShower
 
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 38.34% | difftest PASS 2000 trials (spec difftest/specs/004f7d60_CreateSparks.json) | reason VC5 x87 scheduling and register allocation
+// FUNCTION: CARMA2_HW 0x004f7d60
+void C2_HOOK_FASTCALL CreateSparks(const br_vector3* pPosition, br_vector3* pVelocity, const br_vector3* pForce, br_scalar pStrength, tCar_spec* pCar) {
+    br_vector3 force_normal;
+    br_vector3 local_position;
+    br_vector3 relative_position;
+    br_vector3 local_normal;
+    br_vector3 random_vector;
+    br_scalar force_length;
+    br_scalar dot;
+    br_scalar scale;
+    int spark_count;
+
+    force_length = (float)sqrt((double)(pForce->v[0] * pForce->v[0] + pForce->v[2] * pForce->v[2] + pForce->v[1] * pForce->v[1]));
+    force_normal.v[0] = pForce->v[0] / force_length;
+    force_normal.v[1] = pForce->v[1] / force_length;
+    force_normal.v[2] = pForce->v[2] / force_length;
+
+    dot = pForce->v[0] * pVelocity->v[0] + pVelocity->v[2] * pForce->v[2] + pForce->v[1] * pVelocity->v[1];
+    if (gFLOAT_0058b008 <= dot) {
+        scale = (br_scalar)(gDOUBLE_0058b010 / (force_length * gFLOAT_0058aff0));
+    } else {
+        scale = (br_scalar)(gDOUBLE_0058b010 / (force_length * gFLOAT_0058aff0)) - dot / (force_length * force_length);
+    }
+    pVelocity->v[0] += pForce->v[0] * scale;
+    pVelocity->v[1] += pForce->v[1] * scale;
+    pVelocity->v[2] += pForce->v[2] * scale;
+
+    spark_count = (int)(FRandomBetween(0.0f, (br_scalar)gDOUBLE_0058b020 - (float)sqrt((double)(pVelocity->v[0] * pVelocity->v[0] + pVelocity->v[2] * pVelocity->v[2] + pVelocity->v[1] * pVelocity->v[1])) * gFLOAT_0058b018) * pStrength);
+    if (spark_count > 10) {
+        spark_count = 10;
+    }
+    while (spark_count > 0) {
+        gSparks[gNext_spark].pos = *pPosition;
+        gSparks[gNext_spark].normal = force_normal;
+        gSparks[gNext_spark].v = *pVelocity;
+        gSparks[gNext_spark].v.v[0] *= FRandomBetween(0.5f, 0.9f);
+        gSparks[gNext_spark].v.v[1] *= FRandomBetween(0.5f, 0.9f);
+        gSparks[gNext_spark].v.v[2] *= FRandomBetween(0.5f, 0.9f);
+        gSpark_flags |= 1 << gNext_spark;
+        gNext_spark++;
+        gSparks[gNext_spark - 1].count = 1000;
+        gSparks[gNext_spark - 1].car = NULL;
+        gSparks[gNext_spark - 1].time_sync = gPHIL_mechanics_time_sync;
+        gSparks[gNext_spark - 1].colour = 0;
+        if (gNext_spark >= CARPOCALYPSE2_ASIZE(gSparks)) {
+            gNext_spark = 0;
+        }
+        spark_count--;
+    }
+
+    if (force_length * pStrength >= gFLOAT_0058aff0) {
+        relative_position.v[0] = pPosition->v[0] - pCar->car_master_actor->t.t.mat.m[3][0];
+        relative_position.v[1] = pPosition->v[1] - pCar->car_master_actor->t.t.mat.m[3][1];
+        relative_position.v[2] = pPosition->v[2] - pCar->car_master_actor->t.t.mat.m[3][2];
+        BrMatrix34TApplyV(&local_position, &relative_position, &pCar->car_master_actor->t.t.mat);
+        BrMatrix34TApplyV(&local_normal, &force_normal, &pCar->car_master_actor->t.t.mat);
+        spark_count = 3 - (int)(force_length * pStrength * gFLOAT_0058b02c);
+        if (spark_count > 10) {
+            spark_count = 10;
+        }
+        while (spark_count > 0) {
+            gSparks[gNext_spark].pos.v[0] = local_position.v[0] + local_normal.v[0] * gFLOAT_0058b028;
+            gSparks[gNext_spark].pos.v[1] = local_position.v[1] + local_normal.v[1] * gFLOAT_0058b028;
+            gSparks[gNext_spark].pos.v[2] = local_position.v[2] + local_normal.v[2] * gFLOAT_0058b028;
+            gSparks[gNext_spark].normal = local_normal;
+            BrVector3SetFloat(&random_vector,
+                FRandomBetween(-1.0f, 1.0f),
+                FRandomBetween(-0.2f, 1.0f),
+                FRandomBetween(-1.0f, 1.0f));
+            dot = random_vector.v[0] * local_normal.v[0] + random_vector.v[1] * local_normal.v[1] + random_vector.v[2] * local_normal.v[2];
+            gSparks[gNext_spark].v.v[0] = random_vector.v[0] - dot * local_normal.v[0];
+            gSparks[gNext_spark].v.v[1] = random_vector.v[1] - dot * local_normal.v[1];
+            gSparks[gNext_spark].v.v[2] = random_vector.v[2] - dot * local_normal.v[2];
+            gSpark_flags |= 1 << gNext_spark;
+            gSparks[gNext_spark].count = 1000;
+            gSparks[gNext_spark].car = pCar;
+            gSparks[gNext_spark].time_sync = gPHIL_mechanics_time_sync;
+            gSparks[gNext_spark].colour = 0;
+            gNext_spark++;
+            if (gNext_spark >= CARPOCALYPSE2_ASIZE(gSparks)) {
+                gNext_spark = 0;
+            }
+            spark_count--;
+        }
+        CreateShrapnelShower(pPosition, pVelocity, &force_normal, force_length, pCar, pCar, 0, NULL);
+    }
+}
+#pragma auto_inline(on)
+
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 33.05% | difftest PASS 2000 trials (spec difftest/specs/004f8290_CreateSparkShower.json) | reason VC5 x87 scheduling and register allocation
+// FUNCTION: CARMA2_HW 0x004f8290
+void C2_HOOK_FASTCALL CreateSparkShower(br_vector3* pPosition, br_vector3* pVelocity, br_vector3* pForce, tNon_car_spec* pOwner1, tNon_car_spec* pOwner2) {
+    br_vector3 normal;
+    br_vector3 tv;
+    br_vector3 tv2;
+    br_scalar force_length;
+    br_scalar force_length_squared;
+    br_scalar projection;
+    br_matrix34* owner_matrix;
+    tNon_car_spec* selected_owner;
+    int spark_count;
+
+    C2_HOOK_BUG_ON(offsetof(tNon_car_spec, driver) != 0x0C);
+    C2_HOOK_BUG_ON(offsetof(tNon_car_spec, actor) != 0x10);
+    C2_HOOK_BUG_ON(offsetof(tNon_car_spec, flags) != 0x100);
+
+    force_length = BrVector3Length(pForce);
+    if (pOwner1 == NULL || pOwner1->driver != eDriver_local_human) {
+        selected_owner = pOwner2;
+    } else {
+        selected_owner = pOwner1;
+    }
+    normal.v[0] = pForce->v[0] / force_length;
+    normal.v[1] = pForce->v[1] / force_length;
+    normal.v[2] = pForce->v[2] / force_length;
+    if (force_length >= gFLOAT_0058aff0) {
+        CreateShrapnelShower(pPosition, pVelocity, &normal, force_length,
+            (tCar_spec*)pOwner1, (tCar_spec*)pOwner2, 0, NULL);
+        if (!((pOwner1 != NULL && pOwner1->driver > 5)
+                || (pOwner1->flags & 0x200000) != 0
+                || (pOwner2 != NULL && pOwner2->driver > 5)
+                || (pOwner2->flags & 0x200000) != 0)) {
+            return;
+        }
+
+        owner_matrix = &selected_owner->actor->t.t.mat;
+        force_length_squared = force_length * force_length;
+        projection = BrVector3Dot(pForce, pVelocity) / force_length_squared;
+        tv.v[0] = pVelocity->v[0] - pForce->v[0] * projection;
+        tv.v[1] = pVelocity->v[1] - pForce->v[1] * projection;
+        tv.v[2] = pVelocity->v[2] - pForce->v[2] * projection;
+        BrMatrix34TApplyV(pVelocity, &tv, &pOwner1->actor->t.t.mat);
+
+        BrVector3Sub(&tv, pPosition, (br_vector3*)owner_matrix->m[3]);
+        BrMatrix34TApplyV(pPosition, &tv, owner_matrix);
+        BrMatrix34TApplyV(&tv, pForce, owner_matrix);
+        BrVector3Copy(pForce, &tv);
+
+        spark_count = 3 - (int)(force_length * gFLOAT_0058b02c);
+        if (spark_count > 20) {
+            spark_count = 20;
+        }
+        while (spark_count > 0) {
+            int spark_index;
+
+            spark_index = gNext_spark;
+            BrVector3Copy(&gSparks[spark_index].pos, pPosition);
+            BrVector3SetFloat(&gSparks[spark_index].normal, 0.0f, 0.0f, 0.0f);
+            BrVector3SetFloat(&tv,
+                FRandomBetween(-1.0f, 1.0f),
+                FRandomBetween(-0.2f, 1.0f),
+                FRandomBetween(-1.0f, 1.0f));
+            projection = BrVector3Dot(pForce, &tv) / force_length_squared;
+            BrVector3Scale(&tv2, pForce, projection);
+            BrVector3Sub(&gSparks[spark_index].v, &tv, &tv2);
+            BrVector3Accumulate(&gSparks[spark_index].v, pVelocity);
+            gSparks[spark_index].count = 1000;
+            gSparks[spark_index].car = (tCar_spec*)selected_owner;
+            gSpark_flags |= 1 << spark_index;
+            gSparks[spark_index].time_sync = gPHIL_mechanics_time_sync;
+            gSparks[spark_index].colour = 0;
+            gNext_spark = spark_index + 1;
+            if (gNext_spark >= CARPOCALYPSE2_ASIZE(gSparks)) {
+                gNext_spark = 0;
+            }
+            spark_count--;
+        }
+    }
+}
+#pragma auto_inline(on)
+
+#pragma auto_inline(off)
+// FUNCTION: CARMA2_HW 0x004f8800
+void C2_HOOK_FASTCALL CreateShrapnelShower(const br_vector3* pPosition, const br_vector3* pVelocity, const br_vector3* pDirection, br_scalar pStrength, tCar_spec* pCar1, tCar_spec* pCar2, int pMaterialCount, br_material** pMaterials) {
+    float fVar1;
+    float fVar2;
+    float fVar3;
+    float fVar4;
+    float fVar7;
+    float fVar8;
+    float fVar9;
+    float fVar10;
+    int shrapnel_count;
+    int material_index;
+    tCar_spec* selected_car;
+    br_vector3 random_vector;
+    br_vector3 scaled_direction;
+    br_vector3 velocity;
+
+    if (pStrength < gFLOAT_0058aff0) {
+        return;
+    }
+    if (pMaterials != NULL) {
+        fVar8 = gFLOAT_0058b030;
+    } else {
+        fVar8 = gFLOAT_0058b034;
+    }
+    if (pVelocity->v[1] < gFLOAT_0058b008) {
+        fVar8 -= pVelocity->v[1];
+    }
+    fVar9 = pDirection->v[1] * fVar8;
+    fVar1 = pDirection->v[2];
+    fVar2 = pDirection->v[0];
+    fVar3 = pVelocity->v[0];
+    fVar4 = pVelocity->v[2];
+    fVar8 = (fVar8 + pVelocity->v[1]) - pDirection->v[1] * fVar9;
+    BrVector3Set(&velocity, fVar3 - fVar2 * fVar9, fVar8, fVar4 - fVar1 * fVar9);
+    shrapnel_count = (int)(pStrength * gFLOAT_0058b038);
+    shrapnel_count *= 12;
+    if (shrapnel_count > 20) {
+        shrapnel_count = 20;
+    }
+    fVar10 = pStrength - gFLOAT_0058b03c;
+    fVar10 *= gFLOAT_0058b040;
+    fVar10 *= gFLOAT_0058b044;
+    if (shrapnel_count > 0) {
+        do {
+            if (((1 << gShrapnel_index) & gShrapnel_flags) == 0) {
+                BrActorAdd(gNon_track_actor, gShrapnel[gShrapnel_index].actor);
+            }
+            gShrapnel_flags |= 1 << gShrapnel_index;
+            BrVector3Copy(&gShrapnel[gShrapnel_index].actor->t.t.translate.t, pPosition);
+            BrVector3SetFloat(&random_vector, FRandomBetween(-fVar10, fVar10), FRandomBetween((float)(gDOUBLE_0058b048 - fVar8), fVar10), FRandomBetween(-fVar10, fVar10));
+            fVar7 = BrVector3Dot(pDirection, &random_vector);
+            BrVector3Scale(&scaled_direction, pDirection, fVar7);
+            BrVector3Sub(&gShrapnel[gShrapnel_index].v, &random_vector, &scaled_direction);
+            BrVector3Accumulate(&gShrapnel[gShrapnel_index].v, &velocity);
+            gShrapnel[gShrapnel_index].time_sync = gPHIL_mechanics_time_sync;
+            gShrapnel[gShrapnel_index].age = 0;
+            if (pMaterials != NULL) {
+                material_index = IRandomBetween(0, pMaterialCount - 1);
+                gShrapnel[gShrapnel_index].actor->material = pMaterials[material_index];
+            } else if (IRandomBetween(0, 2) != 0) {
+                selected_car = pCar1;
+                if (IRandomBetween(0, 1) == 0) {
+                    selected_car = pCar2;
+                }
+                material_index = IRandomBetween(0, selected_car->count_shrapnel_materials - 1);
+                gShrapnel[gShrapnel_index].actor->material = selected_car->shrapnel_materials[material_index];
+            } else {
+                gShrapnel[gShrapnel_index].actor->material = gBlack_material;
+            }
+            gShrapnel_index += 1;
+            if (gShrapnel_index >= 30) {
+                gShrapnel_index = 0;
+            }
+            shrapnel_count--;
+        } while (shrapnel_count != 0);
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x004f8b50
+void C2_HOOK_FASTCALL FUN_004f8b50(const br_vector3* pPosition, const br_vector3* pVelocity, const br_vector3* pDirection, br_scalar pStrength, int pMaterialCount, br_material** pMaterials) {
+    CreateShrapnelShower(pPosition, pVelocity, pDirection, pStrength, NULL, NULL, pMaterialCount, pMaterials);
+}
+#pragma auto_inline(on)
+
+// FUNCTION: CARMA2_HW 0x004f8b70
+void C2_HOOK_FASTCALL FUN_004f8b70(const br_vector3* pPosition, const br_vector3* pVelocity, const br_vector3* pDirection, br_scalar pStrength, tCar_spec* pCar1, tCar_spec* pCar2) {
+
+    CreateShrapnelShower(pPosition, pVelocity, pDirection, pStrength, pCar1, pCar2, 0, NULL);
+}
+
 // random
 
 // InitShrapnel
@@ -2742,129 +3164,137 @@ void C2_HOOK_FASTCALL RenderSmoke(br_pixelmap* pRender_screen, br_pixelmap* pDep
 
 // FUNCTION: CARMA2_HW 0x004f8dc0
 intptr_t C2_HOOK_CDECL ActorFunks(br_actor* pActor, void* pCallback);
+void C2_HOOK_FASTCALL MasterDisableFunkotronic(int pFunk_index);
+void C2_HOOK_FASTCALL MasterEnableFunkotronic(int pFunk_index);
 
 // FUNCTION: CARMA2_HW 0x004f8ca0
 void C2_HOOK_FASTCALL MasterDisableCarFunks(tCar_spec* pCar) {
-#ifndef CARPOCALYPSE2_MATCHING
-    /* stub: no-op for Linux boot */
-#else
     int i;
     int j;
-    tCar_crush_spec* spec = pCar->car_crush_spec;
-    br_actor* actor;
-    tUser_crush_data* user;
-    tCar_crush_buffer_entry* crush;
+    int funk_index;
+    tCarFunks_master* funks = (tCarFunks_master*)*(void**)((char*)pCar + 0x18d4);
+    br_actor* hierarchy_root = *(br_actor**)((char*)pCar + 0xe0c);
 
-    DRActorEnumRecurse(pCar->car_model_actor, ActorFunks, (void*)MasterDisableFunkotronic);
-    for (i = 0; i < spec->field_0x270; i++) {
-        actor = spec->field_0x274[i].field_0x0;
-        user = (tUser_crush_data*)actor->user;
-        if (user == NULL) {
-            continue;
-        }
-        crush = user->crush_data;
-        if (crush == NULL) {
-            continue;
-        }
-        if (crush->smashables == NULL) {
-            continue;
-        }
-        for (j = 0; j < crush->count_smashables; j++) {
-            int funk_index = crush->smashables[j].funk;
-            if (funk_index >= 0) {
-                MasterDisableFunkotronic(funk_index);
+    DRActorEnumRecurse(hierarchy_root, (br_actor_enum_cbfn*)ActorFunks, (void*)MasterDisableFunkotronic);
+
+    for (i = 0; i < funks->count_0x270; i++) {
+        br_actor* bit_actor = funks->bit_0x274[i].field_0x0;
+
+        if (bit_actor->user != NULL) {
+            tFunk_list* funk_list = ((tFunk_container*)bit_actor->user)->funk_list;
+
+            if (funk_list != NULL) {
+                if (funk_list->funk_records != NULL) {
+                    for (j = 0; j < funk_list->funk_count; j++) {
+                        funk_index = funk_list->funk_records[j].funk_index;
+                        if (funk_index >= 0) {
+                            MasterDisableFunkotronic(funk_index);
+                        }
+                    }
+                }
             }
         }
     }
-    for (i = 0; i < spec->field_0x2b0; i++) {
-        actor = spec->field_0x2b4[i].field_0x0;
-        user = (tUser_crush_data*)actor->user;
-        if (user == NULL) {
-            continue;
-        }
-        crush = user->crush_data;
-        if (crush == NULL) {
-            continue;
-        }
-        if (crush->smashables == NULL) {
-            continue;
-        }
-        for (j = 0; j < crush->count_smashables; j++) {
-            int funk_index = crush->smashables[j].funk;
-            if (funk_index >= 0) {
-                MasterDisableFunkotronic(funk_index);
+
+    for (i = 0; i < funks->count_0x2b0; i++) {
+        br_actor* bit_actor = funks->bit_0x2b4[i].field_0x0;
+
+        if (bit_actor->user != NULL) {
+            tFunk_list* funk_list = ((tFunk_container*)bit_actor->user)->funk_list;
+
+            if (funk_list != NULL) {
+                if (funk_list->funk_records != NULL) {
+                    for (j = 0; j < funk_list->funk_count; j++) {
+                        funk_index = funk_list->funk_records[j].funk_index;
+                        if (funk_index >= 0) {
+                            MasterDisableFunkotronic(funk_index);
+                        }
+                    }
+                }
             }
         }
     }
-#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004f8e10
 void C2_HOOK_FASTCALL MasterEnableCarFunks(tCar_spec* pCar) {
-#ifndef CARPOCALYPSE2_MATCHING
-    /* stub: no-op for Linux boot */
-#else
     int i;
     int j;
-    tCar_crush_spec* spec = pCar->car_crush_spec;
-    br_actor* actor;
-    tUser_crush_data* user;
-    tCar_crush_buffer_entry* crush;
+    int funk_index;
+    tCarFunks_master* funks = (tCarFunks_master*)*(void**)((char*)pCar + 0x18d4);
+    br_actor* hierarchy_root = *(br_actor**)((char*)pCar + 0xe0c);
 
-    DRActorEnumRecurse(pCar->car_model_actor, ActorFunks, (void*)MasterEnableFunkotronic);
-    for (i = 0; i < spec->field_0x270; i++) {
-        actor = spec->field_0x274[i].field_0x0;
-        user = (tUser_crush_data*)actor->user;
-        if (user == NULL) {
-            continue;
-        }
-        crush = user->crush_data;
-        if (crush == NULL) {
-            continue;
-        }
-        if (crush->smashables == NULL) {
-            continue;
-        }
-        for (j = 0; j < crush->count_smashables; j++) {
-            int funk_index = crush->smashables[j].funk;
-            if (funk_index >= 0) {
-                MasterEnableFunkotronic(funk_index);
+    DRActorEnumRecurse(hierarchy_root, (br_actor_enum_cbfn*)ActorFunks, (void*)MasterEnableFunkotronic);
+
+    for (i = 0; i < funks->count_0x270; i++) {
+        br_actor* bit_actor = funks->bit_0x274[i].field_0x0;
+
+        if (bit_actor->user != NULL) {
+            tFunk_list* funk_list = ((tFunk_container*)bit_actor->user)->funk_list;
+
+            if (funk_list != NULL) {
+                if (funk_list->funk_records != NULL) {
+                    for (j = 0; j < funk_list->funk_count; j++) {
+                        funk_index = funk_list->funk_records[j].funk_index;
+                        if (funk_index >= 0) {
+                            MasterEnableFunkotronic(funk_index);
+                        }
+                    }
+                }
             }
         }
     }
 
-    for (i = 0; i < spec->field_0x2b0; i++) {
-        actor = spec->field_0x2b4[i].field_0x0;
-        user = (tUser_crush_data*)actor->user;
-        if (user == NULL) {
-            continue;
-        }
-        crush = user->crush_data;
-        if (crush == NULL) {
-            continue;
-        }
-        if (crush->smashables == NULL) {
-            continue;
-        }
-        for (j = 0; j < crush->count_smashables; j++) {
-            int funk_index = crush->smashables[j].funk;
-            if (funk_index >= 0) {
-                MasterEnableFunkotronic(funk_index);
+    for (i = 0; i < funks->count_0x2b0; i++) {
+        br_actor* bit_actor = funks->bit_0x2b4[i].field_0x0;
+
+        if (bit_actor->user != NULL) {
+            tFunk_list* funk_list = ((tFunk_container*)bit_actor->user)->funk_list;
+
+            if (funk_list != NULL) {
+                if (funk_list->funk_records != NULL) {
+                    for (j = 0; j < funk_list->funk_count; j++) {
+                        funk_index = funk_list->funk_records[j].funk_index;
+                        if (funk_index >= 0) {
+                            MasterEnableFunkotronic(funk_index);
+                        }
+                    }
+                }
             }
         }
     }
-#endif
 }
 
 // SetPixelmap
 
 // FUNCTION: CARMA2_HW 0x004f8f30
 void C2_HOOK_FASTCALL DoCamouflageThing(tCar_spec* pCar) {
-#ifndef CARPOCALYPSE2_MATCHING
-    BlendifyCar(pCar);
-#else
-    NOT_IMPLEMENTED();
-#endif
+    br_scalar distance;
+    br_vector3 ray_dir;
+    br_vector3 ray_pos;
+    br_vector3 hit_position;
+    br_vector3 hit_normal;
+    tFace_ref* face;
+
+    distance = 10.0f;
+    ray_dir.v[0] = 0.0f;
+    ray_dir.v[1] = -0.5f;
+    ray_dir.v[2] = 0.0f;
+    BrMatrix34ApplyP(&ray_pos, &pCar->collision_info->cmpos, &pCar->collision_info->transform_matrix);
+    face = FUN_004226d0(&ray_pos, &ray_dir, &hit_normal, &distance, &hit_position,
+            &gFace_list__car[pCar->collision_info->box_face_start],
+            pCar->collision_info->box_face_end - pCar->collision_info->box_face_start);
+    if (face != NULL) {
+        if (face->material != NULL) {
+            if (face->material->colour_map != NULL) {
+                if (face->material->colour_map != pCar->field_0x1960) {
+                    pCar->field_0x1960 = face->material->colour_map;
+                    gRecalc_mass_car = pCar;
+                    ForEveryCarMaterial(pCar, SetCarMaterialToSolidGreenCB, 1);
+                }
+            }
+        }
+    }
 }
 
 // DoSolidGraniteThing
@@ -2887,9 +3317,6 @@ void C2_HOOK_FASTCALL DoCamouflageThing(tCar_spec* pCar) {
 
 // FUNCTION: CARMA2_HW 0x004f9620
 void C2_HOOK_FASTCALL RestoreCarPixelmaps(tCar_spec* pCar_spec) {
-#ifndef CARPOCALYPSE2_MATCHING
-    UnBlendifyCar(pCar_spec);
-#else
     tCarFunks_master* funks;
     int i;
     int j;
@@ -2939,7 +3366,6 @@ void C2_HOOK_FASTCALL RestoreCarPixelmaps(tCar_spec* pCar_spec) {
 
     ForEveryCarMaterial(pCar_spec, RestorePixelmap, 1);
     pCar_spec->field_0x1960 = NULL;
-#endif
 }
 
 // MungeShrapnel
@@ -2950,56 +3376,6 @@ void C2_HOOK_FASTCALL RestoreCarPixelmaps(tCar_spec* pCar_spec) {
 
 // FUNCTION: CARMA2_HW 0x004f9fc0
 void C2_HOOK_FASTCALL InitSmokeStuff(void) {
-#ifndef CARPOCALYPSE2_MATCHING
-    int i;
-
-    gBlend_model = BrModelAllocate("BlendModel", 4, 2);
-    gBlend_model->flags |= BR_MODF_UPDATEABLE;
-    BrVector3SetFloat(&gBlend_model->vertices[0].p, -0.5f, 0.f, 0.f);
-    BrVector3SetFloat(&gBlend_model->vertices[1].p, 0.5f, 0.f, 0.f);
-    BrVector3SetFloat(&gBlend_model->vertices[2].p, 0.5f, 1.f, 0.f);
-    BrVector3SetFloat(&gBlend_model->vertices[3].p, -0.5f, 1.f, 0.f);
-    BrVector2Set(&gBlend_model->vertices[0].map, 0.f, 1.f);
-    BrVector2Set(&gBlend_model->vertices[1].map, 1.f, 1.f);
-    BrVector2Set(&gBlend_model->vertices[2].map, 1.f, 0.f);
-    BrVector2Set(&gBlend_model->vertices[3].map, 0.f, 0.f);
-    gBlend_model->faces[0].vertices[0] = 0;
-    gBlend_model->faces[0].vertices[1] = 1;
-    gBlend_model->faces[0].vertices[2] = 2;
-    gBlend_model->faces[1].vertices[0] = 0;
-    gBlend_model->faces[1].vertices[1] = 2;
-    gBlend_model->faces[1].vertices[2] = 3;
-    BrModelAdd(gBlend_model);
-
-    gBlend_model2 = BrModelAllocate("BlendModel2", 4, 2);
-    gBlend_model2->flags |= BR_MODF_UPDATEABLE;
-    BrVector3SetFloat(&gBlend_model2->vertices[0].p, -0.5f, 0.f, 0.f);
-    BrVector3SetFloat(&gBlend_model2->vertices[1].p, 0.5f, 0.f, 0.f);
-    BrVector3SetFloat(&gBlend_model2->vertices[2].p, 0.5f, 1.f, 0.f);
-    BrVector3SetFloat(&gBlend_model2->vertices[3].p, -0.5f, 1.f, 0.f);
-    BrVector2Set(&gBlend_model2->vertices[0].map, 0.f, 1.f);
-    BrVector2Set(&gBlend_model2->vertices[1].map, 1.f, 1.f);
-    BrVector2Set(&gBlend_model2->vertices[2].map, 1.f, 0.f);
-    BrVector2Set(&gBlend_model2->vertices[3].map, 0.f, 0.f);
-    gBlend_model2->faces[0].vertices[0] = 0;
-    gBlend_model2->faces[0].vertices[1] = 1;
-    gBlend_model2->faces[0].vertices[2] = 2;
-    gBlend_model2->faces[1].vertices[0] = 0;
-    gBlend_model2->faces[1].vertices[1] = 2;
-    gBlend_model2->faces[1].vertices[2] = 3;
-    BrModelAdd(gBlend_model2);
-
-    gBlend_actor = BrActorAllocate(BR_ACTOR_MODEL, NULL);
-    gBlend_actor->render_style = BR_RSTYLE_FACES;
-    gBlend_actor->model = gBlend_model;
-
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gBR_smoke_structs); i++) {
-        gBR_smoke_structs[i].material = BrMaterialAllocate(NULL);
-        gBR_smoke_structs[i].material->flags &= ~BR_MATF_LIGHT;
-        gBR_smoke_structs[i].material->flags |= BR_MATF_ALWAYS_VISIBLE;
-        BrMaterialAdd(gBR_smoke_structs[i].material);
-    }
-#else
     br_pixelmap* pm;
     tPath_name path;
     int i;
@@ -3088,37 +3464,36 @@ void C2_HOOK_FASTCALL InitSmokeStuff(void) {
 
     for (i = 0; i < 35; i++) {
         gBR_smoke_structs[i].material->flags = BR_MATF_LIGHT | BR_MATF_PRELIT | BR_MATF_SMOOTH | BR_MATF_PERSPECTIVE;
-        gBR_smoke_structs[i].material->extra_prim = (br_token_value*)&gDAT_00660148;
+        gBR_smoke_structs[i].material->extra_prim = gSmoke_extra_prims;
         gBR_smoke_structs[i].material->colour_map = pm;
         BrMaterialAdd(gBR_smoke_structs[i].material);
     }
 
     gBlend_model->vertices[0].map.v[0] = 0.0f;
-    gBlend_model->vertices[0].map.v[1] = 100.0f - 100.0f / (br_scalar)pm->height;
+    gBlend_model->vertices[0].map.v[1] = 1.0f - 1.0f / (br_scalar)pm->height;
     gBlend_model->vertices[1].map.v[0] = 0.0f;
     gBlend_model->vertices[1].map.v[1] = 0.0f;
-    gBlend_model->vertices[2].map.v[0] = 100.0f - 100.0f / (br_scalar)pm->width;
+    gBlend_model->vertices[2].map.v[0] = 1.0f - 1.0f / (br_scalar)pm->width;
     gBlend_model->vertices[2].map.v[1] = 0.0f;
-    gBlend_model->vertices[3].map.v[0] = 100.0f - 100.0f / (br_scalar)pm->width;
-    gBlend_model->vertices[3].map.v[1] = 100.0f - 100.0f / (br_scalar)pm->height;
+    gBlend_model->vertices[3].map.v[0] = 1.0f - 1.0f / (br_scalar)pm->width;
+    gBlend_model->vertices[3].map.v[1] = 1.0f - 1.0f / (br_scalar)pm->height;
 
     gBlend_model2->vertices[0].map.v[0] = 0.0f;
-    gBlend_model2->vertices[0].map.v[1] = 100.0f - 100.0f / (br_scalar)pm->height;
+    gBlend_model2->vertices[0].map.v[1] = 1.0f - 1.0f / (br_scalar)pm->height;
     gBlend_model2->vertices[1].map.v[0] = 0.0f;
     gBlend_model2->vertices[1].map.v[1] = 0.5f;
-    gBlend_model2->vertices[2].map.v[0] = 100.0f - 100.0f / (br_scalar)pm->width;
+    gBlend_model2->vertices[2].map.v[0] = 1.0f - 1.0f / (br_scalar)pm->width;
     gBlend_model2->vertices[2].map.v[1] = 0.5f;
-    gBlend_model2->vertices[3].map.v[0] = 100.0f - 100.0f / (br_scalar)pm->width;
-    gBlend_model2->vertices[3].map.v[1] = 100.0f - 100.0f / (br_scalar)pm->height;
+    gBlend_model2->vertices[3].map.v[0] = 1.0f - 1.0f / (br_scalar)pm->width;
+    gBlend_model2->vertices[3].map.v[1] = 1.0f - 1.0f / (br_scalar)pm->height;
     gBlend_model2->vertices[4].map.v[0] = 0.0f;
     gBlend_model2->vertices[4].map.v[1] = 0.0f;
-    gBlend_model2->vertices[5].map.v[0] = 100.0f - 100.0f / (br_scalar)pm->width;
+    gBlend_model2->vertices[5].map.v[0] = 1.0f - 1.0f / (br_scalar)pm->width;
     gBlend_model2->vertices[5].map.v[1] = 0.0f;
 
     BrModelAdd(gBlend_model);
     BrModelAdd(gBlend_model2);
     BrActorAdd(gDont_render_actor, gBlend_actor);
-#endif
 }
 
 // RenderRecordedSmokeCircles
@@ -3137,45 +3512,11 @@ void C2_HOOK_FASTCALL InitSmokeStuff(void) {
 
 // ResetSmoke
 
-// FUNCTION: CARMA2_HW 0x004fb520
-void C2_HOOK_FASTCALL AdjustSmoke(int pIndex, tU8 pType, br_vector3* pPos, br_scalar pRadius, br_scalar pStrength) {
-    gSmoke[pIndex].type = pType;
-    memcpy(&gSmoke[pIndex].radius, &pRadius, sizeof(pRadius));
-    memcpy(&gSmoke[pIndex].strength, &pStrength, sizeof(pStrength));
-    memcpy(&gSmoke[pIndex].pos.v[0], &pPos->v[0], sizeof(br_scalar));
-    memcpy(&gSmoke[pIndex].pos.v[1], &pPos->v[1], sizeof(br_scalar));
-    memcpy(&gSmoke[pIndex].pos.v[2], &pPos->v[2], sizeof(br_scalar));
-    gSmoke_flags |= 1u << pIndex;
-}
+// AdjustSmoke
 
 // ActorError
 
-// FUNCTION: CARMA2_HW 0x004fb580
-void C2_HOOK_FASTCALL AdjustSmokeColumn(int pIndex, const tSmoke_column_core* pCore, int pVertex, int pColour) {
-    tSmoke_column* column;
-    tU32 bit;
-
-    bit = 1u << (pIndex & 31);
-    gColumn_flags ^= bit;
-    column = &gSmoke_column[pIndex];
-    /* Four separate MOVs preserve the original forward overlap ordering. */
-    column->core.field_0x0 = pCore->field_0x0;
-    column->core.car = pCore->car;
-    column->core.collision_info = pCore->collision_info;
-    column->core.car_actor = pCore->car_actor;
-    column->vertex_index = pVertex;
-    column->colour = pColour;
-    column->frame_count[0] = 100;
-    column->frame_count[1] = 100;
-    column->frame_count[2] = 100;
-    if (pColour == 0) {
-        if ((gColumn_flags & bit) != 0) {
-            BrActorAdd(gNon_track_actor, column->flame_actor);
-        } else if (column->flame_actor->depth != 0) {
-            BrActorRemove(column->flame_actor);
-        }
-    }
-}
+// AdjustSmokeColumn
 
 // CreateSmokeColumn2
 
@@ -3195,40 +3536,24 @@ void C2_HOOK_FASTCALL CreateSmokeColumn(tCar_spec* pCar, int pType, int pRandom,
 
 // GenerateSmokeShades
 
+// C2PORT-NONMATCHING: best 100.00% | difftest PASS 2000 trials (spec difftest/specs/004fb9c0_GenerateItFoxShadeTable.json) | reason restored the original lazy BRender shade-table helper call
 // FUNCTION: CARMA2_HW 0x004fb9c0
 void C2_HOOK_FASTCALL GenerateItFoxShadeTable(void) {
     if (gIt_shade_table == NULL) {
-        gIt_shade_table = GenerateDarkenedShadeTable(16, gRender_palette, 0, 255, 254, .25f, .5f, .75f, .6f);
+        gIt_shade_table = GenerateDarkenedShadeTable(
+            0x10,
+            gRender_palette,
+            0,
+            0xff,
+            0xfe,
+            0.25f,
+            0.5f,
+            0.75f,
+            0.6f);
     }
 }
 
-// FUNCTION: CARMA2_HW 0x004fba00
-void C2_HOOK_FASTCALL AdjustFlame(int pIndex, int pFrame, br_scalar pScale_x, br_scalar pScale_y, br_scalar pOffset_x, br_scalar pOffset_z) {
-    tSmoke_column* column;
-    int flame;
-    int i;
-    tU32 bits[4];
-    br_scalar* dest[4];
-
-    column = &gSmoke_column[pIndex >> 4];
-    flame = pIndex & 15;
-    column->frame_count[flame] = pFrame;
-    memcpy(&bits[0], &pScale_x, 4);
-    memcpy(&bits[1], &pScale_y, 4);
-    memcpy(&bits[2], &pOffset_x, 4);
-    memcpy(&bits[3], &pOffset_z, 4);
-    dest[0] = &column->scale_x[flame];
-    dest[1] = &column->scale_y[flame];
-    dest[2] = &column->offset_x[flame];
-    dest[3] = &column->offset_z[flame];
-    for (i = 0; i < 4; i++) {
-        /* Original FLD/FSTP stores quiet sNaNs, preserving sign and payload. */
-        if ((bits[i] & 0x7fc00000u) == 0x7f800000u && (bits[i] & 0x003fffffu) != 0) {
-            bits[i] |= 0x00400000u;
-        }
-        memcpy(dest[i], &bits[i], 4);
-    }
-}
+// AdjustFlame
 
 // ReplayFlame
 
@@ -3240,43 +3565,60 @@ void C2_HOOK_FASTCALL AdjustFlame(int pIndex, int pFrame, br_scalar pScale_x, br
 
 // MungeSmokeColumn
 
-// FUNCTION: CARMA2_HW 0x004fc2e0
-void C2_HOOK_FASTCALL DisposeFlame(void) {
-    int i;
-    int j;
-    br_actor* child;
-
-    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gFlame_map); i++) {
-        BrMapRemove(gFlame_map[i]);
-        BrPixelmapFree(gFlame_map[i]);
-    }
-    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gSmoke_column); i++) {
-        if ((gColumn_flags & (1u << i)) != 0 && gSmoke_column[i].colour == 0) {
-            BrActorRemove(gSmoke_column[i].flame_actor);
-        }
-        child = gSmoke_column[i].flame_actor->children;
-        for (j = 0; j < 3; j++) {
-            BrMaterialRemove(child->material);
-            BrMaterialFree(child->material);
-            child = child->next;
-        }
-        BrActorFree(gSmoke_column[i].flame_actor);
-    }
-    BrModelRemove(gLollipop_model);
-    BrModelFree(gLollipop_model);
-}
+// DisposeFlame
 
 // InitFlame
 
 // InitSplash
 
-// DisposeSplash
+// FUNCTION: CARMA2_HW 0x004fc680
+void C2_HOOK_FASTCALL DisposeSplash(void) {
+    int i;
+    tSplash* splash;
+
+    for (i = 0; i < gNum_splash_types; i++) {
+        BrMapRemove(gSplash_material[i]->colour_map);
+        BrPixelmapFree(gSplash_material[i]->colour_map);
+        BrMaterialRemove(gSplash_material[i]);
+        BrMaterialFree(gSplash_material[i]);
+    }
+    i = 0;
+    splash = &gSplash[0];
+    do {
+        if ((gSplash_flags & (1 << i)) != 0 && splash->actor->parent != NULL) {
+            BrActorRemove(splash->actor);
+        }
+        BrActorFree(splash->actor);
+        splash++;
+        i++;
+    } while ((int)splash < (int)((tU8*)gSplash + sizeof(gSplash)));
+    BrModelRemove(gSplash_model);
+    BrModelFree(gSplash_model);
+}
 
 // DrawTheGlow
 
 // PipeInstantUnSmudge
 
 // SmudgeCar
+
+// FUNCTION: CARMA2_HW 0x004fc9e0
+void C2_HOOK_FASTCALL DisposeFlame(void) {
+    br_actor** flame_actor;
+    int i;
+
+    gSmoke_flags = 0;
+    i = 0;
+    flame_actor = &gSmoke_column[0].flame_actor;
+    do {
+        if (gColumn_flags & (1 << i)) {
+            BrActorRemove(*flame_actor);
+        }
+        flame_actor += 31;
+        i++;
+    } while ((int)flame_actor < (int)((tU8*)gSmoke_column + sizeof(gSmoke_column) + ((tU8*)&gSmoke_column[0].flame_actor - (tU8*)&gSmoke_column[0])));
+    gColumn_flags = 0;
+}
 
 // FUNCTION: CARMA2_HW 0x004fc9d0
 void C2_HOOK_FASTCALL SetSmokeOn(int pSmoke_on) {
@@ -3300,105 +3642,134 @@ int C2_HOOK_FASTCALL GetSmokeOn(void) {
 
 // SingleSplash
 
-// FUNCTION: CARMA2_HW 0x004fd530
-void C2_HOOK_FASTCALL SingleSplash(tPhysics_object* pObject, const br_matrix34* pMatrix, const br_vector3* pVelocity, const br_vector3* pNormal_velocity, const br_vector3* pOmega, const br_vector3* pPoint, const br_vector3* pNormal, tU32 pTime) {
-    br_vector3 cross;
-    br_vector3 velocity;
-    br_vector3 recoil;
-    br_scalar scaled;
-    br_scalar speed;
-    br_scalar size;
-    br_scalar range;
-    double dot;
-    double random;
-    double wide;
-    tCar_spec* car;
-    int index;
-    int i;
+// GLOBAL: CARMA2_HW 0x0058b0b0
+const double gDOUBLE_0058b0b0 = -0.14492753623188406;
 
-    BrMatrix34ApplyP((br_vector3*)gSplash[gSplash_next].actor->t.t.mat.m[3], pPoint, pMatrix);
-    cross.v[0] = SmokeScalarRound((double)pOmega->v[1] * pPoint->v[2] - (double)pOmega->v[2] * pPoint->v[1]);
-    cross.v[1] = SmokeScalarRound((double)pOmega->v[2] * pPoint->v[0] - (double)pOmega->v[0] * pPoint->v[2]);
-    cross.v[2] = SmokeScalarRound((double)pOmega->v[0] * pPoint->v[1] - (double)pOmega->v[1] * pPoint->v[0]);
-    BrMatrix34ApplyV(&velocity, &cross, pMatrix);
-    for (i = 0; i < 3; i++) {
-        scaled = SmokeScalarRound((double)pVelocity->v[i] * 6.9);
-        velocity.v[i] = SmokeScalarRound((double)velocity.v[i] + scaled);
+// GLOBAL: CARMA2_HW 0x0058b120
+const br_scalar gFLOAT_0058b120 = -5.0f;
+
+// GLOBAL: CARMA2_HW 0x0058b124
+const br_scalar gFLOAT_0058b124 = 0.006666666828095913f;
+
+// GLOBAL: CARMA2_HW 0x0058b128
+const br_scalar gFLOAT_0058b128 = -0.04782608523964882f;
+
+// GLOBAL: CARMA2_HW 0x0058b12c
+const br_scalar gFLOAT_0058b12c = 0.014285714365541935f;
+
+// GLOBAL: CARMA2_HW 0x0058b130
+const br_scalar gFLOAT_0058b130 = 15.0f;
+
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 28.38% | difftest PASS 2000 trials (spec difftest/specs/004fd530_SingleSplash.json) | reason x87-order,stack-layout
+// FUNCTION: CARMA2_HW 0x004fd530
+void C2_HOOK_FASTCALL SingleSplash(tPhysics_object* pObject, br_matrix34* pMat, br_vector3* pVelocity, br_vector3* pOrigin, br_vector3* pOmega, float* pVertices, float* pAxes, tU32 pTime) {
+    register tPhysics_object* object;
+    register br_matrix34* matrix;
+    int iVar9;
+    int iVar10;
+    tU32 uVar7;
+    register float* pfVar8;
+    float fVar1;
+    float fVar2;
+    float fVar3;
+    float fVar4;
+    float fVar5;
+    float fVar6;
+    uint64_t local_20;
+    br_vector3 local_18;
+    br_vector3 local_24;
+
+    object = pObject;
+    matrix = pMat;
+    pfVar8 = pVertices;
+    iVar9 = gNext_splash;
+    BrMatrix34ApplyP(&gSplash[iVar9].actor->t.t.euler.t, (br_vector3*)pfVar8, matrix);
+    local_24.v[0] = pOmega->v[1] * pfVar8[2] - pOmega->v[2] * pfVar8[1];
+    local_24.v[1] = pOmega->v[2] * pfVar8[0] - pOmega->v[0] * pfVar8[2];
+    local_24.v[2] = pOmega->v[0] * pfVar8[1] - pOmega->v[1] * pfVar8[0];
+    BrMatrix34ApplyV(&local_18, &local_24, matrix);
+    fVar1 = local_18.v[0] + pVelocity->v[0] * (float)gDOUBLE_0058b0c8;
+    fVar2 = local_18.v[1] + pVelocity->v[1] * (float)gDOUBLE_0058b0c8;
+    fVar3 = local_18.v[2] + pVelocity->v[2] * (float)gDOUBLE_0058b0c8;
+    fVar4 = sqrtf(fVar3 * fVar3 + fVar2 * fVar2 + fVar1 * fVar1);
+    fVar5 = (fVar4 - (float)fabs(pAxes[0] * fVar1 + pAxes[2] * fVar3 + pAxes[1] * fVar2) * gFLOAT_0058b120) * gFLOAT_0058b124 - gFLOAT_0058b128;
+    if (fVar5 > gFLOAT_0058afec) {
+        fVar5 = 0.5f;
     }
-    speed = SmokeScalarRound(sqrt(((double)velocity.v[0] * velocity.v[0]
-        + (double)velocity.v[1] * velocity.v[1]) + (double)velocity.v[2] * velocity.v[2]));
-    dot = ((double)pNormal->v[1] * velocity.v[1] + (double)pNormal->v[2] * velocity.v[2])
-        + (double)pNormal->v[0] * velocity.v[0];
-    wide = SplashSubtractFromScalar(fabs(dot) * -5.f, &speed) * .006666666828095913f - -.04782608523964882f;
-    size = SmokeScalarRound(wide);
-    if (wide > .5f) {
-        size = .5f;
+    if (pOrigin->v[0] * pfVar8[0] + pOrigin->v[2] * pfVar8[2] + pOrigin->v[1] * pfVar8[1] < gFLOAT_0058b008) {
+        fVar5 *= gFLOAT_0058afec;
     }
-    dot = ((double)pNormal_velocity->v[2] * pPoint->v[2] + (double)pNormal_velocity->v[1] * pPoint->v[1])
-        + (double)pNormal_velocity->v[0] * pPoint->v[0];
-    if (!(dot >= 0.0)) {
-        size = SmokeScalarRound((double)size * .5f);
+    gSplash[gNext_splash].size = SRandomBetween(fVar5 * gFLOAT_0058afec, fVar5);
+    uVar7 = gSplash_flags;
+    iVar9 = gNext_splash;
+    if ((1 << iVar9 & uVar7) == 0) {
+        BrActorAdd(gNon_track_actor, gSplash[iVar9].actor);
+        iVar9 = gNext_splash;
     }
-    index = gSplash_next;
-    gSplash[index].size = SmokeScalarRound(SRandomBetween(SmokeScalarRound((double)size * .5f), size));
-    if (!((tU32)gSplash_flags & (1u << (gSplash_next & 31)))) {
-        BrActorAdd(gNon_track_actor, gSplash[index].actor);
-    }
-    gSplash_flags = (int)((tU32)gSplash_flags | (1u << (gSplash_next & 31)));
-    gSplash[gSplash_next].just_done = 1;
-    if (pObject != NULL && !gAction_replay_mode) {
-        car = pObject->flags_0x238 == 1 ? (tCar_spec*)pObject->owner : NULL;
-        if (car != NULL) {
-            random = SRandomBetween(0.f, 1.f);
-            if (random < (double)pTime * .003f) {
-                range = SmokeScalarRound(sqrt((double)speed * .014285714365541935f) * 15.f);
-                for (i = 0; i < 3; i++) {
-                    wide = (double)velocity.v[i] * .14492753148078918f;
-                    velocity.v[i] = SmokeScalarRound(wide);
-                    recoil.v[i] = SmokeScalarRound(wide * -.1f);
+    gSplash_flags = gSplash_flags | 1 << iVar9;
+    gSplash[iVar9].just_done = 1;
+    if (object != NULL && gAction_replay_mode == 0) {
+        iVar10 = (int)object->owner;
+        if (iVar10 == 0 || object->flags_0x238 != 1) {
+            iVar10 = 0;
+        }
+        if (iVar10 != 0) {
+            fVar5 = SRandomBetween(0.0f, 1.0f);
+            local_20 = (uint64_t)pTime;
+            iVar9 = gNext_splash;
+            if (fVar5 < (float)local_20 * gFLOAT_0058b0d8) {
+                fVar5 = sqrtf(fVar4 * gFLOAT_0058b12c) * gFLOAT_0058b130;
+                fVar1 *= gFLOAT_0058b060;
+                fVar2 *= gFLOAT_0058b060;
+                fVar3 *= gFLOAT_0058b060;
+                fVar1 *= gFLOAT_0058b02c;
+                fVar2 *= gFLOAT_0058b02c;
+                fVar3 *= gFLOAT_0058b02c;
+                if (fVar5 > gFLOAT_0058b130) {
+                    fVar5 = 15.0f;
                 }
-                if (range > 15.f) {
-                    range = 15.f;
+                fVar2 -= SRandomBetween(5.0f, fVar5) * (float)gDOUBLE_0058b0b0;
+                local_18.v[0] = fVar1;
+                local_18.v[1] = fVar2;
+                local_18.v[2] = fVar3;
+                BrMatrix34TApplyV(&local_24, &local_18, &object->actor->t.t.mat);
+                fVar6 = (object->water_normal.v[2] * local_24.v[1] - object->water_normal.v[1] * local_24.v[2]) * gFLOAT_0058afec;
+                fVar4 = (object->water_normal.v[0] * local_24.v[2] - object->water_normal.v[2] * local_24.v[0]) * gFLOAT_0058afec;
+                fVar5 = (object->water_normal.v[1] * local_24.v[0] - object->water_normal.v[0] * local_24.v[1]) * gFLOAT_0058afec;
+                if (pfVar8[0] * fVar6 + pfVar8[1] * fVar4 + pfVar8[2] * fVar5 <= gFLOAT_0058b008) {
+                    local_24.v[0] -= fVar6;
+                    local_24.v[1] -= fVar4;
+                    local_24.v[2] -= fVar5;
+                } else {
+                    local_24.v[0] += fVar6;
+                    local_24.v[1] += fVar4;
+                    local_24.v[2] += fVar5;
                 }
-                random = SRandomBetween(5.f, range);
-                recoil.v[1] = SmokeScalarRound((double)recoil.v[1] - random * -.14492753623188406);
-                BrMatrix34TApplyV(&velocity, &recoil, &pObject->actor->t.t.mat);
-                cross.v[0] = SmokeScalarRound(((double)pObject->water_normal.v[2] * velocity.v[1]
-                    - (double)pObject->water_normal.v[1] * velocity.v[2]) * .5f);
-                cross.v[1] = SmokeScalarRound(((double)pObject->water_normal.v[0] * velocity.v[2]
-                    - (double)pObject->water_normal.v[2] * velocity.v[0]) * .5f);
-                cross.v[2] = SmokeScalarRound(((double)pObject->water_normal.v[1] * velocity.v[0]
-                    - (double)pObject->water_normal.v[0] * velocity.v[1]) * .5f);
-                dot = ((double)pPoint->v[1] * cross.v[1] + (double)pPoint->v[2] * cross.v[2])
-                    + (double)pPoint->v[0] * cross.v[0];
-                for (i = 0; i < 3; i++) {
-                    velocity.v[i] = SmokeScalarRound(dot > 0.0 ? (double)velocity.v[i] + cross.v[i]
-                        : (double)velocity.v[i] - cross.v[i]);
-                }
-                index = gSpark_next;
-                gSparks[index].pos.v[0] = pPoint->v[0];
-                gSparks[index].pos.v[1] = pPoint->v[1];
-                gSparks[index].pos.v[2] = pPoint->v[2];
-                BrVector3SetFloat(&gSparks[index].normal, 0.f, 0.f, 0.f);
-                index = gSpark_next;
-                memcpy(&gSparks[index].v, &velocity, sizeof(velocity));
-                gSparks[index].count = 500;
-                gSparks[index].car = car;
-                gSparks[index].time_sync = 1;
-    gSparks[index].colour = 1;
-                gSpark_flags = (int)((tU32)gSpark_flags | (1u << (index & 31)));
-                gSpark_next = (int)((tU32)index + 1u);
-                if (gSpark_next >= 32) {
-                    gSpark_next = 0;
+                iVar9 = gNext_spark;
+                gSparks[iVar9].pos.v[0] = pfVar8[0];
+                gSparks[iVar9].pos.v[1] = pfVar8[1];
+                gSparks[iVar9].pos.v[2] = pfVar8[2];
+                BrVector3SetFloat(&gSparks[iVar9].normal, 0.0f, 0.0f, 0.0f);
+                gSparks[iVar9].v = local_24;
+                gSparks[iVar9].count = 500;
+                gSparks[iVar9].car = (tCar_spec*)iVar10;
+                gSparks[iVar9].time_sync = 1;
+                gSparks[iVar9].colour = 1;
+                gSpark_flags |= 1 << iVar9;
+                gNext_spark++;
+                if (gNext_spark >= 0x20) {
+                    gNext_spark = 0;
                 }
             }
         }
     }
-    gSplash_next = (int)((tU32)gSplash_next + 1u);
-    if ((tU32)gSplash_next >= 32u) {
-        gSplash_next = 0;
+    gNext_splash++;
+    if (gNext_splash >= 0x20) {
+        gNext_splash = 0;
     }
 }
+#pragma auto_inline(on)
 
 // GeneralCreateSplash
 
@@ -3464,7 +3835,70 @@ int C2_HOOK_FASTCALL IsCarSmoking(tCar_spec* pCar) {
     return 0;
 }
 
-// ClearSplashReplay
+// FUNCTION: CARMA2_HW 0x004fedd0
+void C2_HOOK_FASTCALL ClearSplashReplay(void* pObject) {
+    int i;
+
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gReplay_splashes); i++) {
+        if (pObject == gReplay_splashes[i].object.actor) {
+            gReplay_splash_flags &= ~(1 << i);
+        }
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x004fee10
+void* C2_HOOK_FASTCALL FUN_004fee10(tPhysics_object* pObject) {
+    if (PHILGetObjectProperty(pObject, 6) != 0.f) {
+        return pObject;
+    }
+    if (pObject != NULL && pObject->owner != NULL && pObject->flags_0x238 == 1) {
+        return pObject->actor;
+    }
+    if (pObject != NULL && pObject->owner != NULL && pObject->flags_0x238 >= 2 && pObject->flags_0x238 <= 4) {
+        return pObject->owner;
+    }
+    return NULL;
+}
+
+// FUNCTION: CARMA2_HW 0x004fef40
+void C2_HOOK_FASTCALL RecordReplaySplash(void* pObject, int pType, tU32 pWater_density, const tU32* pNormal, const tU32* pBounds) {
+    register int* replay_splash;
+    register int i;
+    register int slot_index;
+
+    slot_index = -1;
+    i = 0;
+    replay_splash = (int*)gReplay_splashes;
+    do {
+        if ((gReplay_splash_flags & (1 << i)) == 0) {
+            if (slot_index < 0) {
+                slot_index = i;
+            }
+        } else if ((int)pObject == replay_splash[0]) {
+            goto update_splash;
+        }
+        replay_splash += 12;
+        i++;
+    } while ((int)replay_splash < (int)(gReplay_splashes + CARPOCALYPSE2_ASIZE(gReplay_splashes)));
+    if (slot_index < 0) {
+        slot_index = IRandomBetween(0, 10);
+    }
+    gReplay_splash_flags |= 1 << slot_index;
+    i = slot_index;
+    ((int*)gReplay_splashes)[i * 12] = (int)pObject;
+    ((int*)gReplay_splashes)[i * 12 + 1] = pType;
+update_splash:
+    ((int*)gReplay_splashes)[i * 12 + 2] = pWater_density;
+    ((int*)gReplay_splashes)[i * 12 + 3] = pNormal[0];
+    ((int*)gReplay_splashes)[i * 12 + 4] = pNormal[1];
+    ((int*)gReplay_splashes)[i * 12 + 5] = pNormal[2];
+    ((int*)gReplay_splashes)[i * 12 + 6] = pBounds[0];
+    ((int*)gReplay_splashes)[i * 12 + 7] = pBounds[1];
+    ((int*)gReplay_splashes)[i * 12 + 8] = pBounds[2];
+    ((int*)gReplay_splashes)[i * 12 + 9] = pBounds[3];
+    ((int*)gReplay_splashes)[i * 12 + 10] = pBounds[4];
+    ((int*)gReplay_splashes)[i * 12 + 11] = pBounds[5];
+}
 
 // GetSplashIndex
 
@@ -3473,3 +3907,44 @@ int C2_HOOK_FASTCALL IsCarSmoking(tCar_spec* pCar) {
 // AdjustSplashReplay
 
 // InitReplaySplashes
+
+// C2PORT-NONMATCHING: best 72.87% | difftest PASS 2000 trials (spec difftest/specs/004ff030_InitReplaySplashes.json) | reason owner-branch code generation
+// FUNCTION: CARMA2_HW 0x004ff030
+void C2_HOOK_FASTCALL InitReplaySplashes(void) {
+    tPhysics_object* object;
+
+    object = gList_collision_infos;
+    gReplay_splash_flags = 0;
+    if (object != NULL) {
+        do {
+            if (object->water_d != 10000.0f) {
+                void* replay_object;
+                tU8 splash_type;
+                tCollision_info_owner* owner;
+
+                replay_object = NULL;
+                if (PHILGetObjectProperty(object, 6) != gFLOAT_0058b008) {
+                    replay_object = object;
+                    splash_type = 0xff;
+                } else if (object != NULL) {
+                    owner = object->owner;
+                    if (owner == NULL || object->flags_0x238 != 1) {
+                        if (object != NULL && object->owner != NULL && object->flags_0x238 >= 2 && object->flags_0x238 <= 4) {
+                            replay_object = object->owner;
+                            splash_type = object->flags_0x238;
+                        }
+                    } else if (owner == NULL || *(int*)&owner->field_0x0c <= 5) {
+                        replay_object = object->actor;
+                        splash_type = 1;
+                    }
+                }
+                if (replay_object != NULL) {
+                    RecordReplaySplash(replay_object, splash_type, *(const tU32*)&object->water_d,
+                                       (const tU32*)&object->water_normal, (const tU32*)&object->bb1);
+                }
+            }
+            object = object->next;
+        } while (object != NULL);
+    }
+}
+

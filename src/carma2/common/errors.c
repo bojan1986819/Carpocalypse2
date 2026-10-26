@@ -20,6 +20,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+extern char* C2_HOOK_CDECL LookForChar(const char* pString, int pChar);
+
 #include "c2_string.h"
 // GLOBAL: CARMA2_HW 0x00591708
 extern const char* gError_messages[184];
@@ -217,38 +219,26 @@ const char* gError_messages[184] = {
     "Could not create textures pages \"%\".",
 };
 
-//// IDA: void __cdecl NonFatalError(int pStr_index, ...)
-//void NonFatalError(int pStr_index, ...) {
-//    char the_str[256];
-//    char* sub_str;
-//    char temp_str[256];
-//    char* sub_pt;
-//    va_list ap;
-//    int i;
-//    LOG_TRACE("(%d)", pStr_index);
-//
-//    va_start(ap, pStr_index);
-//
-//    strcpy(the_str, gError_messages[pStr_index - 1]);
-//    sub_pt = temp_str;
-//
-//    for (i = 0; i < strlen(the_str); i++) {
-//        if (the_str[i] == '%') {
-//            sub_str = va_arg(ap, char*);
-//            StripCRNL(sub_str);
-//            strcpy(sub_pt, sub_str);
-//            sub_pt += strlen(sub_str);
-//        } else {
-//            *sub_pt = the_str[i];
-//            sub_pt++;
-//        }
-//    }
-//    *sub_pt = 0;
-//    va_end(ap);
-//    PDNonFatalError(temp_str);
-//}
+// FUNCTION: CARMA2_HW 0x0044c460
+void C2_HOOK_CDECL NonFatalError(int pStr_index, ...) {
+    char the_str[256];
+    char temp_str[256];
+    char* sub_str;
+    char* sub_pt;
+    va_list ap;
 
-extern char* C2_HOOK_CDECL LookForChar(const char* pString, int pChar);
+    strcpy(the_str, gError_messages[pStr_index]);
+    va_start(ap, pStr_index);
+    while ((sub_pt = LookForChar(the_str, '%')) != NULL) {
+        sub_str = va_arg(ap, char*);
+        StripCRNL(sub_str);
+        strcpy(temp_str, sub_pt + 1);
+        strcpy(sub_pt, sub_str);
+        strcat(the_str, temp_str);
+    }
+    va_end(ap);
+    PDNonFatalError(the_str);
+}
 
 // FUNCTION: CARMA2_HW 0x0044c230
 void C2_NORETURN C2_HOOK_CDECL FatalError(int pStr_index, ...) {
@@ -291,6 +281,11 @@ void C2_NORETURN C2_HOOK_CDECL FatalError(int pStr_index, ...) {
     va_end(ap);
 
     dr_dprintf(the_str);
+#ifdef __vita__
+    if (gDiagnostic_file != NULL) {
+        fflush(gDiagnostic_file);
+    }
+#endif
     PDFatalError(the_str);
 }
 
@@ -304,6 +299,10 @@ void C2_HOOK_FASTCALL OpenDiagnostics(void) {
 #ifndef CARPOCALYPSE2_MATCHING
     // FIXME: use c2_stdio functions
     //    gDiagnostic_file = fopen("DIAGNOST.TXT", "w");
+#ifdef __vita__
+    remove("DIAGNOST.PREV.TXT");
+    rename("DIAGNOST.TXT", "DIAGNOST.PREV.TXT");
+#endif
     gDiagnostic_file = fopen("DIAGNOST.TXT", "w");
     if (gDiagnostic_file == NULL) {
         return;
@@ -334,6 +333,26 @@ void C2_HOOK_CDECL dr_dprintf(const char* fmt_string, ...) {
 
     fputs("\n", gDiagnostic_file);
 
+#ifdef __vita__
+    /* A flush is a synchronous memory-card write on the Vita (tens of ms): bursts of
+     * diagnostics inside physics (peds falling, car repair) froze the race. Flush at most
+     * every 2 s; FatalError flushes before exiting. */
+    {
+        static tU32 last_flush;
+        if (the_time - last_flush >= 2000) {
+            last_flush = the_time;
+            fflush(gDiagnostic_file);
+        }
+    }
+#else
     fflush(gDiagnostic_file);
 #endif
+#endif
+}
+
+// FUNCTION: CARMA2_HW 0x0044c5a0
+void C2_HOOK_FASTCALL DumpVector3Diagnostic(const char* pName, const br_vector3* pVec) {
+
+    dr_dprintf(pName);
+    dr_dprintf("(%8.3f, %8.3f, %8.3f)", pVec->v[0], pVec->v[1], pVec->v[2]);
 }

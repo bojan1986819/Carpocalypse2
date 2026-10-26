@@ -613,14 +613,15 @@ int C2_HOOK_STDCALL FopRead_OLD_FACES(br_datafile* df, br_uint_32 id, br_uint_32
     int mi_count;
     int i;
     void* ptr;
+    unsigned int face_count;
 
-    ptr = DfPop(DF_VERTEX, (int*)&i);
+    face_count = length / df->prims->struct_size(df, &br_old_face_F, NULL);
+    ptr = DfPop(DF_VERTEX, &i);
     mip = DfPop(DF_MATERIAL_INDEX, &mi_count);
     DfPush(DF_VERTEX, ptr, i);
-    mi_count = length / df->prims->struct_size(df, &br_old_face_F, NULL);
-    fp = BrResAllocate(v1db.res, sizeof(br_face) * mi_count, BR_MEMORY_FACES);
-    DfStructReadArray(df, &br_old_face_F, fp, mi_count);
-    for (i = 0; i < mi_count; i++) {
+    fp = BrResAllocate(v1db.res, sizeof(br_face) * face_count, BR_MEMORY_FACES);
+    DfStructReadArray(df, &br_old_face_F, fp, face_count);
+    for (i = 0; i < face_count; i++) {
         union u_mat_u16 {
             br_material mat;
             br_uint_16 u16;
@@ -631,7 +632,7 @@ int C2_HOOK_STDCALL FopRead_OLD_FACES(br_datafile* df, br_uint_32 id, br_uint_32
         }
     }
     BrResFree(mip);
-    DfPush(DF_FACE, fp, mi_count);
+    DfPush(DF_FACE, fp, face_count);
     return 0;
 }
 
@@ -710,11 +711,13 @@ int C2_HOOK_STDCALL FopWrite_MODEL(br_datafile* df, br_model* mp) {
     br_model temp_model;
 
     memcpy(&temp_model, mp, sizeof(br_model));
-    df->prims->chunk_write(df, CHUNKID_MODEL, df->prims->struct_size(df, &br_model_F, mp));
-    df->prims->struct_write(df, &br_model_F, mp);
+    temp_model.flags &= 0x17;
+    df->prims->chunk_write(df, CHUNKID_MODEL, df->prims->struct_size(df, &br_model_F, &temp_model));
+    df->prims->struct_write(df, &br_model_F, &temp_model);
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 100.00% | difftest PASS 2000 trials (spec 00523860_FopRead_OLD_MODEL_1.json) | reason restored df->res after struct read and retained mp for DfPush
 // FUNCTION: CARMA2_HW 0x00523860
 int C2_HOOK_STDCALL FopRead_OLD_MODEL_1(br_datafile* df, br_uint_32 id, br_uint_32 length, br_uint_32 count) {
     br_model* mp;
@@ -722,7 +725,8 @@ int C2_HOOK_STDCALL FopRead_OLD_MODEL_1(br_datafile* df, br_uint_32 id, br_uint_
     mp = BrModelAllocate(NULL, 0, 0);
     df->res = mp;
     df->prims->struct_read(df, &br_old_model_1_F, mp);
-    DfPush(DF_MODEL, df->res, 1);
+    df->res = NULL;
+    DfPush(DF_MODEL, mp, 1);
     return 0;
 }
 
@@ -1146,6 +1150,7 @@ int C2_HOOK_CDECL PtrCompare(void* a, void* b) {
     return *(uintptr_t*)a < *(uintptr_t*)b;
 }
 
+// C2PORT-NONMATCHING: best 68.47% | difftest PASS 2000 trials (spec difftest/specs/00523ee0_WriteModel.json) | reason helper-inlining/register-allocation/stack-layout; spec covers invalid-model path because valid path requires a live datafile callback table
 // FUNCTION: CARMA2_HW 0x00523ee0
 br_uint_32 C2_HOOK_CDECL WriteModel(br_model* mp, br_datafile* df) {
     br_material** mindex;
@@ -1154,7 +1159,7 @@ br_uint_32 C2_HOOK_CDECL WriteModel(br_model* mp, br_datafile* df) {
     int has_uv;
 
     nmaterials = 0;
-    if (mp->vertices == NULL || mp->faces == NULL) {
+    if ((mp->faces == NULL) | (mp->vertices == NULL)) {
         if (mp->identifier != NULL) {
             BrWarning(mp->identifier);
         }
@@ -1162,21 +1167,25 @@ br_uint_32 C2_HOOK_CDECL WriteModel(br_model* mp, br_datafile* df) {
         BrWarning("This information may have neem stripped on addition to");
         BrWarning("the registry. To prevent this, set the BR_MODF_UPDATEABLE");
         BrFailure("flag before adding the model to the registry.");
+        return 0;
     }
-    mindex = BrResAllocate(v1db.res, mp->nfaces * sizeof(br_material*), BR_MEMORY_MATERIAL_INDEX);
-    for (i = 0; i < mp->nfaces; i++) {
-        mindex[i] = mp->faces[i].material;
-    }
-    BrQsort(mindex, mp->nfaces, sizeof(br_material*), (br_qsort_cbfn*)PtrCompare);
-    nmaterials = 1;
-    for (i = 1; i < mp->nfaces; i++) {
-        if (mindex[nmaterials-1] == mindex[i]) {
-            mindex[nmaterials] = mindex[i];
-            nmaterials++;
+    nmaterials = 0;
+    if (mp->faces != NULL) {
+        mindex = BrResAllocate(v1db.res, mp->nfaces * sizeof(br_material*), BR_MEMORY_MATERIAL_INDEX);
+        for (i = 0; i < mp->nfaces; i++) {
+            mindex[i] = mp->faces[i].material;
         }
-    }
-    if (mindex[nmaterials-1] == NULL) {
-        nmaterials = 0;
+        BrQsort(mindex, mp->nfaces, sizeof(br_material*), (br_qsort_cbfn*)PtrCompare);
+        nmaterials = 1;
+        for (i = 1; i < mp->nfaces; i++) {
+            if (mindex[nmaterials-1] != mindex[i]) {
+                mindex[nmaterials] = mindex[i];
+                nmaterials++;
+            }
+        }
+        if (mindex[nmaterials-1] == NULL) {
+            nmaterials = 0;
+        }
     }
     has_uv = 0;
     for (i = 0; i < mp->nvertices; i++) {

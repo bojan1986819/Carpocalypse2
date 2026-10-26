@@ -155,6 +155,7 @@ intptr_t C2_HOOK_CDECL FindNonCarsCB(br_actor* pActor, void* pData) {
     return BrActorEnum(pActor, FindNonCarsCB, pTrack_spec);
 }
 
+// C2PORT-NONMATCHING: best 31.13% | difftest PASS 2000 trials (spec 004f5ae0_GetModelTextureArea.json) | reason correct double offset; remaining differences are compiler loop and register layout
 // FUNCTION: CARMA2_HW 0x004f5ae0
 void C2_HOOK_FASTCALL GetModelTextureArea(br_model* pModel, int* pArea_1, int* pArea_2) {
     int i;
@@ -208,6 +209,27 @@ void C2_HOOK_FASTCALL GetModelTextureArea(br_model* pModel, int* pArea_1, int* p
     }
 }
 
+// FUNCTION: CARMA2_HW 0x004f5c70
+void C2_HOOK_FASTCALL GetGlassFragmentCounts(int* pVisible_count, int* pActive_count) {
+    tU32 now;
+    tSmash_vertex* fragment;
+    int i;
+
+    *pVisible_count = 0;
+    *pActive_count = 0;
+    now = GetTotalTime();
+    fragment = gSmash_glass_fragments;
+    for (i = 0; i < 200; i++) {
+        if (fragment->end_time != 0) {
+            *pActive_count = *pActive_count + 1;
+            if (now < fragment->field_0x10) {
+                *pVisible_count = *pVisible_count + 1;
+            }
+        }
+        fragment++;
+    }
+}
+
 // FUNCTION: CARMA2_HW 0x004f5cb0
 void C2_HOOK_FASTCALL SetSmashableModel(br_actor* pActor) {
     int i;
@@ -243,8 +265,12 @@ void C2_HOOK_FASTCALL SetSmashableModel(br_actor* pActor) {
                 strcpy(pActor->identifier, s);
             }
 
-            if ((gCurrent_race.race_spec->race_type > 3 && spec->mode_data.field_0x14 == gCurrent_race.race_spec->options.cars.count_opponents)
-                    || (gNet_mode != eNet_mode_none && gCurrent_net_game->type == eNet_game_type_2 && spec->mode_data.field_0x14 == 1)) {
+            /* A race target is a smashable whose first run-time variable change (spec + 0x2ac in the
+             * retail binary) bumps the race's smash counter (options + 0x214 aliases the smash variable). */
+            if ((gCurrent_race.race_spec->race_type > 3
+                        && (tU16)spec->mode_data.shrapnel.connotations.variable_changes.runtime_changes[0].field_0x2 == (tU32)gCurrent_race.race_spec->options.cars.count_opponents)
+                    || (gNet_mode != eNet_mode_none && gCurrent_net_game->type == eNet_game_type_2
+                        && spec->mode_data.shrapnel.connotations.variable_changes.runtime_changes[0].field_0x2 == 1)) {
                 AddSmashableRaceTarget(pActor->model, pActor, -1);
             }
         }
@@ -348,6 +374,7 @@ void AssertNonCars(br_actor** pNon_cars, int* pCount_non_cars, int* pTrack_count
     *pCount_non_cars -= count_nulls;
 }
 
+// C2PORT-NONMATCHING: best 62.05% | difftest PASS 2000 trials (spec difftest/specs/0040cc50_ExtractColumns.json) | reason compiler-layout-and-x87
 // FUNCTION: CARMA2_HW 0x0040cc50
 void C2_HOOK_FASTCALL ExtractColumns(tTrack_spec* pTrack_spec) {
     const char* identifier;
@@ -443,31 +470,14 @@ void C2_HOOK_FASTCALL DisposeActorMatrix(tTrack_spec* pTrack_spec, tTrack_square
 
 // FUNCTION: CARMA2_HW 0x0040ca90
 void C2_HOOK_FASTCALL DisposeColumns(tTrack_spec* pTrack_spec) {
-    int z;
-    int x;
-    tTrack_square** columns;
-    tU16 row;
-    int i;
 
-    for (z = 0; z != pTrack_spec->ncolumns_z; z++) {
-        for (x = 0; x != pTrack_spec->ncolumns_x; x++) {
-            br_actor* actor = pTrack_spec->columns[z][x].actor_0x8;
-
-            if (actor != NULL && actor->model != NULL) {
-                BrModelRemove(actor->model);
-                BrModelFree(actor->model);
-            }
-        }
-    }
-    columns = pTrack_spec->columns;
-    if (columns != NULL) {
-        for (row = 0; row != pTrack_spec->ncolumns_z; row++) {
-            BrMemFree(columns[row]);
-        }
-        BrMemFree(columns);
-    }
+    DisposeRuntimeBuiltModels(pTrack_spec);
+    DisposeActorMatrix(pTrack_spec, pTrack_spec->columns);
     if (pTrack_spec->non_car_list != NULL) {
+        int i;
+
         for (i = gCount_track_non_cars; i < pTrack_spec->count_non_cars; i++) {
+
             if (pTrack_spec->non_car_list[i] != NULL && pTrack_spec->non_car_list[i]->parent != gNon_track_actor) {
                 BrActorRemove(pTrack_spec->non_car_list[i]);
                 BrActorFree(pTrack_spec->non_car_list[i]);
@@ -478,19 +488,28 @@ void C2_HOOK_FASTCALL DisposeColumns(tTrack_spec* pTrack_spec) {
 }
 
 
+// C2PORT-NONMATCHING: best 45.12% | difftest PASS 2000 trials (spec difftest/specs/0040e000_ProcessNearbyActors.json) | reason x87 scheduling and register allocation
 // FUNCTION: CARMA2_HW 0x0040e000
 void C2_HOOK_FASTCALL ProcessNearbyActors(tTrack_spec* pTrack, br_vector3* pPos, float pMax_dist, int pMatch_type, int pIdentifier_value, int pIdentifier_index, int pMatch_flags, tNearbyActors_cbfn* pCallback, void* pContext) {
 
     tFoundAnActor_context found_an_actor_context;
     float p;
+    float x_ratio;
     int x, xmin, xmax;
     int z, zmin, zmax;
 
+    x_ratio = (pPos->v[0] - pTrack->origin_x) / pTrack->column_size_x;
+    found_an_actor_context.match_type = pMatch_type;
+    found_an_actor_context.match_flags = pMatch_flags;
     found_an_actor_context.identifier_index = pIdentifier_index;
     found_an_actor_context.identifier_value = pIdentifier_value;
+    found_an_actor_context.pos = pPos;
+    found_an_actor_context.callback = (int (*)(br_actor*, void*))pCallback;
+    found_an_actor_context.callback_context = pContext;
     found_an_actor_context.max_dist_squared = pMax_dist * pMax_dist;
-    x = (int)((pPos->v[0] - pTrack->origin_x) / pTrack->column_size_x);
-    p = pTrack->origin_x + (float)x * pTrack->column_size_x;
+    found_an_actor_context.max_dist_axis = pMax_dist;
+    x = (int)x_ratio;
+    p = BR_ADD(BR_MUL((float)x, pTrack->column_size_x), pTrack->origin_x);
     xmin = x;
     while (pPos->v[0] < p + pMax_dist) {
         if (xmin == 0) {
@@ -499,18 +518,18 @@ void C2_HOOK_FASTCALL ProcessNearbyActors(tTrack_spec* pTrack, br_vector3* pPos,
         p -= pTrack->column_size_x;
         xmin -= 1;
     }
-    p = pTrack->origin_x + (float)x * pTrack->column_size_x + pTrack->column_size_x;
+    p = BR_ADD(BR_MUL((float)x, pTrack->column_size_x), pTrack->origin_x) + pTrack->column_size_x;
     xmax = x;
     while (pPos->v[0] + pMax_dist > p) {
         if (xmax + 1 >= pTrack->ncolumns_x) {
             break;
         }
         p += pTrack->column_size_x;
-        xmin += 1;
+        xmax += 1;
     }
 
     z = (int)((pPos->v[2] - pTrack->origin_z) / pTrack->column_size_z);
-    p = pTrack->origin_z + (float)z * pTrack->column_size_z;
+    p = BR_ADD(BR_MUL((float)z, pTrack->column_size_z), pTrack->origin_z);
     zmin = z;
     while (pPos->v[2] < p + pMax_dist) {
         if (zmin == 0) {
@@ -519,14 +538,14 @@ void C2_HOOK_FASTCALL ProcessNearbyActors(tTrack_spec* pTrack, br_vector3* pPos,
         p -= pTrack->column_size_z;
         zmin -= 1;
     }
-    p = pTrack->origin_z + (float)z * pTrack->column_size_z + pTrack->column_size_z;
+    p = BR_ADD(BR_MUL((float)z, pTrack->column_size_z), pTrack->origin_z) + pTrack->column_size_z;
     zmax = z;
     while (pPos->v[2] + pMax_dist > p) {
         if (zmax + 1 >= pTrack->ncolumns_z) {
             break;
         }
         p += pTrack->column_size_z;
-        zmin += 1;
+        zmax += 1;
     }
     if (xmin < 0) {
         xmin = 0;
@@ -545,27 +564,29 @@ void C2_HOOK_FASTCALL ProcessNearbyActors(tTrack_spec* pTrack, br_vector3* pPos,
     }
     if (zmax < 0) {
         zmax = 0;
-    } else if (xmax >= pTrack->ncolumns_z) {
+    } else if (zmax >= pTrack->ncolumns_z) {
         zmax = pTrack->ncolumns_z - 1;
     }
 
-    found_an_actor_context.match_type = pMatch_type;
-    found_an_actor_context.match_flags = pMatch_flags;
-    found_an_actor_context.max_dist_axis = pMax_dist;
-    found_an_actor_context.pos = pPos;
-    found_an_actor_context.callback = (int (*)(br_actor*, void*))pCallback;
-    found_an_actor_context.callback_context = pContext;
-    for (x = xmin; x < xmax; x++) {
-        for (z = zmin; z < zmax; z++) {
-            if (pTrack->columns[z][x].actor_0x0 != NULL) {
-                if (DRActorEnumRecurse(pTrack->columns[z][x].actor_0x0, FoundAnActor, &found_an_actor_context)) {
-                    return;
-                }
+    x = xmin;
+    if (x <= xmax) {
+        do {
+            z = zmin;
+            if (z <= zmax) {
+                do {
+                    if (pTrack->columns[z][x].actor_0x0 != NULL
+                            && DRActorEnumRecurse(pTrack->columns[z][x].actor_0x0, FoundAnActor, &found_an_actor_context)) {
+                        return;
+                    }
+                    z++;
+                } while (z <= zmax);
             }
-        }
+            x++;
+        } while (x <= xmax);
     }
 }
 
+// C2PORT-NONMATCHING: best 42.60% | difftest PASS 2000 trials (spec difftest/specs/0040e290_FoundAnActor.json) | reason original actor-name predicates differ in control-flow layout
 // FUNCTION: CARMA2_HW 0x0040e290
 intptr_t C2_HOOK_CDECL FoundAnActor(br_actor* pActor, void* pContext) {
     tFoundAnActor_context* c = pContext;
@@ -585,16 +606,19 @@ intptr_t C2_HOOK_CDECL FoundAnActor(br_actor* pActor, void* pContext) {
         char actor_type = (char)pActor->type;
         char* name = pActor->identifier;
 
-        if (actor_type != 1 && (c->match_flags & 0x10) == 0) {
-            if (name != NULL && *name == 0x26) {
-                if ((c->match_flags & 3) == 0) {
-                    goto fail;
-                }
-            } else {
-                if ((c->match_flags & 4) == 0) {
-                    goto fail;
-                }
+        if (actor_type != 1 && (c->match_flags & 0x1000) != 0) {
+            goto fail;
+        }
+        if (name == NULL) {
+            if ((c->match_flags & 4) == 0) {
+                goto fail;
             }
+        } else if (*name == 0x26) {
+            if ((c->match_flags & 3) == 0) {
+                goto fail;
+            }
+        } else if ((c->match_flags & 4) == 0) {
+            goto fail;
         }
 
         if (c->match_type == 1) {
@@ -788,11 +812,9 @@ void C2_HOOK_FASTCALL RenderTrack(br_actor* pWorld, tTrack_spec* pTrack_spec, br
 void C2_HOOK_FASTCALL XZToColumnXZ(tU8* pColumn_x, tU8* pColumn_z, br_scalar pX, br_scalar pZ, tTrack_spec* pTrack_spec) {
     br_scalar x;
     br_scalar z;
-    br_scalar size_x = pTrack_spec->column_size_x;
-    br_scalar size_z = pTrack_spec->column_size_z;
 
-    x = (pX - pTrack_spec->origin_x) / size_x;
-    z = (pZ - pTrack_spec->origin_z) / size_z;
+    x = (pX - pTrack_spec->origin_x) / pTrack_spec->column_size_x;
+    z = (pZ - pTrack_spec->origin_z) / pTrack_spec->column_size_z;
     if (x < 0.0f) {
         x = 0.0f;
     }

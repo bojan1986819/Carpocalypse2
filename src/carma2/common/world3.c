@@ -1,3 +1,6 @@
+#ifndef CARPOCALYPSE2_MATCHING
+#include "loadprof.h"
+#endif
 #include "world3.h"
 #include "world.h"
 #include <ctype.h>
@@ -24,9 +27,16 @@
 #endif
 #include "carpocalypse2_macros.h"
 
+#ifdef __vita__
+#include "sdl3/vita_controls.h"
+#endif
+
 #include <string.h>
 extern void C2_HOOK_FASTCALL LoadTrackMaterials(tBrender_storage* pStorage, const char* pPath);
 extern void C2_HOOK_FASTCALL LoadTrackModels(tBrender_storage* pStorage, const char* pPath);
+extern tRoad_texturing_level gRoad_texturing_level;
+extern tWall_texturing_level gWall_texturing_level;
+extern br_material* C2_HOOK_FASTCALL FUN_00448480(void* pArg1, tU16 pIndex);
 
 /* GLOBAL: CARMA2_HW 0x006b6400 */
 extern char gAdditional_model_path[256];
@@ -159,7 +169,9 @@ void C2_HOOK_FASTCALL MungeTrackModel(br_model* pModel) {
     vertex_index_buffer = BrMemAllocate((pModel->nvertices + 1) * sizeof(int), BR_MEMORY_APPLICATION);
     face_index_buffer = BrMemAllocate(pModel->nfaces * 3 * sizeof(int), BR_MEMORY_APPLICATION);
 
-    for (i = 1; i < pModel->nvertices; i++) {
+    /* retail (inlined at 0x5054dc..0x505591) includes the last vertex: without it, its index stays 0
+     * and the edge pass below reads vertices[-1] (crashed when that hit an unmapped page) */
+    for (i = 1; i <= pModel->nvertices; i++) {
         if (vertex_index_buffer[i] == 0) {
             int j;
 
@@ -231,24 +243,39 @@ void C2_HOOK_FASTCALL MungeTrackModel(br_model* pModel) {
 
 // FUNCTION: CARMA2_HW 0x00504bf0
 void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec, tRace_info* pRace_info) {
+
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("track-load");
+#endif
+    char s2[256];
+    char track_file[256];
+    char s[256];
+    char exceptions_path[256];
+    char local_name[256];
+    char collision_path[256];
+    char local_directory[256];
+    char local_race_path[256];
+    char actor_path[256];
+    char lighting_file[256];
+    char non_cars_path[256];
+    FILE* f;
+    FILE* g;
+    char delimiter[4];
+    int version;
+    float temp_float;
+    char* str;
+    tMaterial_exception* matexc;
+    tTrack_loading_data* data;
     int i;
     int j;
-    char short_track_name[32];
-    char local_directory[256];
-    char local_name[256];
-    char local_race_path[256];
-    char race_lighting_path[256];
-    char race_desc_path[256];
-    char actor_path[256];
-    char s[256];
-    FILE* f;
-    char *str;
-    tTWTVFS twt, twt2;
+    tTWTVFS twt;
+    tTWTVFS county_twt;
     br_pixelmap* sky;
-    tU16 sky_pixels_high;
+    br_angle sky_pixels_high;
     int killed_sky;
     int count_material_modifiers;
     int count_noncar_objects;
+    int rstyle;
 
     PrintMemoryDump(0, "AT THE START OF LOAD TRACK");
     strcpy(gCurrent_load_directory, "RACES");
@@ -261,110 +288,217 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
     PathCat(gRace_path, gApplication_path, local_directory);
     strcpy(local_race_path, gRace_path);
 
-    LoadExceptionsFileForTrack(local_race_path);
+    sprintf(exceptions_path, "%s%s%s%s", local_race_path, gDir_separator, gRenderer_fixup_basename, gRenderer_fixup_extension);
+
+    strcpy(delimiter, "\t ,");
+    f = DRfopen(exceptions_path, "rt");
+    if (f) {
+        GetALineAndDontArgue(f, s);
+        str = strtok(s, delimiter);
+        if (DRStricmp(str, "VERSION")) {
+            FatalError(kFatalError_FileMustStartWith_SS, exceptions_path, "VERSION");
+        }
+        str = strtok(NULL, delimiter);
+        if (sscanf(str, "%d", &version) == 0 || version != 1) {
+            FatalError(kFatalError_CantCopeWithVersionFor_SS, str, exceptions_path);
+        }
+        while (1) {
+            GetALineAndDontArgue(f, s);
+            str = strtok(s, delimiter);
+            if (DRStricmp(str, "end") == 0) {
+                break;
+            }
+            matexc = BrMemAllocate(sizeof(tMaterial_exception), kMem_exception);
+            matexc->texture_name = BrMemAllocate(strlen(str) + 1, kMem_misc_string);
+            strcpy(matexc->texture_name, str);
+            matexc->flags = 0;
+            while (1) {
+                str = strtok(NULL, delimiter);
+                if (str == NULL || !isalnum(str[0])) {
+                    break;
+                }
+                if (DRStricmp(str, "nobilinear") == 0) {
+                    matexc->flags |= eMaterial_exception_nobilinear;
+                } else if (DRStricmp(str, "wrap") == 0) {
+                    matexc->flags |= eMaterial_exception_wrap;
+                } else {
+                    FatalError(kFatalError_Mysterious_SS, str, exceptions_path);
+                }
+            }
+            matexc->next = gMaterial_exceptions;
+            gMaterial_exceptions = matexc;
+        }
+        PFfclose(f);
+    }
 
     PathCat(gRace_path, gRace_path, local_name);
+
     twt = OpenPackFileAndSetTiffLoading(gRace_path);
-    PathCat(race_lighting_path, gRace_path, "LIGHTING.TXT");
-    PathCat(race_desc_path, gRace_path, pFile_name);
-    f = DRfopen(race_desc_path, "rt");
-    if (f == NULL) {
+
+    PathCat(lighting_file, gRace_path, "LIGHTING.TXT");
+    PathCat(track_file, gRace_path, local_name);
+    strcat(track_file, ".txt");
+
+    f = DRfopen(track_file, "rt");
+    if (!f) {
         FatalError(kFatalError_CannotOpenRacesFile);
     }
 
-    GetALineAndDontArgue(f, s);
-    str = strtok(s, "\t ,/");
-    if (strcmp(str, "VERSION") == 0) {
+    GetALineAndDontArgue(f, s2);
+    str = strtok(s2, "\t ,/");
+    if (strcmp(s2, "VERSION") == 0) {
         str = strtok(NULL, "\t ,/");
         sscanf(str, "%d", &gTrack_version);
-        if (gTrack_version == 8) {
-            gTrack_version = 0;
-        }
     } else {
         gTrack_version = 0;
     }
-
+    if (gTrack_version == 8) {
+        gTrack_version = 0;
+    }
     if (gTrack_version > 0) {
         ReadGlobalLightingInfo(f);
     }
 
-    /* Position of centre of start of grid */
-    GetThreeFloats(f,
-        &pRace_info->initial_position.v[0],
-        &pRace_info->initial_position.v[1],
-        &pRace_info->initial_position.v[2]);
-
-    /* Direction that grid faces in */
-    pRace_info->initial_yaw = GetAFloat(f);
-
-    /* Laps, checkpoints etc */
-
-    /* # checkpoints */
+    data = &gTrack_loading_data;
+    GetALineAndDontArgue(f, s2);
+    str = strtok(s2, "\t ,/");
+    sscanf(str, "%f", &temp_float);
+    pRace_info->initial_position.v[0] = temp_float;
+    str = strtok(NULL, "\t ,/");
+    sscanf(str, "%f", &temp_float);
+    pRace_info->initial_position.v[1] = temp_float;
+    str = strtok(NULL, "\t ,/");
+    sscanf(str, "%f", &temp_float);
+    pRace_info->initial_position.v[2] = temp_float;
+    PossibleService();
+    GetALineAndDontArgue(f, s2);
+    str = strtok(s2, "\t ,/");
+    sscanf(str, "%f", &temp_float);
+    pRace_info->initial_yaw = temp_float;
+    PossibleService();
     pRace_info->check_point_count = GetAnInt(f);
+
+#ifndef CARPOCALYPSE2_MATCHING
+    /* The checkpoint records are tRace_info.checkpoints (offset 0x21c, stride 0x114), which the
+     * original fills in place: timer increments, quad count, quad corners, one normal per quad
+     * (for RayHitFace) and the averaged centre (map marks). The decomp wrote them into an
+     * unrelated global, so CheckCheckpoints saw count_quads == 0 and nothing ever registered. */
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tRace_info, checkpoints, 0x21c);
+    C2_HOOK_BUG_ON(sizeof(tRace_checkpoint_spec) != 0x114);
     for (i = 0; i < pRace_info->check_point_count; i++) {
-        /* Checkpoint #x */
+        tRace_checkpoint_spec* cp = &pRace_info->checkpoints[i];
+        br_vector3 a;
+        br_vector3 b;
+        int j;
+        int k;
+
         PossibleService();
+        GetThreeInts(f, &cp->timer_increments[0], &cp->timer_increments[1], &cp->timer_increments[2]);
+        BrVector3Set(&cp->pos, 0.f, 0.f, 0.f);
+        cp->count_quads = GetAnInt(f);
+        for (j = 0; j < cp->count_quads; j++) {
+            for (k = 0; k < 4; k++) {
+                GetThreeScalars(f, &cp->quads[j].points[k].v[0], &cp->quads[j].points[k].v[1], &cp->quads[j].points[k].v[2]);
+                BrVector3Accumulate(&cp->pos, &cp->quads[j].points[k]);
+            }
+            BrVector3Sub(&a, &cp->quads[j].points[1], &cp->quads[j].points[0]);
+            BrVector3Sub(&b, &cp->quads[j].points[2], &cp->quads[j].points[0]);
+            BrVector3Cross(&cp->normals[j], &a, &b);
+        }
+        if (cp->count_quads > 0) {
+            BrVector3InvScale(&cp->pos, &cp->pos, (br_scalar)(cp->count_quads * 4));
+        }
+    }
+#else
 
-        /* Timer increment for each skill level (ped mode) */
-        GetThreeInts(f,
-            &pRace_info->checkpoints[i].timer_increments[0],
-            &pRace_info->checkpoints[i].timer_increments[1],
-            &pRace_info->checkpoints[i].timer_increments[2]);
-        C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tRace_info, checkpoints, 0x21c);
+    for (i = 0; i < pRace_info->check_point_count; i++) {
+        br_vector3 a;
+        br_vector3 b;
+        int j;
 
-        /* # quads for this checkpoint */
-        pRace_info->checkpoints[i].count_quads = GetAnInt(f);
+        PossibleService();
+        GetThreeInts(f, &data->sections[i].field_0x0, &data->sections[i].field_0x4, &data->sections[i].field_0x8);
+        data->sections[i].acc.v[0] = 0.0f;
+        data->sections[i].acc.v[1] = 0.0f;
+        data->sections[i].acc.v[2] = 0.0f;
+        data->sections[i].quad_count = GetAnInt(f);
 
-        BrVector3Set(&pRace_info->checkpoints[i].pos, 0.f, 0.f, 0.f);
-
-        for (j = 0; j < pRace_info->checkpoints[i].count_quads; j++) {
-            br_vector3 tmp1, tmp2;
+        for (j = 0; j < data->sections[i].quad_count; j++) {
             int k;
 
             for (k = 0; k < 4; k++) {
-                /* Point #[0-3] */
-                GetThreeScalars(f,
-                    &pRace_info->checkpoints[i].quads[j].points[k].v[0],
-                    &pRace_info->checkpoints[i].quads[j].points[k].v[1],
-                    &pRace_info->checkpoints[i].quads[j].points[k].v[2]);
-                BrVector3Accumulate(&pRace_info->checkpoints[i].pos, &pRace_info->checkpoints[i].quads[j].points[k]);
+                GetThreeScalars(f, &data->sections[i].quad_corners[j][k].v[0],
+                                &data->sections[i].quad_corners[j][k].v[1],
+                                &data->sections[i].quad_corners[j][k].v[2]);
+                data->sections[i].acc.v[0] += data->sections[i].quad_corners[j][k].v[0];
+                data->sections[i].acc.v[1] += data->sections[i].quad_corners[j][k].v[1];
+                data->sections[i].acc.v[2] += data->sections[i].quad_corners[j][k].v[2];
             }
-            BrVector3Sub(&tmp1,
-                &pRace_info->checkpoints[i].quads[j].points[2],
-                &pRace_info->checkpoints[i].quads[j].points[0]);
-            BrVector3Sub(&tmp2,
-                &pRace_info->checkpoints[i].quads[j].points[1],
-                &pRace_info->checkpoints[i].quads[j].points[0]);
-            BrVector3Cross(&pRace_info->checkpoints[i].normals[j], &tmp2, &tmp1);
+
+            BrVector3Sub(&a, &data->sections[i].quad_corners[j][1], &data->sections[i].quad_corners[j][0]);
+            BrVector3Sub(&b, &data->sections[i].quad_corners[j][2], &data->sections[i].quad_corners[j][0]);
+            BrVector3Cross(&a, &a, &b);
+            ((br_vector3*)pRace_info)[0x3f + i + j] = a;
         }
-        BrVector3InvScale(&pRace_info->checkpoints[i].pos,
-            &pRace_info->checkpoints[i].pos,
-            (float)(4 * pRace_info->checkpoints[i].count_quads));
+
+        data->sections[i].acc.v[0] /= (data->sections[i].quad_count * 4);
+        data->sections[i].acc.v[1] /= (data->sections[i].quad_count * 4);
+        data->sections[i].acc.v[2] /= (data->sections[i].quad_count * 4);
+        /* Checkpoint map marks (CalcMapCheckpoint) and checkpoint lines are
+           derived from checkpoints[i].pos, so publish the averaged centre
+           here. (pos is only read by map code; quads/normals/count intentionally
+           untouched.) */
+        BrVector3Copy(&pRace_info->checkpoints[i].pos, &data->sections[i].acc);
     }
+#endif
 
     PossibleService();
-    strcpy(short_track_name, pFile_name);
-    short_track_name[4] = '\0';
-    PathCat(race_desc_path, gApplication_path, "RACES");
-    PathCat(race_desc_path, race_desc_path, short_track_name);
-    twt2 = OpenPackFile(race_desc_path);
-    LoadAllImagesInDirectory(&gTrack_storage_space, race_desc_path);
-    TWT_Unmount(twt2);
+    {
+        char county_pack_path[256];
+        char county_stem[256];
 
+        strcpy(county_stem, local_name);
+        county_stem[4] = '\0';
+        PathCat(county_pack_path, gApplication_path, "RACES");
+        PathCat(county_pack_path, county_pack_path, county_stem);
+        county_twt = OpenPackFile(county_pack_path);
+#ifndef CARPOCALYPSE2_MATCHING
+        C2LoadBegin("track-images");
+#endif
+        LoadAllImagesInDirectory(&gTrack_storage_space, county_pack_path);
+#ifndef CARPOCALYPSE2_MATCHING
+        C2LoadEnd();
+#endif
+        ClosePackFile(county_twt);
+    }
     PossibleService();
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("track-images");
+#endif
     LoadAllImagesInDirectory(&gTrack_storage_space, gRace_path);
-
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
     PossibleService();
     LoadAllShadeTablesInDirectory(&gTrack_storage_space, gRace_path);
-
     PossibleService();
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("LoadTrackMaterials");
+#endif
     LoadTrackMaterials(&gTrack_storage_space, gRace_path);
-
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
     PossibleService();
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("LoadTrackModels");
+#endif
     LoadTrackModels(&gTrack_storage_space, gRace_path);
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
 
     for (i = 0; i < gTrack_storage_space.models_count; i++) {
-
         PossibleService();
         MungeTrackModel(gTrack_storage_space.models[i]);
     }
@@ -381,7 +515,13 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
     PrintMemoryDump(0, "AFTER LOADING SMASHABLE ENVIRONMENT");
 
     /* Ped specs */
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("ReadPedSpecs");
+#endif
     ReadPedSpecs(f);
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
     PossibleService();
 
     PackFileRevertTiffLoading();
@@ -393,8 +533,6 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
 
     gTrack_actor = pTrack_spec->the_actor;
     if (!gRendering_accessories && gNet_mode == eNet_mode_none) {
-        int rstyle;
-
         rstyle = BR_RSTYLE_NONE;
         PossibleService();
         DRActorEnumRecurse(gTrack_actor, SetAccessoryRenderingCB, &rstyle);
@@ -436,7 +574,7 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
             FatalError(kFatalError_CantFindFile_S, s);
         }
         StartFlic(s, -1, &gTrack_flic_descriptor, gTrack_flic_buffer_size, (tS8*)gTrack_flic_buffer, NULL, 0, 0, 0);
-        flic_pixels = BrMemAllocate((gTrack_flic_descriptor.width + 3) & (~3) * gTrack_flic_descriptor.height, kMem_video_pixels);
+        flic_pixels = BrMemAllocate(((gTrack_flic_descriptor.width + 3) & ~3) * gTrack_flic_descriptor.height, kMem_video_pixels);
         sky = DRPixelmapAllocate(gScreen->type, gTrack_flic_descriptor.width, gTrack_flic_descriptor.height, flic_pixels, 0);
         BrMapAdd(sky);
         AssertFlicPixelmap(&gTrack_flic_descriptor, sky);
@@ -460,7 +598,7 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
     }
     gProgram_state.default_depth_effect.sky_texture = sky;
     if (sky != NULL) {
-        sky_pixels_high = gProgram_state.default_depth_effect.sky_texture->height;
+        sky_pixels_high = sky->height;
     } else {
         sky_pixels_high = 100;
     }
@@ -480,18 +618,13 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
     PossibleService();
 
     /* Depth cue mode ("none", "dark" or "fog") */
-    gProgram_state.default_depth_effect.type = GetALineAndInterpretCommand(f, gDepth_effect_names, CARPOCALYPSE2_ASIZE(gDepth_effect_names));
+    gProgram_state.default_depth_effect.type = GetALineAndInterpretCommand(f, (const char**)gDepth_effect_names, CARPOCALYPSE2_ASIZE(gDepth_effect_names));
 
     /* Degree of fog/darkness */
-    GetPairOfInts(f,
-        &gProgram_state.default_depth_effect.start,
-        &gProgram_state.default_depth_effect.end);
+    GetPairOfInts(f, &gProgram_state.default_depth_effect.start, &gProgram_state.default_depth_effect.end);
 
-    /* Depth cue colour (red, green, blue ) */
-    GetThreeInts(f,
-        &gProgram_state.default_depth_effect.colour.red,
-        &gProgram_state.default_depth_effect.colour.green,
-        &gProgram_state.default_depth_effect.colour.blue);
+    /* Depth cue colour (red, green, blue) */
+    GetThreeInts(f, &gProgram_state.default_depth_effect.colour.red, &gProgram_state.default_depth_effect.colour.green, &gProgram_state.default_depth_effect.colour.blue);
     gTrack_depth_colour_red = gProgram_state.default_depth_effect.colour.red;
     gTrack_depth_colour_green = gProgram_state.default_depth_effect.colour.green;
     gTrack_depth_colour_blue = gProgram_state.default_depth_effect.colour.blue;
@@ -509,8 +642,6 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
     ReadSpecialVolumes(f);
     ReadSoundGenerators(pTrack_spec, f);
 
-    /* REFLECTIVE WINDSCREEN SPECIFICATIONS */
-
     /* Material to use for default screens */
     GetAString(f, s);
     gProgram_state.standard_screen = BrMapFind(s);
@@ -523,11 +654,9 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
     GetAString(f, s);
     gProgram_state.standard_screen_fog = BrMapFind(s);
 
-    /* (ignore) # areas with different screens */
     gProgram_state.special_screens_count = GetAnInt(f);
     if (gProgram_state.special_screens_count != 0) {
         gProgram_state.special_screens = BrMemAllocate(sizeof(tSpecial_screen) * gProgram_state.special_screens_count, kMem_special_screen);
-        C2_HOOK_BUG_ON(sizeof(tSpecial_screen) != 20);
         for (i = 0; i < gProgram_state.special_screens_count; i++) {
             GetFourScalars(f,
                 &gProgram_state.special_screens[i].min_x,
@@ -540,8 +669,6 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
     }
 
     PossibleService();
-
-    /* MAP DETAILS */
 
     /* Map pixelmap name */
     GetAString(f, s);
@@ -556,6 +683,7 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
     }
     BRPM_convert(pRace_info->map_image, gBack_screen->type);
     PrintMemoryDump(0, "JUST LOADING SKY/SPEC VOLS/SCREENS/MAP");
+
     /* World->map transformation matrix */
     for (i = 0; i < 4; ++i) {
         GetThreeScalars(f,
@@ -576,19 +704,12 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
         pRace_info->map_transformation.m[3][1] += (float)gGraf_specs[gGraf_spec_index].total_height / 2;
     }
 
-    /* ****** START OF FUNK AND GROOVE STUFF ****** */
-
     /* START OF FUNK */
     GetALineAndDontArgue(f, s);
     AddFunkotronics(f, -2, 30 * GROOVE_FUNK_MAX_PER_CAR, NULL);
 
-    /* FIXME: What is magic 1080 / 30 * 30 * GROOVE_FUNK_MAX_PER_CAR ?*/
-    C2_HOOK_BUG_ON(30 * GROOVE_FUNK_MAX_PER_CAR != 1080);
-
     /* START OF GROOVE */
     GetALineAndDontArgue(f, s);
-    C2_HOOK_ASSERT(strcmp(s, "START OF GROOVE") == 0);
-
     AddGroovidelics(f, -2, gUniverse_actor, 30 * GROOVE_FUNK_MAX_PER_CAR, 0);
 
     PossibleService();
@@ -606,12 +727,15 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
             }
             for (j = 0; j < V11MODEL(model)->ngroups; j++) {
                 v11group* v11_group = &V11MODEL(model)->groups[j];
-                v11_group->face_colours.material = model->faces[*v11_group->face_user].material;
-                if (v11_group->face_colours.material != NULL) {
-                    SmoothificateWorldMaterial(v11_group->face_colours.material);
-                    if (v11_group->face_colours.material->index_shade == NULL) {
-                        v11_group->face_colours.material->index_shade = BrTableFind("DRRENDER.TAB");
-                        BrMaterialUpdate(v11_group->face_colours.material, BR_MATU_ALL);
+
+                br_material* material = model->faces[*v11_group->face_user].material;
+
+                *v11_group->face_colours.materials = material;
+                if (material != NULL) {
+                    SmoothificateWorldMaterial(material);
+                    if (material->index_shade == NULL) {
+                        material->index_shade = BrTableFind("DRRENDER.TAB");
+                        BrMaterialUpdate(material, BR_MATU_ALL);
                     }
                 }
             }
@@ -636,41 +760,19 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
     for (i = 0; i < count_material_modifiers; i++) {
         tMaterial_modifiers* modifier = &pRace_info->material_modifiers[i];
 
-        /* car wall friction */
         modifier->car_wall_friction = GetAFloat(f);
-
-        /* tyre road friction */
         modifier->tyre_road_friction = GetAFloat(f);
-
-        /* down force */
         modifier->down_force = GetAFloat(f);
-
-        /* bumpiness */
         modifier->bumpiness = GetAFloat(f);
-
-        /* tyre sound index */
         modifier->tyre_noise_index = GetAnInt(f);
-
-        /* crash sound index */
         modifier->crash_noise_index = GetAnInt(f);
-
-        /* scrape noise index */
         modifier->scrape_noise_index = GetAnInt(f);
-
-        /* sparkiness */
         modifier->sparkiness = GetAFloat(f);
-
-        /* room for expansion */
         modifier->smoke_type = GetAnInt(f);
-
-        /* skid mark material */
         GetAString(f, s);
         str = strtok(s, ".");
-        if (strcmp(str, "NONE") == 0) {
-            modifier->skid_mark_material = NULL;
-        } else if (strcmp(str, "0") == 0) {
-            modifier->skid_mark_material = NULL;
-        } else if (strcmp(str, "1") == 0) {
+        if (strcmp(str, "none") == 0 || strcmp(str, "NONE") == 0 ||
+            strcmp(str, "0") == 0 || strcmp(str, "1") == 0) {
             modifier->skid_mark_material = NULL;
         } else {
             strcat(str, ".PIX");
@@ -681,6 +783,7 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
         }
     }
     PackFileRerevertTiffLoading();
+
     for (i = count_material_modifiers; i < CARPOCALYPSE2_ASIZE(pRace_info->material_modifiers) - 1; i++) {
         tMaterial_modifiers* modifier = &pRace_info->material_modifiers[i];
 
@@ -710,25 +813,22 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
 
     /* Non CarObjects */
     count_noncar_objects = GetAnInt(f);
-    if (count_noncar_objects > 40) { /* FIXME: magic number */
+    if (count_noncar_objects > 40) {
         PDFatalError("Too many non-car types");
     }
     gProgram_state.num_non_car_spaces = count_noncar_objects + gCount_smashable_noncars + 40;
     gProgram_state.non_cars = BrMemCalloc(gProgram_state.num_non_car_spaces, sizeof(tNon_car_spec), kMem_non_car_spec);
-    C2_HOOK_BUG_ON(sizeof(tNon_car_spec) != 260);
     if (gProgram_state.non_cars == NULL && count_noncar_objects != 0) {
         FatalError(kFatalError_CannotOpenRacesFile);
     }
     memset(gNon_car_spec_indices, 0, sizeof(gNon_car_spec_indices));
-    C2_HOOK_BUG_ON(sizeof(gNon_car_spec_indices) != 100);
-    for (i = 0; i < 40; i++) { /* FIXME: magic */
-        tPhysics_object *collision_info;
+    for (i = 0; i < 40; i++) {
+        tPhysics_object* collision_info;
         tNon_car_spec* non_car;
 
         non_car = &gProgram_state.non_cars[i];
         non_car->driver = eDriver_non_car_unused_slot;
         collision_info = BrMemAllocate(sizeof(tPhysics_object), kMem_collision_object);
-        C2_HOOK_BUG_ON(sizeof(tPhysics_object) != 1240);
         non_car->collision_info = collision_info;
         collision_info->owner = non_car;
         collision_info->flags_0x238 = 1;
@@ -738,13 +838,10 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
     for (i = 0; i < count_noncar_objects + gCount_smashable_noncars; i++) {
         tPhysics_object* collision_info;
         tNon_car_spec* non_car;
-        char non_cars_path[256];
-        FILE* g;
 
         PossibleService();
-        non_car = &gProgram_state.non_cars[40 + i]; /* FIXME: magic number */
+        non_car = &gProgram_state.non_cars[40 + i];
         collision_info = BrMemAllocate(sizeof(tPhysics_object), kMem_collision_object);
-        C2_HOOK_BUG_ON(sizeof(tPhysics_object) != 1240);
         non_car->collision_info = collision_info;
         collision_info->owner = non_car;
         collision_info->flags_0x238 = 1;
@@ -787,8 +884,11 @@ void C2_HOOK_FASTCALL LoadTrack(const char* pFile_name, tTrack_spec* pTrack_spec
     PFfclose(f);
     FreeExceptions();
     PrintMemoryDump(0, "FINISHED LOADING TRACK");
-    LoadStaticLightingForRace(race_lighting_path);
+    LoadStaticLightingForRace(lighting_file);
     ClosePackFileAndSetTiffLoading(twt);
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
 }
 
 // RemoveBounds
@@ -838,6 +938,7 @@ void C2_HOOK_FASTCALL DisposeStorageSpace(tBrender_storage* pStorage) {
     BrMemFree(pStorage->materialProps);
 }
 
+// C2PORT-NONMATCHING: best 45.68% | difftest PASS 2000 trials (spec difftest/specs/00500e60_ClearMatertrialSetFromStorageSpace.json) | reason register-allocation-storage-loops
 // FUNCTION: CARMA2_HW 0x00500e60
 void C2_HOOK_FASTCALL ClearMatertrialSetFromStorageSpace(tBrender_storage* pStorage_space, int pStart, int pEnd) {
     int i;
@@ -1006,6 +1107,168 @@ tAdd_to_storage_result C2_HOOK_FASTCALL AddSoundToStorage(tBrender_storage* pSto
     }
 }
 
+// FUNCTION: CARMA2_HW 0x00501380
+int C2_HOOK_FASTCALL LoadPixelmapsFromListFile(tBrender_storage* pStorage_space, FILE* pFile, int pCount) {
+    int total;
+    char* name;
+    int files_left;
+    int pixelmaps_left;
+    int i;
+    int status;
+    br_pixelmap* pixelmaps[500];
+    br_pixelmap** volatile pixelmap_cursor;
+    char line[256];
+
+    total = 0;
+    if (pCount > 0) {
+        files_left = pCount;
+        do {
+            PossibleService();
+            GetALineAndDontArgue(pFile, line);
+            name = strtok(line, gSkip_lines_delimiters);
+            DoNotAllowOpenToFail();
+            pixelmaps_left = LoadTextureTryAllLocations(name, pixelmaps, CARPOCALYPSE2_ASIZE(pixelmaps));
+            if (pixelmaps_left == 0) {
+                FatalError(kFatalError_CantLoadPixelmapFile_S, name);
+            }
+            if (pixelmaps_left > 0) {
+                pixelmap_cursor = pixelmaps;
+                do {
+                    if (*pixelmap_cursor != NULL) {
+                        gDuplicate_pixelmap = NULL;
+                        status = pStorage_space->pixelmaps_count;
+                        if (status < pStorage_space->max_pixelmaps) {
+                            i = 0;
+                            if (status > 0) {
+                                for (i = 0; i < status; i++) {
+                                    if (pStorage_space->pixelmaps[i]->identifier != NULL
+                                            && (*pixelmap_cursor)->identifier != NULL
+                                            && strcmp(pStorage_space->pixelmaps[i]->identifier, (*pixelmap_cursor)->identifier) == 0) {
+                                        gDuplicate_pixelmap = pStorage_space->pixelmaps[i];
+                                        status = 1;
+                                        goto process_pixelmap_result;
+                                    }
+                                }
+                            }
+                            pStorage_space->pixelmaps[status] = *pixelmap_cursor;
+                            pStorage_space->pixelmaps_count += 1;
+                            status = 2;
+                        } else {
+                            status = 0;
+                        }
+process_pixelmap_result:
+                        switch (status) {
+                        case eStorage_not_enough_room:
+                            FatalError(kFatalError_InsufficientPixelmapSlots);
+                            break;
+                        case eStorage_duplicate:
+                            if (gDisallow_duplicates != 0) {
+                                FatalError(kFatalError_DuplicatePixelmap_S, (*pixelmap_cursor)->identifier);
+                            } else {
+                                BrPixelmapFree(*pixelmap_cursor);
+                            }
+                            break;
+                        case eStorage_allocated:
+                            BrMapAdd(*pixelmap_cursor);
+                            total += 1;
+                            break;
+                        }
+                    }
+                    pixelmap_cursor += 1;
+                    pixelmaps_left -= 1;
+                } while (pixelmaps_left != 0);
+            }
+            files_left -= 1;
+        } while (files_left != 0);
+    }
+    return total;
+}
+
+// FUNCTION: CARMA2_HW 0x005019c0
+int C2_HOOK_FASTCALL LoadShadeTablesFromListFile(tBrender_storage* pStorage_space, FILE* pFile, int pCount) {
+    int added;
+    int total;
+    int files_left;
+    int tables_left;
+    int i;
+    int status;
+    char* name;
+    br_pixelmap* shade_tables[50];
+    br_pixelmap** shade_table_cursor;
+    br_pixelmap** storage_cursor;
+    char line[256];
+    tPath_name path;
+
+    total = 0;
+    if (pCount > 0) {
+        files_left = pCount;
+        do {
+            PossibleService();
+            GetALineAndDontArgue(pFile, line);
+            name = strtok(line, gSkip_lines_delimiters);
+            PathCat(path, gApplication_path, "SHADETAB");
+            PathCat(path, path, name);
+            added = 0;
+            tables_left = BrPixelmapLoadMany(path, shade_tables, CARPOCALYPSE2_ASIZE(shade_tables));
+            if (tables_left == 0) {
+                FatalError(kFatalError_CannotLoadShadeTableFileOrItIsEmpty_S, path);
+            }
+            if (tables_left > 0) {
+                shade_table_cursor = shade_tables;
+                do {
+                    if (*shade_table_cursor != NULL) {
+                        status = pStorage_space->shade_tables_count;
+                        if (status < pStorage_space->max_shade_tables) {
+                            i = 0;
+                            if (status > 0) {
+                                storage_cursor = pStorage_space->shade_tables;
+                                do {
+                                    if ((*storage_cursor)->identifier != NULL
+                                            && (*shade_table_cursor)->identifier != NULL
+                                            && strcmp((*storage_cursor)->identifier, (*shade_table_cursor)->identifier) == 0) {
+                                        status = 1;
+                                        goto process_shade_table_result;
+                                    }
+                                    i += 1;
+                                    storage_cursor += 1;
+                                } while (i < status);
+                            }
+                            pStorage_space->shade_tables[status] = *shade_table_cursor;
+                            pStorage_space->shade_tables_count += 1;
+                            status = 2;
+                        } else {
+                            status = 0;
+                        }
+process_shade_table_result:
+                        switch (status) {
+                        case 0:
+                            FatalError(kFatalError_InsufficientShadeTableSlots);
+                            break;
+                        case 1:
+                            if (gDisallow_duplicates != 0) {
+                                FatalError(kFatalError_DuplicatePixelmap_S, (*shade_table_cursor)->identifier);
+                            } else {
+                                BrPixelmapFree(*shade_table_cursor);
+                            }
+                            break;
+                        case 2:
+                            BrTableAdd(*shade_table_cursor);
+                            added += 1;
+                            break;
+                        }
+                    }
+                    shade_table_cursor += 1;
+                    tables_left -= 1;
+                } while (tables_left != 0);
+            }
+            added = total + added;
+            files_left -= 1;
+            total = added;
+        } while (files_left != 0);
+    }
+    return total;
+}
+
 // FUNCTION: CARMA2_HW 0x005024f0
 int C2_HOOK_FASTCALL AddPixelmaps(tBrender_storage* pStorage_space, const char* path) {
     int i;
@@ -1014,6 +1277,11 @@ int C2_HOOK_FASTCALL AddPixelmaps(tBrender_storage* pStorage_space, const char* 
     tPath_name path_dirname;
     char path_stem[32];
     br_pixelmap* temp_array[500];
+#ifdef __vita__
+    static unsigned int pixelmap_logs;
+    int log_load = pixelmap_logs++ < 128;
+    if (log_load) C2VitaLog("PIX LOAD begin: %s\n", path);
+#endif
 
     total = 0;
     if (gDisableTiffConversion) {
@@ -1046,6 +1314,9 @@ int C2_HOOK_FASTCALL AddPixelmaps(tBrender_storage* pStorage_space, const char* 
             }
         }
     }
+#ifdef __vita__
+    if (log_load) C2VitaLog("PIX LOAD complete: %s decoded=%d added=%d\n", path, new_ones, total);
+#endif
     return total;
 }
 
@@ -1106,33 +1377,59 @@ br_pixelmap* C2_HOOK_FASTCALL LoadSingleShadeTable(tBrender_storage* pStorage_sp
     return NULL;
 }
 
+// C2PORT-NONMATCHING: best 84.64% | difftest PASS 2000 trials (spec difftest/specs/005017e0_LoadSingleMaterial.json) | reason vc5-block-layout
 // FUNCTION: CARMA2_HW 0x005017e0
 br_material* C2_HOOK_FASTCALL LoadSingleMaterial(tBrender_storage* pStorage_space, const char* pName) {
-    br_material* temp;
+    br_material* material;
+    int result;
+    int i;
 
-    temp = LoadMaterial(pName);
-    if (temp == NULL) {
+    material = LoadMaterial(pName);
+    if (material == NULL) {
         return BrMaterialFind(pName);
     }
 
-    switch (AddMaterialToStorage(pStorage_space, temp)) {
-        case eStorage_not_enough_room:
-            FatalError(kFatalError_InsufficientMaterialSlots);
-            break;
-
-        case eStorage_duplicate:
-            if (gDisallow_duplicates) {
-                FatalError(kFatalError_DuplicateMaterial_S, temp->identifier);
-            }
-            BrMaterialFree(temp);
-            return gDuplicate_material;
-
-        case eStorage_allocated:
-            BrMaterialAdd(temp);
-            return temp;
+    gDuplicate_material = NULL;
+    result = eStorage_not_enough_room;
+    if (pStorage_space->materials_count < pStorage_space->max_materials) {
+        i = 0;
+        if (pStorage_space->materials_count > 0) {
+            do {
+                if (pStorage_space->materials[i]->identifier != NULL && material->identifier != NULL) {
+                    if (strcmp(pStorage_space->materials[i]->identifier, material->identifier) == 0) {
+                        gDuplicate_material = pStorage_space->materials[i];
+                        result = eStorage_duplicate;
+                        goto material_added_to_storage;
+                    }
+                }
+                i++;
+            } while (i < pStorage_space->materials_count);
+        }
+        pStorage_space->materialProps[pStorage_space->materials_count] = 0;
+        pStorage_space->materials[pStorage_space->materials_count] = material;
+        pStorage_space->materials_count++;
+        result = eStorage_allocated;
     }
 
+material_added_to_storage:
+    switch (result) {
+    case eStorage_allocated:
+        BrMaterialAdd(material);
+        return material;
+    case eStorage_duplicate:
+        if (gDisallow_duplicates) {
+            FatalError(kFatalError_DuplicateMaterial_S, material->identifier);
+        } else {
+            BrMaterialFree(material);
+        }
+        return gDuplicate_material;
+    case eStorage_not_enough_room:
+        FatalError(kFatalError_InsufficientMaterialSlots);
+        return NULL;
+    }
+#ifdef CARPOCALYPSE2_FIX_BUGS
     return NULL;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00501930
@@ -1189,11 +1486,14 @@ int C2_HOOK_FASTCALL AddShadeTables(tBrender_storage* pStorage_space, const char
     return total;
 }
 
+// C2PORT-NONMATCHING: best 61.54% | difftest PASS 2000 trials (spec difftest/specs/00501e40_AddModels.json) | reason stack-layout-regalloc
 // FUNCTION: CARMA2_HW 0x00501e40
 int C2_HOOK_FASTCALL AddModels(tBrender_storage* pStorage_space, const char* pPath) {
-    int i;
-    int new_ones;
     int total;
+    volatile int new_ones;
+    int status;
+    int i;
+    br_model** model_ptr;
     br_model* temp_array[2000];
 
     new_ones = 0;
@@ -1202,36 +1502,57 @@ int C2_HOOK_FASTCALL AddModels(tBrender_storage* pStorage_space, const char* pPa
     if (total == 0) {
         FatalError(kFatalError_CannotLoadModelFileOrItIsEmpty_S, pPath);
     }
-    for (i = 0; i < total; i++) {
-        if (temp_array[i] == NULL) {
-            continue;
-        }
-        switch (AddModelToStorage(pStorage_space, temp_array[i])) {
-        case eStorage_not_enough_room:
-            FatalError(kFatalError_InsufficientModelSlots);
-            break;
-        case eStorage_duplicate:
-            if (gDisallow_duplicates) {
-                FatalError(kFatalError_DuplicateModel_S, temp_array[i]->identifier);
+    for (model_ptr = temp_array; model_ptr < temp_array + total; model_ptr++) {
+        status = 0;
+        if (*model_ptr != NULL) {
+            gDuplicate_model = NULL;
+            if (pStorage_space->models_count < pStorage_space->max_models) {
+                if ((pStorage_space->flags & 1) && pStorage_space->models_count > 0) {
+                    for (i = 0; i < pStorage_space->models_count; i++) {
+                        if (pStorage_space->models[i] != NULL && pStorage_space->models[i]->identifier != NULL && (*model_ptr)->identifier != NULL && strcmp(pStorage_space->models[i]->identifier, (*model_ptr)->identifier) == 0) {
+                            gDuplicate_model = pStorage_space->models[i];
+                            status = 1;
+                            break;
+                        }
+                    }
+                }
+                if (status != 1) {
+                    pStorage_space->models[pStorage_space->models_count] = *model_ptr;
+                    pStorage_space->models_count++;
+                    status = 2;
+                }
             }
-            BrModelFree(temp_array[i]);
-            break;
-        case eStorage_allocated:
-            temp_array[i]->flags |= BR_MODF_UPDATEABLE;
-            BrModelAdd(temp_array[i]);
-            new_ones++;
-            break;
+            switch (status) {
+            case 0:
+                FatalError(kFatalError_InsufficientModelSlots);
+                break;
+            case 1:
+                if (gDisallow_duplicates) {
+                    FatalError(kFatalError_DuplicateModel_S, (*model_ptr)->identifier);
+                } else {
+                    BrModelFree(*model_ptr);
+                }
+                break;
+            case 2:
+                (*model_ptr)->flags |= BR_MODF_UPDATEABLE;
+                (*model_ptr)->flags &= ~1;
+                BrModelAdd(*model_ptr);
+                new_ones++;
+                break;
+            }
         }
     }
-
     return new_ones;
 }
 
+// C2PORT-NONMATCHING: best 45.83% | difftest PASS 2000 trials (spec difftest/specs/00502060_AddMaterials.json) | reason stack-layout-inline-storage-codegen
 // FUNCTION: CARMA2_HW 0x00502060
 int C2_HOOK_FASTCALL AddMaterials(tBrender_storage* pStorage_space, const char* pPath, tRendererShadingType pShading) {
-    int i;
-    int new_ones;
+    volatile int new_ones;
     int total;
+    int status;
+    int i;
+    br_material** material_ptr;
     br_material* temp_array[500];
 
     new_ones = 0;
@@ -1240,24 +1561,41 @@ int C2_HOOK_FASTCALL AddMaterials(tBrender_storage* pStorage_space, const char* 
         FatalError(kFatalError_CannotLoadMaterialFileOrItIsEmpty_S, pPath);
     }
     GlorifyMaterial(temp_array, total, pShading);
-    for (i = 0; i < total; ++i) {
-        if (temp_array[i] == NULL) {
-            continue;
-        }
-        switch (AddMaterialToStorage(pStorage_space, temp_array[i])) {
-        case eStorage_not_enough_room:
-            FatalError(kFatalError_InsufficientMaterialSlots);
-            break;
-        case eStorage_duplicate:
-            if (gDisallow_duplicates) {
-                FatalError(kFatalError_DuplicateMaterial_S, temp_array[i]->identifier);
+    for (material_ptr = temp_array; material_ptr < temp_array + total; material_ptr++) {
+        status = 0;
+        if (*material_ptr != NULL) {
+            gDuplicate_material = NULL;
+            if (pStorage_space->materials_count < pStorage_space->max_materials) {
+                for (i = 0; i < pStorage_space->materials_count; i++) {
+                    if (pStorage_space->materials[i] != NULL && pStorage_space->materials[i]->identifier != NULL && (*material_ptr)->identifier != NULL && strcmp(pStorage_space->materials[i]->identifier, (*material_ptr)->identifier) == 0) {
+                        gDuplicate_material = pStorage_space->materials[i];
+                        status = 1;
+                        break;
+                    }
+                }
+                if (status != 1) {
+                    pStorage_space->materialProps[pStorage_space->materials_count] = 0;
+                    pStorage_space->materials[pStorage_space->materials_count] = *material_ptr;
+                    pStorage_space->materials_count++;
+                    status = 2;
+                }
             }
-            BrMaterialFree(temp_array[i]);
-            break;
-        case eStorage_allocated:
-            BrMaterialAdd(temp_array[i]);
-            new_ones++;
-            break;
+            switch (status) {
+            case 0:
+                FatalError(kFatalError_InsufficientMaterialSlots);
+                break;
+            case 1:
+                if (gDisallow_duplicates) {
+                    FatalError(kFatalError_DuplicateMaterial_S, (*material_ptr)->identifier);
+                } else {
+                    BrMaterialFree(*material_ptr);
+                }
+                break;
+            case 2:
+                BrMaterialAdd(*material_ptr);
+                new_ones++;
+                break;
+            }
         }
     }
     return new_ones;
@@ -1280,6 +1618,99 @@ void C2_HOOK_FASTCALL DodgyModelUpdate(br_model* pM) {
     pM->faces = NULL;
     pM->vertices = NULL;
 #endif
+}
+
+// C2PORT-NONMATCHING: best 62.60% | difftest PASS 2000 trials (spec difftest/specs/00502240_LoadModelsFromListFile.json) | reason regalloc-loop
+// FUNCTION: CARMA2_HW 0x00502240
+int C2_HOOK_FASTCALL LoadModelsFromListFile(tBrender_storage* pStorage_space, FILE* pFile, int pCount) {
+    int total;
+    int files_left;
+    int model_count;
+    int i;
+    int status;
+    char* name;
+    br_model* models[2000];
+    br_model** model_cursor;
+    br_model** storage_cursor;
+    char line[256];
+    tPath_name path;
+
+    total = 0;
+    if (pCount > 0) {
+        files_left = pCount;
+        do {
+            GetALineAndDontArgue(pFile, line);
+            name = strtok(line, gSkip_lines_delimiters);
+            PathCat(path, gApplication_path, "MODELS");
+            PathCat(path, path, name);
+            model_count = BrModelLoadMany(path, models, CARPOCALYPSE2_ASIZE(models));
+            if (model_count == 0) {
+                FatalError(kFatalError_CannotLoadModelFileOrItIsEmpty_S, path);
+            }
+            if (model_count > 0) {
+                model_cursor = models;
+                do {
+                    status = eStorage_not_enough_room;
+                    if (*model_cursor != NULL) {
+                        gDuplicate_model = NULL;
+                        if (pStorage_space->models_count < pStorage_space->max_models) {
+                            if ((pStorage_space->flags & 0x1) && pStorage_space->models_count > 0) {
+                                storage_cursor = pStorage_space->models;
+                                status = eStorage_not_enough_room;
+                                i = 0;
+                                do {
+                                    if (*storage_cursor != NULL
+                                            && (*storage_cursor)->identifier != NULL
+                                            && (*model_cursor)->identifier != NULL
+                                            && strcmp((*storage_cursor)->identifier, (*model_cursor)->identifier) == 0) {
+                                        gDuplicate_model = *storage_cursor;
+                                        status = eStorage_duplicate;
+                                        goto process_model_result;
+                                    }
+                                    i++;
+                                    storage_cursor++;
+                                } while (i < pStorage_space->models_count);
+                            }
+                            pStorage_space->models[pStorage_space->models_count] = *model_cursor;
+                            pStorage_space->models_count += 1;
+                            status = eStorage_allocated;
+                        }
+process_model_result:
+                        switch (status) {
+                        case eStorage_not_enough_room:
+                            FatalError(kFatalError_InsufficientModelSlots);
+                            break;
+                        case eStorage_duplicate:
+                            if (gDisallow_duplicates != 0) {
+                                FatalError(kFatalError_DuplicateModel_S, (*model_cursor)->identifier);
+                            } else {
+                                BrModelFree(*model_cursor);
+                            }
+                            break;
+                        case eStorage_allocated:
+                            (*model_cursor)->flags |= BR_MODF_UPDATEABLE;
+                            if (gRoad_texturing_level == 0) {
+                                FUN_004472c0(*model_cursor, (tPMFMCB*)FUN_00448480);
+                            }
+                            if (gWall_texturing_level == 1) {
+                                FUN_004472c0(*model_cursor, WallPerspToLinear);
+                            }
+                            if (gWall_texturing_level == 0) {
+                                FUN_004472c0(*model_cursor, WallPerspToUntex);
+                            }
+                            BrModelAdd(*model_cursor);
+                            total += 1;
+                            break;
+                        }
+                    }
+                    model_cursor += 1;
+                    model_count -= 1;
+                } while (model_count != 0);
+            }
+            files_left -= 1;
+        } while (files_left != 0);
+    }
+    return total;
 }
 
 // FUNCTION: CARMA2_HW 0x005024b0
@@ -1452,11 +1883,25 @@ void C2_HOOK_FASTCALL LoadAllShadeTablesInDirectory(tBrender_storage* pStorage, 
 // FUNCTION: CARMA2_HW 0x00502cf0
 void C2_HOOK_FASTCALL LoadAllStuffInDirectory(tBrender_storage* pStorage, const char* pPath, tRendererShadingType pShading) {
 
+#ifdef __vita__
+    static unsigned int group_logs;
+    int log_group = group_logs++ < 128;
+    if (log_group) C2VitaLog("ASSET GROUP begin: %s\n", pPath);
+#endif
     LoadAllShadeTablesInDirectory(pStorage, pPath);
     LoadAllPixelmapsInDirectory(pStorage, pPath);
     LoadAllImagesInDirectory(pStorage, pPath);
+#ifdef __vita__
+    if (log_group) C2VitaCheckpoint("ASSET GROUP images complete; loading materials");
+#endif
     LoadAllMaterialsInDirectory(pStorage, pPath, pShading);
+#ifdef __vita__
+    if (log_group) C2VitaCheckpoint("ASSET GROUP materials complete; loading models");
+#endif
     LoadAllModelsInDirectory(pStorage, pPath);
+#ifdef __vita__
+    if (log_group) C2VitaLog("ASSET GROUP complete: %s\n", pPath);
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00502d60

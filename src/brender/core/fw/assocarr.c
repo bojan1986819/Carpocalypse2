@@ -43,33 +43,86 @@ br_error C2_HOOK_CDECL Set_Associative_Array_Value(br_associative_array* pArray,
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 42.52% | difftest PASS 2000 trials (spec difftest/specs/00531540_BrAssociativeArraySetEntry.json) | reason VC5 register allocation and branch layout
 // FUNCTION: CARMA2_HW 0x00531540
 br_error C2_HOOK_STDCALL BrAssociativeArraySetEntry(br_associative_array* pArray, br_token t, br_value v) {
     br_uint_16 i;
+    br_uint_16 num_elements;
+    br_uint_16 max_elements;
+    br_token_value* tv;
     br_token_value* temp;
+    br_int_32 offset;
+    br_value* value;
 
-    for (i = 0; i < pArray->num_elements; i++) {
-        if (pArray->tv[i].t == t) {
-            br_error res = Set_Associative_Array_Value(pArray, i, v);
-            return res;
+    num_elements = pArray->num_elements;
+    i = 0;
+    if (num_elements != 0) {
+        do {
+            tv = pArray->tv;
+            if (tv[i].t == t) {
+                offset = i * sizeof(br_token_value);
+                value = (br_value*)((char*)tv + offset + 4);
+                if (BrTokenType(*(br_token*)((char*)tv + offset)) != BRT_STRING) {
+                    *value = v;
+                    return 0;
+                }
+                if (value->str != NULL) {
+                    BrResFree(value->str);
+                }
+                goto store_string;
+            }
+            i++;
+        } while (i < num_elements);
+    }
+
+    max_elements = pArray->max_elements;
+    if (num_elements < max_elements) {
+        tv = pArray->tv;
+        tv[num_elements].t = t;
+        tv[num_elements].v.u32 = 0;
+        num_elements = pArray->num_elements;
+        pArray->num_elements = num_elements + 1;
+        offset = num_elements * sizeof(br_token_value);
+        value = (br_value*)((char*)pArray->tv + offset + 4);
+        if (BrTokenType(*(br_token*)((char*)pArray->tv + offset)) != BRT_STRING) {
+            *value = v;
+            return 0;
         }
+        if (value->str != NULL) {
+            BrResFree(value->str);
+        }
+        goto store_string;
     }
-    if (pArray->num_elements < pArray->max_elements) {
-        pArray->tv[pArray->num_elements].t = t;
-        Set_Associative_Array_Value(pArray, pArray->num_elements, v);
-        pArray->num_elements += 1;
-        return 0;
-    }
-    temp = BrResAllocate(pArray, (pArray->max_elements + 10) * sizeof(br_token_value), BR_MEMORY_APPLICATION);
-    BrMemCpy(temp, pArray->tv, pArray->max_elements * sizeof(br_token_value));
-    BrResFree(pArray->tv);
+
+    temp = BrResAllocate(pArray, (max_elements + 10) * sizeof(br_token_value), BR_MEMORY_APPLICATION);
+    BrMemCpy(temp, pArray->tv, max_elements * sizeof(br_token_value));
+    BrMemFree(pArray->tv);
     pArray->tv = temp;
     if (temp == NULL) {
         return 0x1002;
     }
     pArray->max_elements += 10;
-    Set_Associative_Array_Value(pArray, pArray->num_elements, v);
-    pArray->num_elements += 1;
+    tv = pArray->tv;
+    num_elements = pArray->num_elements;
+    tv[num_elements].t = t;
+    tv[num_elements].v.u32 = 0;
+    pArray->num_elements = num_elements + 1;
+    offset = num_elements * sizeof(br_token_value);
+    value = (br_value*)((char*)pArray->tv + offset + 4);
+    if (BrTokenType(*(br_token*)((char*)pArray->tv + offset)) != BRT_STRING) {
+        *value = v;
+        return 0;
+    }
+    if (value->str != NULL) {
+        BrResFree(value->str);
+    }
+
+store_string:
+    if (v.str != NULL) {
+        value->str = BrResStrDup(pArray, v.str);
+        return 0;
+    }
+    value->str = NULL;
     return 0;
 }
 

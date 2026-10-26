@@ -146,6 +146,13 @@ void C2_HOOK_FASTCALL GameMain(int pArgc, const char** pArgv) {
         }
     }
     InitialiseDeathRace(pArgc, pArgv);
+#ifdef __vita__
+    { extern void C2VitaCheckpoint(const char* title);
+      C2VitaCheckpoint("GameMain: initialization complete, entering DoProgram"); }
+    { extern void C2VitaVideoPreparingMenu(void);
+      C2VitaVideoPreparingMenu(); }
+#endif
     DoProgram();
     QuitGame();
 }
+/* Rebuild after the Timers_Pop stack index correction. */

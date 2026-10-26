@@ -31,14 +31,70 @@
 typedef struct {
     int active;
     int end_reached;
-    unsigned long pending_advance;
     smk smk_file;
     unsigned long frame_index;
     unsigned long start_tick;
+    int audio_open;
+    int audio_on;
+    void* buffer; /* destination registered by SmackToBuffer, refilled by SmackDoFrame */
+    unsigned int buffer_x, buffer_y, buffer_pitch, buffer_height;
 } smack_internal;
 
 static struct _SMACK gSmacks[SMACK_MAX_HANDLES];
 static smack_internal gSmackInternals[SMACK_MAX_HANDLES];
+static SmackAudioSink gSmack_audio_sink;
+
+void SmackSetAudioSink(const SmackAudioSink* sink) {
+    if (sink != NULL) {
+        gSmack_audio_sink = *sink;
+    } else {
+        memset(&gSmack_audio_sink, 0, sizeof(gSmack_audio_sink));
+    }
+}
+
+/* Queue the audio decoded with the current frame (track 0, the only one the game's videos use). */
+static void smack_push_audio(smack_internal* si) {
+    const unsigned char* pcm;
+    unsigned long size;
+
+    if (!si->audio_open || !si->audio_on || gSmack_audio_sink.push == NULL) {
+        return;
+    }
+    pcm = smk_get_audio(si->smk_file, 0);
+    size = smk_get_audio_size(si->smk_file, 0);
+    if (pcm != NULL && size != 0) {
+        gSmack_audio_sink.push(pcm, size);
+    }
+}
+
+/* Copy the decoded frame into the buffer registered by SmackToBuffer (uX/uY are the destination
+ * offset, as with RAD's). The game's buffer is 320x200 and the intro is 320x192, so the copy is
+ * bounded by both sizes. */
+static void smack_copy_frame(struct _SMACK* handle, smack_internal* si) {
+    const unsigned char* src;
+    unsigned char* dst;
+    unsigned int row, rows, copy_width;
+
+    if (si->buffer == NULL) {
+        return;
+    }
+    src = smk_get_video(si->smk_file);
+    if (src == NULL || si->buffer_x >= si->buffer_pitch || si->buffer_y >= si->buffer_height) {
+        return;
+    }
+    copy_width = handle->Width;
+    if (copy_width > si->buffer_pitch - si->buffer_x) {
+        copy_width = si->buffer_pitch - si->buffer_x;
+    }
+    rows = handle->Height;
+    if (rows > si->buffer_height - si->buffer_y) {
+        rows = si->buffer_height - si->buffer_y;
+    }
+    dst = (unsigned char*)si->buffer + si->buffer_y * si->buffer_pitch + si->buffer_x;
+    for (row = 0; row < rows; row++) {
+        memcpy(dst + row * si->buffer_pitch, src + row * handle->Width, copy_width);
+    }
+}
 
 static unsigned long smack_ticks(void) {
 #ifdef _WIN32
@@ -71,6 +127,8 @@ static smack_internal* smack_internal_from_handle(HSMACK handle) {
 static void smack_sync_frame(struct _SMACK* handle, smack_internal* si) {
     const unsigned char* pal;
 
+    /* like RAD's, NewPalette describes the current frame: set only when its palette changed */
+    handle->NewPalette = 0;
     pal = smk_get_palette(si->smk_file);
     if (pal != NULL && memcmp(handle->Palette, pal, 768) != 0) {
         memcpy(handle->Palette, pal, 768);
@@ -105,6 +163,9 @@ HSMACK SMACK_STDCALL SmackOpen(const char* path, unsigned int uFlags, unsigned i
     smack_internal* si;
     struct _SMACK* handle;
     int i;
+    unsigned char track_mask, channels[7], bitdepth[7];
+    unsigned long audio_rate[7];
+    int has_audio;
 
     (void)uExtraBuffers;
     f = fopen(path, "rb");
@@ -112,15 +173,20 @@ HSMACK SMACK_STDCALL SmackOpen(const char* path, unsigned int uFlags, unsigned i
         return NULL;
     }
     /* NOTE: libsmacker takes ownership of the FILE*; smk_close() closes it
-     * (immediately in memory mode, on close in disk mode). */
-    mode = (uFlags & SMACKPRELOADALL) ? SMK_MODE_MEMORY : SMK_MODE_DISK;
+     * (immediately in memory mode, on close in disk mode).
+     * Always stream from disk: SMACKPRELOADALL would read the whole video (38 MB for the intro)
+     * before the first frame, a long black pause on slow storage (the Vita memory card). */
+    mode = SMK_MODE_DISK;
     s = smk_open_filepointer(f, mode);
     if (s == NULL) {
         return NULL;
     }
 
-    /* Video only for now: audio playback is not wired up yet. */
-    smk_enable_all(s, SMK_VIDEO_TRACK);
+    has_audio = (uFlags & SMACKTRACKS) && gSmack_audio_sink.open != NULL
+        && smk_info_audio(s, &track_mask, channels, bitdepth, audio_rate) >= 0
+        && (track_mask & SMK_AUDIO_TRACK_0) && channels[0] != 0 && audio_rate[0] != 0
+        && (bitdepth[0] == 8 || bitdepth[0] == 16);
+    smk_enable_all(s, SMK_VIDEO_TRACK | (has_audio ? SMK_AUDIO_TRACK_0 : 0));
 
     for (i = 0; i < SMACK_MAX_HANDLES; i++) {
         if (!gSmackInternals[i].active) {
@@ -137,16 +203,18 @@ HSMACK SMACK_STDCALL SmackOpen(const char* path, unsigned int uFlags, unsigned i
     frame_count = 0;
     us_per_frame = 0.0;
     frame_number = 0;
-    if (!smk_info_all(s, &frame_number, &frame_count, &us_per_frame)) {
+    /* libsmacker returns 0 on success and -1 on error (smk_first/smk_next: SMK_MORE, SMK_LAST,
+     * SMK_DONE or SMK_ERROR) */
+    if (smk_info_all(s, &frame_number, &frame_count, &us_per_frame) < 0) {
         smk_close(s);
         return NULL;
     }
-    if (!smk_info_video(s, &width, &height, NULL)) {
+    if (smk_info_video(s, &width, &height, NULL) < 0) {
         smk_close(s);
         return NULL;
     }
     /* Unpack the first frame so ToBuffer has data immediately. */
-    if (!smk_first(s)) {
+    if (smk_first(s) < 0) {
         smk_close(s);
         return NULL;
     }
@@ -157,6 +225,11 @@ HSMACK SMACK_STDCALL SmackOpen(const char* path, unsigned int uFlags, unsigned i
     si->smk_file = s;
     si->frame_index = 0;
     si->start_tick = smack_ticks();
+    if (has_audio && gSmack_audio_sink.open(channels[0], bitdepth[0], audio_rate[0])) {
+        si->audio_open = 1;
+        si->audio_on = 1;
+        smack_push_audio(si);
+    }
 
     handle = &gSmacks[i];
     memset(handle, 0, sizeof(*handle));
@@ -183,6 +256,9 @@ void SMACK_STDCALL SmackClose(HSMACK handle) {
     if (si == NULL) {
         return;
     }
+    if (si->audio_open && gSmack_audio_sink.close != NULL) {
+        gSmack_audio_sink.close();
+    }
     smk_close(si->smk_file);
     si->active = 0;
     si->smk_file = NULL;
@@ -195,25 +271,29 @@ unsigned int SMACK_STDCALL SmackDoFrame(HSMACK handle) {
     if (si == NULL) {
         return 0;
     }
-    if (si->pending_advance) {
-        if (smk_next(si->smk_file)) {
-            si->frame_index++;
-            si->pending_advance = 0;
-            handle->FrameNum = (unsigned int)si->frame_index;
-            smack_sync_frame(handle, si);
-        } else {
-            si->end_reached = 1;
-        }
-    }
+    /* RAD decompresses the current frame into the buffer given to SmackToBuffer; the game's
+     * 16-bit path relies on that and calls SmackToBuffer only once. */
+    smack_copy_frame(handle, si);
     return 0;
 }
 
 void SMACK_STDCALL SmackNextFrame(HSMACK handle) {
     smack_internal* si;
+    char r;
 
     si = smack_internal_from_handle(handle);
-    if (si != NULL) {
-        si->pending_advance = 1;
+    if (si == NULL || si->end_reached) {
+        return;
+    }
+    /* decode the next frame now, so its NewPalette is known before the next SmackDoFrame */
+    r = smk_next(si->smk_file);
+    if (r == SMK_MORE || r == SMK_LAST) {
+        si->frame_index++;
+        handle->FrameNum = (unsigned int)si->frame_index;
+        smack_sync_frame(handle, si);
+        smack_push_audio(si);
+    } else {
+        si->end_reached = 1;
     }
 }
 
@@ -227,7 +307,7 @@ unsigned int SMACK_STDCALL SmackWait(HSMACK handle) {
         return 0;
     }
     now = smack_ticks();
-    due = si->start_tick + (si->frame_index + 1) * handle->MSPerFrame;
+    due = si->start_tick + si->frame_index * handle->MSPerFrame;
     if (now >= due) {
         return 0;
     }
@@ -241,7 +321,7 @@ int SMACK_STDCALL SmackGoto(HSMACK handle, long frame) {
     if (si == NULL) {
         return -1;
     }
-    if (!smk_seek_keyframe(si->smk_file, (unsigned long)frame)) {
+    if (smk_seek_keyframe(si->smk_file, (unsigned long)frame) < 0) {
         return -1;
     }
     si->frame_index = (unsigned long)frame;
@@ -253,30 +333,18 @@ int SMACK_STDCALL SmackGoto(HSMACK handle, long frame) {
 
 void SMACK_STDCALL SmackToBuffer(HSMACK handle, unsigned int uX, unsigned int uY, unsigned int uPitch, unsigned int uHeight, void* pBuffer, unsigned int uFlags) {
     smack_internal* si;
-    const unsigned char* src;
-    unsigned char* dst;
-    unsigned int row;
-    unsigned int width;
-    unsigned int copy_width;
 
     (void)uFlags;
     si = smack_internal_from_handle(handle);
     if (si == NULL || pBuffer == NULL || handle->Width == 0) {
         return;
     }
-    src = smk_get_video(si->smk_file);
-    if (src == NULL) {
-        return;
-    }
-    width = handle->Width;
-    copy_width = width - uX;
-    if (copy_width > width) {
-        return;
-    }
-    dst = (unsigned char*)pBuffer;
-    for (row = 0; row < uHeight; row++) {
-        memcpy(dst + row * uPitch, src + (uY + row) * width + uX, copy_width);
-    }
+    si->buffer = pBuffer;
+    si->buffer_x = uX;
+    si->buffer_y = uY;
+    si->buffer_pitch = uPitch;
+    si->buffer_height = uHeight;
+    smack_copy_frame(handle, si);
 }
 
 unsigned int SMACK_STDCALL SmackToBufferRect(HSMACK handle, unsigned int uSmackSurface) {
@@ -362,8 +430,7 @@ unsigned int SMACK_STDCALL SmackSoundOnOff(HSMACK handle, unsigned int bOn) {
     if (si == NULL) {
         return 0;
     }
-    /* Enable/disable audio tracks once audio playback exists. */
-    smk_enable_audio(si->smk_file, 0, bOn ? 1 : 0);
+    si->audio_on = bOn != 0;
     return bOn;
 }
 

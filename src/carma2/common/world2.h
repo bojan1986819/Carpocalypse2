@@ -14,6 +14,8 @@ extern void C2_HOOK_FASTCALL CancelificateClipulatingPlaneyThings(void);
 
 extern void C2_HOOK_FASTCALL FixificateClipulatingPlaneyThings(void);
 
+extern int C2_HOOK_FASTCALL FUN_004e5f10(int pRed, tU32 pGreen, tU32 pBlue);
+
 extern void C2_HOOK_FASTCALL ProcessModelFaceMaterials(br_model* pModel, tPMFMCB* pCallback);
 
 extern void C2_HOOK_FASTCALL ProcessModelFaceMaterials2(br_model* pModel, material_cbfn* pCallback);
@@ -42,9 +44,19 @@ extern int C2_HOOK_FASTCALL HasThisSuffix(const char* pIdent, const char* pSuffi
 
 extern br_material* C2_HOOK_FASTCALL UnsuffixedMaterial(const char* pOld_ident, const char* pSuffix);
 
+extern br_material* C2_HOOK_FASTCALL WallLinearToUntex(br_model* pModel, tU16 pFace);
+
+extern int C2_HOOK_FASTCALL FUN_00447ef0(br_model* pModel, tU16 pIndex);
+
 extern br_material* C2_HOOK_FASTCALL RoadUntexToPersp(br_model* pModel, tU16 pFace);
 
+extern br_material* C2_HOOK_FASTCALL WallPerspToLinear(br_model* pModel, tU16 pFace);
+
 extern br_material* C2_HOOK_FASTCALL WallUntexToPersp(br_model* pModel, tU16 pFace);
+
+extern br_material* C2_HOOK_FASTCALL WallPerspToUntex(br_model* pModel, tU16 pFace);
+
+extern br_material* C2_HOOK_FASTCALL WallUntexToLinear(br_model* pModel, tU16 pFace);
 
 extern br_material* C2_HOOK_FASTCALL WallLinearToPersp(br_model* pModel, tU16 pFace);
 
@@ -52,9 +64,13 @@ extern tRoad_texturing_level C2_HOOK_FASTCALL GetRoadTexturingLevel(void);
 
 extern void C2_HOOK_FASTCALL SetRoadTexturingLevel(tRoad_texturing_level pLevel);
 
+extern void C2_HOOK_FASTCALL FUN_00448790(tRoad_texturing_level pLevel);
+
 // GetWallTexturingLevel
 
 extern void C2_HOOK_FASTCALL SetWallTexturingLevel(tWall_texturing_level pLevel);
+
+extern void C2_HOOK_FASTCALL ReallySetWallTexturingLevel(tWall_texturing_level pLevel);
 
 extern br_material* C2_HOOK_FASTCALL DisposeSuffixedMaterials(br_model* pModel, tU16 pFace);
 
@@ -67,6 +83,8 @@ extern void C2_HOOK_FASTCALL SetAccessoryRendering(int pOn);
 extern int C2_HOOK_FASTCALL GetAccessoryRendering(void);
 
 extern void C2_HOOK_FASTCALL SetCarSimplificationLevel(int pLevel);
+
+extern void C2_HOOK_FASTCALL ToggleTrackRenderStyle(void);
 
 // GetCarSimplificationLevel
 

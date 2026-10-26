@@ -1,3 +1,6 @@
+#ifndef CARPOCALYPSE2_MATCHING
+#include "loadprof.h"
+#endif
 #include "interface.h"
 
 #include "drmem.h"
@@ -34,7 +37,10 @@
 #include "carpocalypse2_types.h"
 
 #include "c2_string.h"
+#include "c2_stdio.h"
+#include "c2_stdlib.h"
 #include <ctype.h>
+#include <math.h>
 extern void C2_HOOK_FASTCALL DisplayJoystickSettings(tFrontend_spec *pFrontend);
 extern int C2_HOOK_FASTCALL NetInitialise(void);
 extern void C2_HOOK_FASTCALL AboutToLoadFirstCar(void);
@@ -124,6 +130,9 @@ br_material* gFrontend_backdrop_materials[3];
 br_actor* gFrontend_backdrop_actors[3];
 extern tFrontend_spec gFrontend_LOAD_GAME;
 extern tFrontend_spec gFrontend_CONTROLS;
+#ifdef __vita__
+extern int gC2_vita_controls_screen;
+#endif
 extern int gNet_mode;
 extern int gPending_race;
 extern int gStart_race_sent;
@@ -141,6 +150,8 @@ extern int gKey_poll_counter;
 extern int gTyping_slot;
 extern int gKey_map_index;
 extern int gKey_mapping[77];
+extern int gOrig_key_map_index;
+extern int gBackup_key_mappings[4][77];
 extern tSave_game* gSaved_games;
 extern int gINT_0068b8e4;
 extern int gINT_0068b8e8;
@@ -177,6 +188,11 @@ br_pixelmap* gFrontend_images[100];
 
 // GLOBAL: CARMA2_HW 0x00687248
 tFrontend_brender_item gFrontend_brender_items[100]; /* FIXME: parametrize size + index of last item */
+#ifndef CARPOCALYPSE2_MATCHING
+/* port: car/driver picture items. They share the button material, whose 50% opacity (meant for
+ * glow highlights) left the pictures washed out over the dark panel; draw them fully opaque. */
+static tU8 gC2_opaque_frontend_items[CARPOCALYPSE2_ASIZE(gFrontend_brender_items)];
+#endif
 
 // GLOBAL: CARMA2_HW 0x00688770
 int gFrontend_selected_item_index;
@@ -555,6 +571,101 @@ int C2_HOOK_FASTCALL temp(tFrontend_spec* pFrontend) {
     return 0;
 }
 
+// GLOBAL: CARMA2_HW 0x0058a050
+const double gDouble_0058a050 = 0.523470938205719;
+
+// GLOBAL: CARMA2_HW 0x0058a058
+const double gDouble_0058a058 = 1.2;
+
+// GLOBAL: CARMA2_HW 0x0058a060
+const double gDouble_0058a060 = 0.1;
+
+// GLOBAL: CARMA2_HW 0x0058a068
+const double gDouble_0058a068 = 0.577;
+
+// C2PORT-NONMATCHING: best 79.26% | difftest PASS 2000 trials (spec difftest/specs/00466460_FUN_00466460.json) | reason x87-order-stack-layout
+// FUNCTION: CARMA2_HW 0x00466460
+void C2_HOOK_FASTCALL FUN_00466460(br_actor* pActor, int pX, int pY) {
+    float local_18[6];
+    float width;
+    float height;
+    float depth;
+    br_actor* world;
+    br_actor* camera_actor;
+    br_actor* light_actor;
+    br_pixelmap* pixelmap;
+    volatile float extent;
+    float distance_f;
+    volatile float camera_y;
+    double distance;
+
+    if (pActor == NULL) {
+        return;
+    }
+    BrActorToBounds((br_bounds*)local_18, pActor);
+    width = local_18[3] - local_18[0];
+    height = local_18[4] - local_18[1];
+    depth = local_18[5] - local_18[2];
+    BrMatrix34PostRotateY(&pActor->t.t.mat, 0x71c);
+
+    world = BrActorAllocate(BR_ACTOR_NONE, NULL);
+    camera_actor = BrActorAllocate(BR_ACTOR_CAMERA, NULL);
+    light_actor = BrActorAllocate(BR_ACTOR_LIGHT, NULL);
+
+    ((br_camera*)camera_actor->type_data)->type = BR_CAMERA_PERSPECTIVE_FOV_OLD;
+    ((br_camera*)camera_actor->type_data)->field_of_view = 0x1554;
+    ((br_camera*)camera_actor->type_data)->hither_z = 0.1f;
+    ((br_camera*)camera_actor->type_data)->yon_z = gCamera_yon;
+    ((br_light*)light_actor->type_data)->type = BR_LIGHT_DIRECT;
+
+    BrMatrix34PostRotateX(&light_actor->t.t.mat, 0xfc72);
+    BrMatrix34PostRotateY(&light_actor->t.t.mat, 0xc004);
+
+    ((br_light*)light_actor->type_data)->colour = 0xffffff;
+    ((br_light*)light_actor->type_data)->attenuation_c = 0.5f;
+
+    if (width > height) {
+        if (width > depth) {
+            extent = width;
+        } else {
+            extent = depth;
+        }
+    } else {
+        if (depth >= height) {
+            extent = depth;
+        } else {
+            extent = height;
+        }
+    }
+    distance = (extent / (sin(gDouble_0058a050) / cos(gDouble_0058a050))) * gDouble_0058a058;
+    distance_f = (float)distance;
+    if (distance_f <= gDouble_0058a060) {
+        distance = gDouble_0058a060;
+    } else {
+        distance = distance_f;
+    }
+    camera_y = (float)(distance * gDouble_0058a068);
+    BrMatrix34Translate(&camera_actor->t.t.mat, 0.f, camera_y, (float)distance);
+    BrMatrix34PreRotateX(&camera_actor->t.t.mat, 0xeaac);
+
+    BrActorAdd(world, camera_actor);
+    BrActorAdd(world, light_actor);
+    BrLightEnable(light_actor);
+
+    pixelmap = BrPixelmapAllocateSub(gBack_screen, pX + 0x14, pY + 0x5a, 100, 0x3c);
+    BrPixelmapFill(gDepth_buffer, (br_colour)-1);
+    BrPixelmapFill(pixelmap, 0);
+    BrZbsSceneRenderBegin(world, camera_actor, pixelmap, gDepth_buffer);
+    BrZbsSceneRenderAdd(pActor);
+    BrZbsSceneRenderEnd();
+
+    BrActorRemove(camera_actor);
+    BrActorFree(camera_actor);
+    BrActorRemove(light_actor);
+    BrActorFree(light_actor);
+    BrActorFree(world);
+}
+
 // int C2_HOOK_FASTCALL GetItemAtMousePos(tFrontend_spec *pFrontend, int pX, int pY); // Moved for inlining purposes
 
 // FUNCTION: CARMA2_HW 0x00466ce0
@@ -827,6 +938,22 @@ void C2_HOOK_FASTCALL DefaultInfunc(tFrontend_spec* pFrontend) {
 
 // FindNextActiveItem
 
+// FUNCTION: CARMA2_HW 0x00466b60
+int C2_HOOK_FASTCALL FUN_00466b60(tFrontend_spec* pFrontend) {
+    if (pFrontend->loaded == 0) {
+        LoadMenuSettings(pFrontend);
+        FuckWithWidths(pFrontend);
+        if (pFrontend->previous != NULL) {
+            pFrontend->previous->isPreviousSomeOtherMenu = 1;
+        }
+    }
+    gFrontend_scrollbars_updated = 0;
+    EdgeTriggerModeOff();
+    WaitForNoKeys();
+    EdgeTriggerModeOn();
+    return 1;
+}
+
 // FUNCTION: CARMA2_HW 0x00467a30
 int C2_HOOK_FASTCALL FindPrevActiveItem(tFrontend_spec* pFrontend, int pStart_index) {
     int i;
@@ -853,9 +980,10 @@ int C2_HOOK_FASTCALL FuckingMakeTheFuckingRaceAndGroupsDisplayHaveTheRightCuntin
     race_index = gProgram_state.current_race_index;
     if (!gIs_boundary_race && !gProgram_state.game_completed) {
         pFrontend->items[7].enabled = -1;
-    } else {
-        pFrontend->items[7].enabled = 1;
+        sub_576c00(race_index, 4);
+        return 0;
     }
+    pFrontend->items[7].enabled = 1;
     sub_576c00(race_index, 4);
     return 0;
 }
@@ -1137,6 +1265,14 @@ int C2_HOOK_FASTCALL FRONTEND_CreateMenu(tFrontend_spec* pFrontend_spec) {
     count_items = pFrontend_spec->count_items;
     if (name != NULL && strlen(name) != 0) {
         if (!gFrontend_remove_current_backdrop) {
+#if defined(CARPOCALYPSE2_FIX_BUGS)
+            /* the backdrop is kept alive across menu exits (see FrontEndProcessMenus); replace it */
+            if (gFrontend_backdrop != NULL) {
+                BrMapRemove(gFrontend_backdrop);
+                BrPixelmapFree(gFrontend_backdrop);
+                gFrontend_backdrop = NULL;
+            }
+#endif
 
             PathCat(s2, gApplication_path, "INTRFACE");
             PathCat(s2, s2, "BACKDROP");
@@ -1226,6 +1362,9 @@ int C2_HOOK_FASTCALL FRONTEND_CreateMenu(tFrontend_spec* pFrontend_spec) {
 
 // FUNCTION: CARMA2_HW 0x0046ccb0
 int C2_HOOK_FASTCALL FRONTEND_DestroyMenu(tFrontend_spec* pFrontend) {
+#ifndef CARPOCALYPSE2_MATCHING
+    memset(gC2_opaque_frontend_items, 0, sizeof(gC2_opaque_frontend_items));
+#endif
     char s[256];
     tS8 i;
     const char* backdrop = "Backdrop";
@@ -1557,6 +1696,16 @@ int C2_HOOK_FASTCALL LoadGameScrollUp(tFrontend_spec* pFrontend) {
     return 0;
 }
 
+// FUNCTION: CARMA2_HW 0x0046fb80
+int C2_HOOK_FASTCALL LoadGameScrollDownLoadGameScrollDown(tFrontend_spec* pFrontend) {
+
+    if (gFrontend_load_game_index_top + 8 < gFrontend_count_saved_games && gFrontend_scroll_time_left == 0) {
+        gFrontend_load_game_index_top += 1;
+        DRS3StartSound(gEffects_outlet, eSoundId_LeftButton);
+        gFrontend_scroll_time_left += gFrontend_scroll_time_increment;
+    }
+    return 0;
+}
 // FUNCTION: CARMA2_HW 0x0046fbd0
 int C2_HOOK_FASTCALL LoadSlot1(tFrontend_spec* pFrontend) {
 
@@ -2108,6 +2257,7 @@ int C2_HOOK_FASTCALL Controls_JoystickToggle(tFrontend_spec* pFrontend) {
 }
 
 
+// C2PORT-NONMATCHING: best 48.9% | difftest PASS 2000 trials (spec 00472210_DisplayJoystickSettings.json) | reason behavior matches; remaining diff is compiler register allocation and branch layout
 // FUNCTION: CARMA2_HW 0x00472210
 void C2_HOOK_FASTCALL DisplayJoystickSettings(tFrontend_spec *pFrontend) {
 
@@ -2184,6 +2334,10 @@ void C2_HOOK_FASTCALL DisplayJoystickSettings(tFrontend_spec *pFrontend) {
 /* ==== REAL frontend flow ported from common/ ==== */
 
 void C2_HOOK_FASTCALL LoadMenuImages(void) {
+
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("frontend-images");
+#endif
     int i;
     char s[256];
     char s2[256];
@@ -2212,6 +2366,9 @@ void C2_HOOK_FASTCALL LoadMenuImages(void) {
 
 #if defined(CARPOCALYPSE2_FIX_BUGS)
     PFfclose(f);
+#endif
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
 #endif
 }
 
@@ -2297,6 +2454,10 @@ static void C2_HOOK_FASTCALL LoadMenuModels(void) {
 // FUNCTION: CARMA2_HW 0x0046d1c0
 void C2_HOOK_FASTCALL FRONTEND_Setup(tFrontendMenuType pType) {
 
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadBegin("frontend");
+#endif
+
     PrintMemoryDump(0, "START OF FRONTEND_Setup");
     LoadInterfaceStuff(gProgram_state.racing);
     if (gFrontend_stuff_not_loaded) {
@@ -2305,7 +2466,13 @@ void C2_HOOK_FASTCALL FRONTEND_Setup(tFrontendMenuType pType) {
         LoadMenuImages();
         PrintMemoryDump(0, "AFTER LoadMenuImages");
         FRONTEND_Setup2D();
-        LoadMenuModels();
+#ifndef CARPOCALYPSE2_MATCHING
+        C2LoadBegin("LoadMenuModels");
+#endif
+    LoadMenuModels();
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
         PrintMemoryDump(0, "AFTER LoadMenuModels");
         gFrontend_stuff_not_loaded = 0;
     }
@@ -2339,6 +2506,15 @@ void C2_HOOK_FASTCALL FRONTEND_Setup(tFrontendMenuType pType) {
         gCurrent_frontend_spec = &gFrontend_NEWGAME;
         break;
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    /* Test harness: C2_TEST_MENU=Graphics opens the Graphics options instead of the main menu
+     * (the C2_TEST_KEYS timing is too loose to navigate there reliably). */
+    if (pType == kFrontend_menu_main && getenv("C2_TEST_MENU") != NULL && DRStricmp(getenv("C2_TEST_MENU"), "Graphics") == 0) {
+        extern tFrontend_spec gFrontend_GRAPHICS;
+        FRONTEND_CreateMenu(&gFrontend_GRAPHICS);
+        gCurrent_frontend_spec = &gFrontend_GRAPHICS;
+    }
+#endif
     PrintMemoryDump(0, "AFTER FRONTEND_CreateMenu");
 
     gCurrent_frontend_spec->previous = NULL;
@@ -2353,6 +2529,9 @@ void C2_HOOK_FASTCALL FRONTEND_Setup(tFrontendMenuType pType) {
     gFrontend_backdrop2_opacity_mode = gCurrent_frontend_spec->model_C_index != 0 ? 1 : -1;
     gFrontend_interpolate_steps_left = COUNT_FRONTEND_INTERPOLATE_STEPS;
     PrintMemoryDump(0, "END OF FRONTEND_Setup");
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LoadEnd();
+#endif
 }
 
 void C2_HOOK_FASTCALL FrontendRedrawMenu(void) {
@@ -2521,10 +2700,17 @@ int C2_HOOK_FASTCALL FrontEndProcessMenus(tFrontendMenuType pFrontendType) {
         }
         if (gCurrent_frontend_spec->unknownLastInt != 0) {
             FRONTEND_DestroyMenu(gCurrent_frontend_spec);
+#if defined(CARPOCALYPSE2_FIX_BUGS)
+            /* Retail frees the backdrop here but keeps the pointer: the next menus (race results have
+             * no backdrop of their own) redraw the freed image, which on Windows still holds the old
+             * picture, and the next setup frees it again. That crashed the Vita port (00.24). Keep it
+             * alive instead; it is freed when the next menu replaces it, so the screens look the same. */
+#else
             if (gFrontend_backdrop != NULL) {
                 BrMapRemove(gFrontend_backdrop);
                 BrPixelmapFree(gFrontend_backdrop);
             }
+#endif
             DisposeInterfaceFonts();
             return gCurrent_frontend_spec->unknownLastInt != 2;
         }
@@ -2694,28 +2880,26 @@ int C2_HOOK_FASTCALL FRONTEND_GenericMenuHandler(tFrontend_spec* pFrontend) {
 
 // FUNCTION: CARMA2_HW 0x00471ba0
 int C2_HOOK_FASTCALL Ians_GetItemAtMousePos(tFrontend_spec* pFrontend, int pX, int pY) {
-    tFrontend_slider* slider;
-    br_vertex* vertices;
-    tFrontend_item_spec* item;
-    tFrontend_brender_item* brender_item;
     int i;
+    tFrontend_slider* slider;
 
-    item = gCurrent_frontend_spec->items;
-    brender_item = gFrontend_brender_items;
-    for (i = 0; i < pFrontend->count_items; i++, brender_item++, item++) {
-        vertices = brender_item->model->vertices;
-        if (pX >= vertices[1].p.v[0] && pX <= vertices[3].p.v[0]
-                && pY >= -vertices[0].p.v[1] && pY <= -vertices[1].p.v[1]
+    for (i = 0; i < pFrontend->count_items; i++) {
+        tFrontend_item_spec* item = &pFrontend->items[i];
+        br_model* model = gFrontend_brender_items[i].model;
+        if (pX >= model->vertices[1].p.v[0] && pX <= model->vertices[3].p.v[0]
+                && pY >= -model->vertices[0].p.v[1] && pY <= -model->vertices[1].p.v[1]
                 && item->visible
-                && item->enabled >= 1) {
+                && item->enabled > 0) {
+
             return i;
         }
     }
     for (slider = gCurrent_frontend_scrollbars; slider != NULL; slider = slider->next) {
         for (i = 0; i < 3; i++) {
-            vertices = gFrontend_brender_items[slider->itemid_start + i].model->vertices;
-            if (pX >= vertices[1].p.v[0] && pX <= vertices[3].p.v[0]
-                    && pY >= -vertices[0].p.v[1] && pY <= -vertices[1].p.v[1]) {
+            br_model* model = gFrontend_brender_items[slider->itemid_start + i].model;
+            if (pX >= model->vertices[1].p.v[0] && pX <= model->vertices[3].p.v[0]
+                    && pY >= -model->vertices[0].p.v[1] && pY <= -model->vertices[1].p.v[1]) {
+
                 return slider->itemid_start + i;
             }
         }
@@ -2729,12 +2913,13 @@ tFrontend_slider* C2_HOOK_FASTCALL GetAnyActiveSlider(void) {
     tFrontend_slider* slider;
 
     for (slider = gCurrent_frontend_scrollbars; slider != NULL; slider = slider->next) {
-        if (gFrontend_selected_item_index >= slider->itemid_left_reference
-                && gFrontend_selected_item_index < slider->itemid_left_reference + 3) {
+
+        if (gFrontend_selected_item_index >= slider->itemid_left_reference && gFrontend_selected_item_index <= slider->itemid_left_reference + 2) {
+
             return slider;
         }
-        if (gFrontend_selected_item_index >= slider->itemid_start
-                && gFrontend_selected_item_index < slider->itemid_start + 3) {
+        if (gFrontend_selected_item_index >= slider->itemid_start && gFrontend_selected_item_index <= slider->itemid_start + 2) {
+
             return slider;
         }
     }
@@ -2800,20 +2985,11 @@ void C2_HOOK_FASTCALL RefreshScrollSet(tFrontend_spec* pFrontend) {
 
     for (i = 0; i < gControls_scroller.range_length; i++) {
 
-        strcpy(pFrontend->items[43 + i].text, GetMiscString(i + 140 + gControls_scroller.field_0x8));
+        strcpy(pFrontend->items[43 + i].text, GetMiscString(140 + gControls_scroller.field_0x8 + i));
         strcpy(pFrontend->items[53 + i].text, gKey_names[gKey_mapping[gControls_frontend_to_key_mapping_lut[i + gControls_scroller.field_0x8]] + 2]);
     }
-    if (gControls_scroller.field_0x8) {
-        pFrontend->items[63].visible = 1;
-    } else {
-        pFrontend->items[63].visible = 0;
-    }
-    if (gControls_scroller.field_0x8 == gControls_scroller.field_0x0 - gControls_scroller.range_length) {
-        pFrontend->items[64].visible = 0;
-    } else {
-        pFrontend->items[64].visible = 1;
-    }
-
+    pFrontend->items[63].visible = gControls_scroller.field_0x8 != 0;
+    pFrontend->items[64].visible = gControls_scroller.field_0x8 != gControls_scroller.field_0x0 - gControls_scroller.range_length;
     FuckWithWidths(pFrontend);
 }
 #pragma auto_inline(on)
@@ -3179,6 +3355,14 @@ int C2_HOOK_FASTCALL Generic_MenuHandler(tFrontend_spec* pFrontend) {
         ResetInterfaceTimeout();
     }
     EdgeTriggerModeOn();
+#ifdef __vita__
+    if (gC2_vita_controls_screen) {
+        if (PDKeyDown(51) || PDKeyDown(52) || PDKeyDown(63)) {
+            gC2_vita_controls_screen = 0;
+        }
+        return 0;
+    }
+#endif
     selected_item = gFrontend_selected_item_index;
     if (gINT_00688444) {
         int mouse_y;
@@ -3504,6 +3688,52 @@ void C2_HOOK_FASTCALL Generic_UnMungeActiveItems(tFrontend_spec* pFrontend) {
     gCount_connected_items_indices = 0;
 }
 
+#ifdef __vita__
+/* port: the PC Controls menu edits keyboard/joystick bindings, which mean nothing on the Vita.
+ * Options > Controls shows this button reference instead, drawn over the Options backdrop. */
+int gC2_vita_controls_screen;
+
+int C2_HOOK_FASTCALL C2VitaShowControls(tFrontend_spec* pFrontend) {
+    gC2_vita_controls_screen = 1;
+    return 4; /* stay in the Options menu */
+}
+
+static void C2VitaDrawControls(void) {
+    static const char* const lines[][2] = {
+        { "Left stick",              "Steer" },
+        { "R  /  L",                 "Accelerate  /  Brake, reverse" },
+        { "Cross",                   "Handbrake" },
+        { "Square",                  "Repair" },
+        { "Circle",                  "Recover car" },
+        { "Triangle",                "Change camera" },
+        { "Right stick",             "Look around" },
+        { "D-pad up",                "Use power-up" },
+        { "D-pad down",              "Next power-up" },
+        { "D-pad left / right",      "Steer" },
+        { "Select",                  "Map" },
+        { "Select + Square",         "Buy armour" },
+        { "Select + Triangle",       "Buy power" },
+        { "Select + Circle",         "Buy offense" },
+        { "Start",                   "Pause menu" },
+        { "Cross (race over)",       "Skip the results" },
+    };
+    int i, y, line_height;
+
+    SolidPolyFontText("PS Vita controls", 320, 40, kPolyfont_hand_red_15pt_lit, eJust_centre, 1);
+    line_height = PolyFontHeight(kPolyfont_hand_green_15pt_lit) + 4;
+    y = 80;
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(lines); i++) {
+        SolidPolyFontText(lines[i][0], 70, y, kPolyfont_hand_red_15pt_lit, eJust_left, 1);
+        SolidPolyFontText(lines[i][1], 290, y, kPolyfont_hand_green_15pt_lit, eJust_left, 1);
+        y += line_height;
+    }
+    SolidPolyFontText("Menus: D-pad to move, Cross to select, Circle to go back", 320, y + 8,
+        kPolyfont_hand_green_10pt_lit, eJust_centre, 1);
+    SolidPolyFontText("Press Cross or Circle to close", 320, y + 8 + PolyFontHeight(kPolyfont_hand_green_10pt_lit) + 4,
+        kPolyfont_hand_green_10pt_lit, eJust_centre, 1);
+}
+#endif
+
 // FUNCTION: CARMA2_HW 0x0046e020
 
 void C2_HOOK_FASTCALL FRONTEND_DrawMenu(tFrontend_spec* pFrontend) {
@@ -3513,6 +3743,15 @@ void C2_HOOK_FASTCALL FRONTEND_DrawMenu(tFrontend_spec* pFrontend) {
     if (gFrontend_leave_current_menu || pFrontend->count_items <= 0) {
         return;
     }
+#ifdef __vita__
+    if (gC2_vita_controls_screen) {
+        for (i = 0; i < gFrontend_count_brender_items; i++) {
+            gFrontend_brender_items[i].actor->render_style = BR_RSTYLE_NONE;
+        }
+        C2VitaDrawControls();
+        return;
+    }
+#endif
     gCount_connected_items_indices = 0;
     if (gFrontend_selected_item_index != -1) {
         tConnected_items* connected_items = gConnected_items;
@@ -3598,6 +3837,14 @@ void C2_HOOK_FASTCALL FRONTEND_DrawMenu(tFrontend_spec* pFrontend) {
             }
         }
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    for (i = 0; i < gFrontend_count_brender_items; i++) {
+        if (gC2_opaque_frontend_items[i] && gFrontend_brender_items[i].prims[1].v.x != BR_FIXED_INT(255)) {
+            gFrontend_brender_items[i].prims[1].v.x = BR_FIXED_INT(255);
+            BrMaterialUpdate(gFrontend_brender_items[i].material, BR_MATU_EXTRA_PRIM);
+        }
+    }
+#endif
     FRONTEND_PingPongFlash();
     PossibleService();
     for (i = 0; i < gCount_connected_items_indices; i++) {
@@ -3647,8 +3894,44 @@ void C2_HOOK_FASTCALL MenuSetCarImage(int pCar_index, int pBrender_index) {
         BrPixelmapCopy(gFrontend_brender_items[pBrender_index + i].field_0x10, gFrontend_brender_items[pBrender_index + i].field_0xc);
         BrMapUpdate(gFrontend_brender_items[pBrender_index + i].field_0xc, BR_MAPU_ALL);
         BrMaterialUpdate(gFrontend_brender_items[pBrender_index + i].material, BR_MATU_COLOURMAP);
+#ifndef CARPOCALYPSE2_MATCHING
+        gC2_opaque_frontend_items[pBrender_index + i] = 1;
+#endif
     }
     ClosePackFileAndSetTiffLoading(twt);
+}
+
+// FUNCTION: CARMA2_HW 0x0046ad00
+int C2_HOOK_FASTCALL InterfaceMenuInfunc(tFrontend_spec* pFrontend) {
+    if (!pFrontend->loaded) {
+        LoadMenuSettings(pFrontend);
+        FuckWithWidths(pFrontend);
+        if (pFrontend->previous != NULL) {
+            pFrontend->previous->isPreviousSomeOtherMenu = 1;
+        }
+    }
+    gFrontend_scrollbars_updated = 0;
+    EdgeTriggerModeOff();
+    WaitForNoKeys();
+    EdgeTriggerModeOn();
+    if (gProgram_state.racing != 0) {
+        pFrontend->items[0].enabled = kFrontendItemEnabled_enabled;
+        pFrontend->items[1].enabled = kFrontendItemEnabled_enabled;
+        if (gNet_mode == eNet_mode_none) {
+            pFrontend->items[5].enabled = kFrontendItemEnabled_disabled;
+        } else {
+            pFrontend->items[5].enabled = kFrontendItemEnabled_enabled;
+        }
+        return 1;
+    }
+    pFrontend->items[0].enabled = kFrontendItemEnabled_disabled;
+    pFrontend->items[1].enabled = kFrontendItemEnabled_disabled;
+    return 1;
+}
+
+// FUNCTION: CARMA2_HW 0x0046ada0
+int C2_HOOK_FASTCALL InterfaceReturnTrue(void) {
+    return 1;
 }
 
 // FUNCTION: CARMA2_HW 0x0046b820
@@ -3679,6 +3962,9 @@ void C2_HOOK_FASTCALL MenuSetDriverImage(int pOpponent_index, int pFrontend_inde
     BrPixelmapCopy(gFrontend_brender_items[pFrontend_index].field_0xc, gFrontend_images[7]);
     BrPixelmapCopy(gFrontend_brender_items[pFrontend_index].field_0x10, gFrontend_brender_items[pFrontend_index].field_0xc);
     BrMapUpdate(gFrontend_brender_items[pFrontend_index].field_0xc, BR_MAPU_ALL);
+#ifndef CARPOCALYPSE2_MATCHING
+    gC2_opaque_frontend_items[pFrontend_index] = 1;
+#endif
 
     ClosePackFileAndSetTiffLoading(twt);
 
@@ -3694,7 +3980,7 @@ void C2_HOOK_FASTCALL MenuSetDriverImage(int pOpponent_index, int pFrontend_inde
 int C2_HOOK_FASTCALL ProcessInputString(void) {
     int len;
     int key;
-    int ch;
+    int int_ch;
 
     if (gFrontend_current_input == NULL) {
         return 0;
@@ -3723,18 +4009,20 @@ int C2_HOOK_FASTCALL ProcessInputString(void) {
         }
         return -1;
     }
-    ch = PDGetKeyboardCharacter();
-    if (ch != 0) {
-        dr_dprintf("FRONTEND: Got char %d", ch);
-        ch = (tU8)PDConvertToASCIILessThan128(ch);
+    int_ch = PDGetKeyboardCharacter();
+    if (int_ch != 0) {
+        char ch;
+
+        dr_dprintf("FRONTEND: Got char %d", int_ch);
+        ch = PDConvertToASCIILessThan128((char)int_ch);
         dr_dprintf("FRONTEND: Char converted to %d", ch);
-        if (ch > 0x1f && ch != 0x7f) {
+        if (ch >= 0x20 && ch != 0x7f) {
             gFrontend_current_input[len + 0] = ch;
             gFrontend_current_input[len + 1] = '\0';
-            dr_dprintf("FRONTEND: Adding char %d to string. String now '%s'", ch, gFrontend_current_input);
+            dr_dprintf("FRONTEND: Adding char %d to string. String now '%s'", int_ch, gFrontend_current_input);
             return 1;
         }
-        dr_dprintf("FRONTEND: Invalid Char", ch);
+        dr_dprintf("FRONTEND: Invalid Char", int_ch);
     }
     return 0;
 }
@@ -3855,7 +4143,6 @@ int C2_HOOK_FASTCALL CreditsScreenInfunc(tFrontend_spec* pFrontend) {
     gFrontend_selected_item_index = 0;
     return 1;
 }
-
 // FUNCTION: CARMA2_HW 0x0046c090
 
 int C2_HOOK_FASTCALL CreditsScreenOutfunc(tFrontend_spec* pFrontend) {
@@ -3908,7 +4195,6 @@ int C2_HOOK_FASTCALL LoadGameInFunc(tFrontend_spec* pFrontend) {
     return 0;
 }
 
-// FUNCTION: CARMA2_HW 0x0046fb80
 int C2_HOOK_FASTCALL LoadGameScrollDown(tFrontend_spec* pFrontend) {
 
     if (gFrontend_load_game_index_top + 8 < gFrontend_count_saved_games && gFrontend_scroll_time_left == 0) {
@@ -3944,14 +4230,87 @@ void C2_HOOK_FASTCALL Slider_ForceProc(tFrontend_slider* pSlider) {
 // FUNCTION: CARMA2_HW 0x004725f0
 
 int C2_HOOK_FASTCALL Controls_Infunc(tFrontend_spec* pFrontend) {
+    FILE* f;
+    char** key_name;
+    int* mapping;
+    int (*backup)[77];
+    int map_index;
+    int i;
+    int len;
+    char line[256];
+    tPath_name path;
 
-    Generic_Infunc(pFrontend);
-    LoadKeyNames();
+    if (!pFrontend->loaded) {
+        LoadMenuSettings(pFrontend);
+        FuckWithWidths(pFrontend);
+        if (pFrontend->previous != NULL) {
+            pFrontend->previous->isPreviousSomeOtherMenu = 1;
+        }
+    }
+    gFrontend_scrollbars_updated = 0;
+    EdgeTriggerModeOff();
+    WaitForNoKeys();
+    EdgeTriggerModeOn();
+    gCurrent_frontend_scrollbars = NULL;
+    gConnected_items = NULL;
+    gPTR_00686508 = NULL;
+
+    PathCat(path, gApplication_path, "KEYNAMES.TXT");
+    f = DRfopen(path, "rt");
+    if (f == NULL) {
+        FatalError(0x6a);
+    }
+    key_name = gKey_names;
+    do {
+        PFfgets(line, sizeof(line), f);
+        len = strlen(line);
+        for (i = 0; i < len; i++) {
+            if ((tU8)line[i] < ' ') {
+                memcpy(&line[i], &line[i + 1], len - i);
+                len--;
+#ifdef CARPOCALYPSE2_FIX_BUGS
+                i--;
+#endif
+            }
+        }
+        *key_name = BrMemAllocate(strlen(line) + 1, kMem_misc);
+        strcpy(*key_name, line);
+        key_name++;
+    } while ((int)key_name < (int)&gKey_names[CARPOCALYPSE2_ASIZE(gKey_names)]);
+    PFfclose(f);
+
     gFrontend_controls_count_keys = 29;
-    BackupKeyMappings();
-    Joystick_BackupSettings();
+    gOrig_key_map_index = gKey_map_index;
+    map_index = 0;
+    backup = gBackup_key_mappings;
+    do {
+        gKey_map_index = map_index;
+        PathCat(line, gApplication_path, "KEYMAP_X.TXT");
+        line[strlen(line) - 5] = '0' + gKey_map_index;
+        f = DRfopen(line, "rt");
+        if (f == NULL) {
+            FatalError(kFatalError_CouldNotOpenKeyMapFile);
+        }
+        mapping = gKey_mapping;
+        do {
+            fscanf(f, gSkip_lines_format, mapping);
+            mapping++;
+        } while ((int)mapping < (int)&gKey_mapping[CARPOCALYPSE2_ASIZE(gKey_mapping)]);
+        PFfclose(f);
+        memcpy(*backup, gKey_mapping, sizeof(gKey_mapping));
+        map_index++;
+        backup++;
+    } while ((int)backup < (int)&gBackup_key_mappings[CARPOCALYPSE2_ASIZE(gBackup_key_mappings)]);
+    gKey_map_index = gOrig_key_map_index;
+    memcpy(gKey_mapping, gBackup_key_mappings[gKey_map_index], sizeof(gKey_mapping));
 
+    gOrig_joystick_index = gJoystick_index;
     gJoystick_index = 0;
+    gOriginal_joystick_x = GetJoystickX();
+    gOriginal_joystick_y = GetJoystickY();
+    gOriginal_joystick_fbb = GetJoystickFBBGain();
+    gOriginal_joystick_dpad = PDIsJoystickDPadEnabled();
+    gJoystick_index = gOrig_joystick_index;
 
     SelectThisItemIn(pFrontend, 1, 39 + gKey_map_index);
 
@@ -3971,7 +4330,6 @@ int C2_HOOK_FASTCALL Controls_Infunc(tFrontend_spec* pFrontend) {
     gControls_slider_1.callback = Slider_XProc;
     gControls_slider_1.field_0x14 = 0.f;
     gControls_slider_1.field_0x18 = 2.f;
-    gControls_slider_1.next = &gControls_slider_2;
 
     gControls_slider_2.flags = 0;
     gControls_slider_2.itemid_left_reference = 19;
@@ -3980,7 +4338,6 @@ int C2_HOOK_FASTCALL Controls_Infunc(tFrontend_spec* pFrontend) {
     gControls_slider_2.callback = Slider_YProc;
     gControls_slider_2.field_0x14 = 0.f;
     gControls_slider_2.field_0x18 = 2.f;
-    gControls_slider_2.next = &gControls_slider_3;
 
     gControls_slider_3.flags = 0;
     gControls_slider_3.itemid_left_reference = 23;
@@ -3989,7 +4346,11 @@ int C2_HOOK_FASTCALL Controls_Infunc(tFrontend_spec* pFrontend) {
     gControls_slider_3.callback = Slider_ForceProc;
     gControls_slider_3.field_0x14 = 0.f;
     gControls_slider_3.field_0x18 = 1.f;
+    gControls_slider_1.next = &gControls_slider_2;
+    gControls_slider_2.next = &gControls_slider_3;
     gControls_slider_3.next = NULL;
+
+    gCurrent_frontend_scrollbars = &gControls_slider_1;
 
     DisplayJoystickSettings(pFrontend);
     RefreshScrollSet(pFrontend);
@@ -4022,6 +4383,169 @@ int C2_HOOK_FASTCALL Controls_JoystickDpadToggle(tFrontend_spec* pFrontend) {
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 62.45% | difftest PASS 2000 trials (spec difftest/specs/0045bd90_SaveAllJoystickData.json; difftest/specs/0045bd90_SaveAllJoystickData_EXISTING_SHORT.json) | reason control-flow and register allocation
+// FUNCTION: CARMA2_HW 0x0045bd90
+
+int C2_HOOK_FASTCALL SaveAllJoystickData(void) {
+    int old_joystick_index;
+    FILE* file;
+    int status;
+    long start_pos;
+    long end_pos;
+    int* entries;
+    void* record;
+    unsigned int* current_joystick_info;
+    const char* joystick_name;
+    int* entry;
+    unsigned int* saved_joystick_info;
+    int* next_entry;
+    int* matching_entry;
+    int joystick_index;
+    int equal;
+    int joystick_count;
+    int* last_entry;
+    tButtonJoystickInfo* joystick_info;
+    tPath_name path;
+    char string[256];
+    char error[256];
+
+    old_joystick_index = gJoystick_index;
+    PathCat(path, gApplication_path, "JOYSTICK.TXT");
+    file = fopen(path, "rt");
+    if (file == NULL) {
+        file = fopen(path, "wt");
+        if (file != NULL) {
+            joystick_index = 0;
+            do {
+                if (IsJoystickPresent(joystick_index)) {
+                    gJoystick_index = joystick_index;
+                    joystick_info = PDGetCurrentJoystickData();
+                    if (joystick_info != NULL) {
+                        WriteJoystickInfo(file, joystick_info);
+                    }
+                }
+                joystick_index++;
+            } while (joystick_index < 16);
+            fclose(file);
+        }
+        gJoystick_index = old_joystick_index;
+        return 1;
+    }
+
+    joystick_count = 0;
+    rewind(file);
+    start_pos = ftell(file);
+    fseek(file, 0, SEEK_END);
+    end_pos = ftell(file);
+    if (end_pos - start_pos >= 0x20) {
+        rewind(file);
+        while (!feof(file)) {
+            GetAString(file, string);
+            if (string[0] == '&') {
+                joystick_count++;
+            }
+        }
+        rewind(file);
+    }
+    if (joystick_count == 0) {
+        return 1;
+    }
+
+    entries = (int*)malloc(8);
+    if (entries == NULL) {
+        status = fclose(file);
+        gJoystick_index = old_joystick_index;
+        return status;
+    }
+    status = 0;
+    entry = entries;
+    if (0 < joystick_count) {
+        do {
+            entry[1] = 0;
+            joystick_info = (tButtonJoystickInfo*)malloc(0xec);
+            entry[0] = (int)joystick_info;
+            if (joystick_info != NULL) {
+                ReadJoystickInfo(file, joystick_info);
+            }
+            last_entry = entry;
+            if (status != joystick_count - 1) {
+                last_entry = (int*)malloc(8);
+                entry[1] = (int)last_entry;
+            }
+            status++;
+            entry = last_entry;
+        } while (status < joystick_count);
+    }
+    fclose(file);
+
+    joystick_index = 0;
+    do {
+        if (IsJoystickPresent(joystick_index)) {
+            gJoystick_index = joystick_index;
+            current_joystick_info = (unsigned int*)PDGetCurrentJoystickData();
+            if (current_joystick_info != NULL) {
+                matching_entry = NULL;
+                entry = entries;
+                do {
+                    if (matching_entry != NULL) {
+                        goto found_matching_entry;
+                    }
+                    joystick_name = GetCurrentJoystickName();
+                    saved_joystick_info = (unsigned int*)entry[0];
+                    equal = strcmp((char*)saved_joystick_info, joystick_name);
+                    if (equal == 0) {
+                        matching_entry = entry;
+                    }
+                    entry = (int*)entry[1];
+                } while (entry != NULL);
+                if (matching_entry == NULL) {
+                    entry = (int*)malloc(8);
+                    if (entry == NULL) {
+                        return 0;
+                    }
+                    last_entry[1] = (int)entry;
+                    record = malloc(0xec);
+                    entry[0] = (int)record;
+                    if (record == NULL) {
+                        return 0;
+                    }
+                    entry[1] = 0;
+                    last_entry = entry;
+                    saved_joystick_info = (unsigned int*)record;
+                } else {
+found_matching_entry:
+                    saved_joystick_info = (unsigned int*)matching_entry[0];
+                }
+                memcpy(saved_joystick_info, current_joystick_info, 0xec);
+            }
+        }
+        joystick_index++;
+        if (joystick_index > 15) {
+            PathCat(path, gApplication_path, "JOYSTICK.TXT");
+            file = fopen(path, "wt");
+            if (file == NULL) {
+                sprintf(error, "Cant open %s", path);
+                return 0;
+            }
+            do {
+                if (entries[0] != 0) {
+                    WriteJoystickInfo(file, (tButtonJoystickInfo*)entries[0]);
+                }
+                next_entry = (int*)entries[1];
+                if (entries[0] != 0) {
+                    free((void*)entries[0]);
+                }
+                if (entries != NULL) {
+                    free(entries);
+                }
+                entries = next_entry;
+            } while (next_entry != NULL);
+            status = fclose(file);
+            gJoystick_index = old_joystick_index;
+            return status;
+        }
+    } while (1);
+}
 
 // FUNCTION: CARMA2_HW 0x00472440
 
@@ -4042,7 +4566,11 @@ int C2_HOOK_FASTCALL Controls_SlotActivated(tFrontend_spec* pFrontend) {
     br_model* model;
     int match;
 
-    key_array_index = DetermineKeyArrayIndex();
+    key_array_index = gFrontend_selected_item_index;
+    if (key_array_index >= 53) {
+        key_array_index -= 10;
+    }
+    key_array_index = gControls_scroller.field_0x8 + key_array_index - 43;
     CyclePollKeys();
     PollKeys();
     WaitForNoKeys();
@@ -4056,7 +4584,31 @@ int C2_HOOK_FASTCALL Controls_SlotActivated(tFrontend_spec* pFrontend) {
     for (;;) {
         int key;
 
-        FrontendRedrawMenu();
+        gBack_screen->origin_x = 0;
+        gBack_screen->origin_y = 0;
+        if (gFrontend_backdrop != NULL) {
+            FRONTEND_Redraw(gBack_screen, 0, 0, gFrontend_backdrop, 0, 0,
+                gFrontend_backdrop->width, gFrontend_backdrop->height);
+        }
+        BrPixelmapFill(gDepth_buffer, 0xffffffff);
+        {
+            int i;
+            for (i = 0; i < gFrontend_count_brender_items; i++) {
+                if (gCurrent_frontend_spec->items[i].visible) {
+                    gFrontend_brender_items[i].actor->render_style = BR_RSTYLE_FACES;
+                } else {
+                    gFrontend_brender_items[i].actor->render_style = BR_RSTYLE_NONE;
+                }
+            }
+        }
+        BrZbsSceneRender(gFrontend_actor, gFrontend_camera, gBack_screen, gDepth_buffer);
+        FRONTEND_DrawMenu(gCurrent_frontend_spec);
+        if (gFrontend_suppress_mouse == 0) {
+            PossibleLock(1);
+            DoMouseCursor();
+            PossibleUnlock(1);
+        }
+        PDScreenBufferSwap(0);
 
         key = PDAnyKeyDown();
         if (key != -1 && key != 63) {
@@ -4069,7 +4621,7 @@ int C2_HOOK_FASTCALL Controls_SlotActivated(tFrontend_spec* pFrontend) {
 
                     for (j = 0; j < gFrontend_controls_count_keys; j++) {
 
-                        if (i == gControls_frontend_to_key_mapping_lut[j]) {
+                        if (gControls_frontend_to_key_mapping_lut[j] == i) {
                             gKey_mapping[i] = -2;
                             match = j;
                             break;

@@ -61,7 +61,6 @@ extern void C2_HOOK_FASTCALL InitCrushSystems(void);
 // FindNearestVertex
 
 // DistanceToBounds
-float C2_HOOK_FASTCALL DistanceToBounds(const br_vector3* pPoint, const br_bounds3* pBounds);
 
 // FindNearestParentVertex
 
@@ -92,32 +91,32 @@ float C2_HOOK_FASTCALL DistanceToBounds(const br_vector3* pPoint, const br_bound
 // InitPhysModCrushData
 
 extern void C2_HOOK_FASTCALL DisposeMasterCrushData(tCar_crush_spec* pCar_crush, tCar_spec* pCar);
+extern void C2_HOOK_FASTCALL FUN_0042c4f0(tU8* pData);
+extern void C2_HOOK_FASTCALL FreeIfNotNull(void* pPtr);
 
 // DisposeCrushData
-void C2_HOOK_FASTCALL DisposeCrushData(tCar_crush_buffer_entry* pCrush_data);
 
 // DisposeVertexData
-void C2_HOOK_FASTCALL DisposeVertexData(tModel_detail_vertex_data* pVertex_data);
 
 // BuckleTheBugger
 
-float C2_HOOK_FASTCALL DistSq(const br_vector3* pP, int pCount, const br_vector3* pVertices);
+// OutsideEdgeLine
 
-float C2_HOOK_FASTCALL PointTriangleDistSq(const br_vector3* pP, const br_vector3* pA, const br_vector3* pB, const br_vector3* pC);
+// PointTriangleDistSq
 
-int C2_HOOK_FASTCALL OutsideEdgeLine(const br_vector3* pPoint, const br_vector3* pA, const br_vector3* pDirection, const br_vector3* pInside);
+// PointRectDistSq
 
-float C2_HOOK_FASTCALL PointRectDistSq(const br_vector3* pP, const br_vector3* pA, const br_vector3* pB, const br_vector3* pC);
+// PointSimplexDistSq
 
-float C2_HOOK_FASTCALL PointSimplexDistSq(const br_vector3* pP, int pCount, const br_vector3* pVertices);
+// DistSq
 
 // LimitImpactScale
 
 // GetImpactScale
 
-int C2_HOOK_FASTCALL TooFarToCrush(const br_model* pModel, int pCount, const br_vector3* pVertices, float pMax_dist_sq);
+// TooFarToCrush
 
-int C2_HOOK_FASTCALL NearestAxis(const br_vector3* pVector);
+// NearestAxis
 
 // CrushModel
 
@@ -143,9 +142,10 @@ int C2_HOOK_FASTCALL NearestAxis(const br_vector3* pVector);
 
 // ExpandCrush
 
-void C2_HOOK_FASTCALL RemoveDuplicatePoints(int* pCount_out, br_vector3* pPoints_out, int pCount_in, const br_vector3* pPoints_in);
+// RemoveDuplicatePoints
 
 // SimpleCrushModel
+void C2_HOOK_FASTCALL SimpleCrushModel(br_model* pModel, int pCount, float* pPoints, float* pDir, float* pBounds);
 
 // CrushDrone
 
@@ -267,7 +267,7 @@ void C2_HOOK_FASTCALL RemoveDuplicatePoints(int* pCount_out, br_vector3* pPoints
 
 // SplitCarCollisionShapes
 
-extern int C2_HOOK_FASTCALL QuantizeWithinBounds(br_scalar pQuant, br_scalar pMin, br_scalar pMax, br_scalar* pValue);
+// QuantizeWithinBounds
 
 // SaveVitalBitsOfObject
 
@@ -283,11 +283,11 @@ extern int C2_HOOK_FASTCALL QuantizeWithinBounds(br_scalar pQuant, br_scalar pMi
 
 // SplitCar
 
-extern void C2_HOOK_FASTCALL QuantizePlane(br_vector4* pPlane);
+// QuantizePlane
 
-extern int C2_HOOK_FASTCALL WithinBounds(br_scalar pValue, br_scalar pMin, br_scalar pMax);
+// WithinBounds
 
-extern int C2_HOOK_FASTCALL SplitCheck(tCar_spec* pCar, int pMode, const br_vector3* pLine, br_scalar pHeight, br_vector4* pPlane);
+// SplitCheck
 
 // FindForceEdge
 
@@ -422,9 +422,8 @@ extern void C2_HOOK_FASTCALL TotallyRepairACar(tCar_spec* pCar_spec);
 // UnBendOtherThings
 
 // NormalizedAngle
-br_scalar C2_HOOK_FASTCALL NormalizedAngle(br_angle pAngle);
 
-br_scalar C2_HOOK_FASTCALL CalculateAmountRepairedFraction(br_angle pOriginal_x, br_angle pOriginal_y, br_angle pOriginal_z, br_angle pRepair_x, br_angle pRepair_y, br_angle pRepair_z, br_scalar* pOriginal_amount);
+// CalculateAmountRepairedFraction
 
 // UnBendCar
 
@@ -518,12 +517,12 @@ br_scalar C2_HOOK_FASTCALL CalculateAmountRepairedFraction(br_angle pOriginal_x,
 
 // Vector4Equal
 
-extern void C2_HOOK_FASTCALL CompressPlane(tU16 pDest[4], const br_vector4* pSrc);
+// CompressPlane
 
-extern void C2_HOOK_FASTCALL ExpandPlane(br_vector4* pDest, const tU16 pSrc[4]);
+// ExpandPlane
 
 // CopySplitInMessage
 
-extern void C2_HOOK_FASTCALL SetAllShapeStatusFlags(tCar_crush_network_shapes* pShapes);
+// SetAllShapeStatusFlags
 
 #endif // GUARD_CRUSH1_H

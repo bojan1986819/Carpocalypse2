@@ -6,6 +6,18 @@
 #include "carpocalypse2_types.h"
 
 extern br_pixelmap* gTexture_maps[1024];
+
+/* Polyfont glyph texture page size. Retail packs glyphs into 64x64 pages (a 32 px
+ * font fits 4 glyphs per page), so consecutive characters rarely share a texture
+ * and every glyph needs its own draw. The port packs into larger pages; glyph
+ * UVs and the material map_transform are derived from the page size, so the
+ * sampled texels are unchanged. The car icon pages (graphics3.c) share the same
+ * page pool and must use the same size. */
+#ifdef CARPOCALYPSE2_MATCHING
+#define C2_FONT_PAGE 64
+#else
+#define C2_FONT_PAGE 256
+#endif
 extern int gSize_font_texture_pages;
 extern br_actor* gPolyfont_glyph_actors[256];
 extern int gCount_polyfont_glyph_actors;
@@ -103,14 +115,10 @@ extern tPolyFontBorderColours gPoly_font_border_colours[27];
 
 extern br_material* gPoly_font_materials[80];
 
-extern int polyFontMaterialCounter;
+extern tU16 polyFontMaterialCounter;
 
 extern int currentPolyFontMaterialIdx;
 
 extern tPolyFont gPoly_fonts[27];
-
-extern br_pixelmap* gPixelmapBuffer[1000];
-
-extern int gPixelmapBufferSize;
 
 #endif // GUARD_FONT_H

@@ -76,10 +76,10 @@ int gINT_0074abd0;
 br_pixelmap* gMini_map;
 
 // GLOBAL: CARMA2_HW 0x00655f04
-int gINT_00655f04;
+int gINT_00655f04 = 520;
 
 // GLOBAL: CARMA2_HW 0x00655f08
-int gINT_00655f08;
+int gINT_00655f08 = 380;
 
 // GLOBAL: CARMA2_HW 0x0068d8a0
 float gFLOAT_0068d8a0;
@@ -365,7 +365,7 @@ void C2_HOOK_FASTCALL ConvertCarIcons(br_pixelmap* pMap) {
         icon = &gCar_icons[i];
 
         if (gTexture_maps[gSize_font_texture_pages] == NULL) {
-            gTexture_maps[gSize_font_texture_pages] = BrPixelmapAllocate(pMap->type, 64, 64, NULL, 0);
+            gTexture_maps[gSize_font_texture_pages] = BrPixelmapAllocate(pMap->type, C2_FONT_PAGE, C2_FONT_PAGE, NULL, 0);
             if (gTexture_maps[gSize_font_texture_pages] == NULL) {
                 FatalError(kFatalError_CouldNotCreateTexturesPages_S, "Car Icons");
             }
@@ -391,10 +391,10 @@ void C2_HOOK_FASTCALL ConvertCarIcons(br_pixelmap* pMap) {
         model->flags &= ~(BR_MODF_KEEP_ORIGINAL | BR_MODF_UPDATEABLE);
         BrModelUpdate(model, BR_MODU_ALL);
         texture_x += icon_width;
-        if (texture_x >= 64) {
+        if (texture_x >= C2_FONT_PAGE) {
             texture_x = 0;
             texture_y += icon_height;
-            if (texture_y >= 64) {
+            if (texture_y >= C2_FONT_PAGE) {
                 gSize_font_texture_pages++;
                 if (gSize_font_texture_pages >= (int)CARPOCALYPSE2_ASIZE(gTexture_maps)) {
                     FatalError(kFatalError_CouldNotCreateTexturesPages_S, "CAR ICONS");
@@ -452,7 +452,8 @@ void C2_HOOK_FASTCALL CheckMapMoveKeys(int pKey0) {
 
 // AddSmashTarget
 
-int NearestPowerOfTwo(int pValue) {
+// FUNCTION: CARMA2_HW 0x00497830
+int C2_HOOK_FASTCALL NearestPowerOfTwo(int pValue) {
     int power;
 
     for (power = 1; power < 32; power++) {

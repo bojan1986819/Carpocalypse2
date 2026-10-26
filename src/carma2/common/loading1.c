@@ -29,6 +29,12 @@ int gKey_map_index;
 // GLOBAL: CARMA2_HW 0x00655e30
 int gDecode_thing = '@';
 
+// GLOBAL: CARMA2_HW 0x0058f418
+const char gSkip_lines_format[] = "%d";
+
+// GLOBAL: CARMA2_HW 0x0058f41c
+const char gSkip_lines_delimiters[] = "\t ,/";
+
 // GLOBAL: CARMA2_HW 0x00658610
 int gAllow_open_to_fail = 1;
 
@@ -195,6 +201,23 @@ int C2_HOOK_FASTCALL GetAnInt(FILE* pF) {
     return value;
 }
 
+// FUNCTION: CARMA2_HW 0x0048fed0
+void C2_HOOK_FASTCALL GetThreeIntsAndString(FILE* pF, int* pInt1, int* pInt2, int* pInt3, char* pStr) {
+    char s[256];
+    char* str;
+
+    PossibleService();
+    GetALineWithNoPossibleService(pF, s);
+    str = strtok(s, "\t ,/");
+    sscanf(str, "%d", pInt1);
+    str = strtok(NULL, "\t ,/");
+    sscanf(str, "%d", pInt2);
+    str = strtok(NULL, "\t ,/");
+    sscanf(str, "%d", pInt3);
+    str = strtok(NULL, "\t ,/");
+    strcpy(pStr, str);
+}
+
 // FUNCTION: CARMA2_HW 0x004900e0
 float C2_HOOK_FASTCALL GetAFloat(FILE* pF) {
     char s[256];
@@ -282,10 +305,35 @@ void C2_HOOK_FASTCALL GetFourInts(FILE* pF, int* pF1, int* pF2, int* pF3, int* p
     sscanf(str, "%d", pF4);
 }
 
+// FUNCTION: CARMA2_HW 0x0048fb50
+tU32 C2_HOOK_FASTCALL DecimalDigitsToBitmask(tU32 pValue) {
+    unsigned int result;
+    unsigned int v;
+
+    result = 0;
+    for (v = pValue; v != 0; v /= 10) {
+        result = (v % 10) | (result + result);
+    }
+    return result;
+}
+
 // FUNCTION: CARMA2_HW 0x0048fb80
 br_scalar C2_HOOK_FASTCALL GetAScalar(FILE* pF) {
 
     return GetAFloat(pF);
+}
+
+// FUNCTION: CARMA2_HW 0x0048fbd0
+float C2_HOOK_FASTCALL FUN_0048fbd0(FILE* pF) {
+    char s[256];
+    char* str;
+    float f;
+
+    PossibleService();
+    GetALineWithNoPossibleService(pF, s);
+    str = strtok(s, "\t ,/");
+    sscanf(str, "%f", &f);
+    return f * 0.01f;
 }
 
 // FUNCTION: CARMA2_HW 0x00490130
@@ -431,6 +479,40 @@ static void StripCRNLPrefix(char *line) {
     }
 }
 
+// FUNCTION: CARMA2_HW 0x004907b0
+void C2_HOOK_FASTCALL DecodeLine(char* pS) {
+    int len;
+    int seed;
+    int i;
+
+    len = strlen(pS);
+    if (len != 0) {
+        do {
+            if (pS[len - 1] != '\r' && pS[len - 1] != '\n') {
+                break;
+            }
+            pS[len - 1] = '\0';
+            len--;
+        } while (len != 0);
+    }
+    i = 0;
+    seed = len % 16;
+    if (len > 0) {
+        do {
+            if (pS[i] == '\t') {
+                pS[i] = (char)0x9f;
+            }
+            pS[i] = ((gLong_key[seed] ^ (pS[i] - 0x20)) & 0x7f) + 0x20;
+            seed += 7;
+            seed %= 16;
+            if (pS[i] == (char)0x9f) {
+                pS[i] = '\t';
+            }
+            i++;
+        } while (i < len);
+    }
+}
+
 void C2_HOOK_FASTCALL DecodeLine2(char* pS) {
     int len;
     int seed;
@@ -517,18 +599,21 @@ void C2_HOOK_FASTCALL EncodeLine2(char* pS) {
     }
 }
 
+// C2PORT-NONMATCHING: best 35.90% | difftest PASS 2000 trials (spec difftest/specs/00490840_EncodeFile.json) | reason file-stream and VC5 stack layout
 // FUNCTION: CARMA2_HW 0x00490840
 void C2_HOOK_FASTCALL EncodeFile(char* pThe_path) {
     FILE* f;
     FILE* d;
     char line[257];
     char new_file[256];
+    volatile char stack_pad[12];
     char* result;
     int ch;
     int decode;
     int len;
     int count;
 
+    stack_pad[0] = 0;
     len = strlen(pThe_path);
     strcpy(new_file, pThe_path);
     memcpy(&new_file[len - 3], "ENC", 4);
@@ -559,6 +644,10 @@ void C2_HOOK_FASTCALL EncodeFile(char* pThe_path) {
                 decode = 1;
             } else {
                 decode = 0;
+                while (result[0] == ' ' || result[0] == '\t') {
+                    len = strlen(result);
+                    memmove(result, result + 1, len);
+                }
                 StripCRNLPrefix(result);
             }
 
@@ -599,6 +688,61 @@ void C2_HOOK_FASTCALL EncodeFile(char* pThe_path) {
     PDFileUnlock(pThe_path);
     remove(pThe_path);
     rename(new_file, pThe_path);
+}
+
+// FUNCTION: CARMA2_HW 0x00490b90
+void C2_HOOK_FASTCALL EncodeAllFilesInDirectory(char* pThe_path) {
+    char path[256];
+
+    PathCat(path, gApplication_path, pThe_path);
+    PFForEveryFile(path, (tPDForEveryFileRecurse_cbfn)EncodeFileWrapper);
+}
+
+// FUNCTION: CARMA2_HW 0x00490bc0
+void C2_HOOK_FASTCALL EncodeFileWrapper(char* pThe_path) {
+    int len;
+
+    len = strlen(pThe_path);
+    if (strcmp(&pThe_path[len - 4], ".TXT") != 0) {
+        return;
+    }
+    if (strcmp(&pThe_path[len - 12], "DKEYMAP0.TXT") == 0
+            || strcmp(&pThe_path[len - 12], "DKEYMAP1.TXT") == 0
+            || strcmp(&pThe_path[len - 12], "DKEYMAP2.TXT") == 0
+            || strcmp(&pThe_path[len - 12], "DKEYMAP3.TXT") == 0
+            || strcmp(&pThe_path[len - 12], "KEYMAP_0.TXT") == 0
+            || strcmp(&pThe_path[len - 12], "KEYMAP_1.TXT") == 0
+            || strcmp(&pThe_path[len - 12], "KEYMAP_2.TXT") == 0
+            || strcmp(&pThe_path[len - 12], "KEYMAP_3.TXT") == 0
+            || strcmp(&pThe_path[len - 11], "OPTIONS.TXT") == 0
+            || strcmp(&pThe_path[len - 12], "KEYNAMES.TXT") == 0
+            || strcmp(&pThe_path[len - 10], "KEYMAP.TXT") == 0
+            || strcmp(&pThe_path[len - 9], "PATHS.TXT") == 0) {
+        return;
+    }
+    EncodeFile(pThe_path);
+}
+
+// FUNCTION: CARMA2_HW 0x00490ec0
+void C2_HOOK_FASTCALL SkipLines(FILE* pF) {
+    char* str;
+    int count;
+    register int lines_to_skip;
+    char line[256];
+    char skipped_line[256];
+
+    PossibleService();
+    GetALineWithNoPossibleService(pF, line);
+    str = strtok(line, gSkip_lines_delimiters);
+    sscanf(str, gSkip_lines_format, &count);
+    lines_to_skip = count;
+    if (lines_to_skip > 0) {
+        do {
+            PossibleService();
+            GetALineWithNoPossibleService(pF, skipped_line);
+            lines_to_skip = lines_to_skip - 1;
+        } while (lines_to_skip != 0);
+    }
 }
 
 // FUNCTION: CARMA2_HW 0x00490f30
@@ -680,7 +824,25 @@ char * C2_HOOK_FASTCALL GetALineAndDontArgue(FILE* pF, char* pS) {
     return GetALineWithNoPossibleService(pF, pS);
 }
 
-FILE* OldDRfopen(const char* pFilename, const char* pMode) {
+
+
+// FUNCTION: CARMA2_HW 0x004910b0
+void C2_HOOK_FASTCALL AllowOpenToFail(void) {
+
+    gAllow_open_to_fail = 1;
+}
+
+// FUNCTION: CARMA2_HW 0x004910c0
+void C2_HOOK_FASTCALL DoNotAllowOpenToFail(void) {
+
+}
+
+// GetCDPathFromPathsTxtFile
+
+// FUNCTION: CARMA2_HW 0x00491170
+FILE* C2_HOOK_FASTCALL DRfopen(const char* pFilename, const char* pMode) {
+    FILE *result;
+
     FILE* fp;
 
     fp = PFfopen(pFilename, pMode);
@@ -689,7 +851,7 @@ FILE* OldDRfopen(const char* pFilename, const char* pMode) {
         char source_check[256];
 
         if (gCD_fully_installed) {
-            return NULL;
+            fp = NULL; goto done_old;
         }
         if (g_source_exists == 1) {
             char general_file[256];
@@ -704,12 +866,12 @@ FILE* OldDRfopen(const char* pFilename, const char* pMode) {
             strcat(paths_file, "PATHS.TXT");
             if (!PDCheckDriveExists(paths_file)) {
                 g_source_exists = 0;
-                return NULL;
+                fp = NULL; goto done_old;
             }
             fp = PFfopen(paths_file, "rt");
             if (fp == NULL) {
                 g_source_exists = 0;
-                return NULL;
+                fp = NULL; goto done_old;
             }
             source_check[0] = '\0';
             PossibleService();
@@ -729,30 +891,30 @@ FILE* OldDRfopen(const char* pFilename, const char* pMode) {
             }
         }
         if (g_source_exists == 0) {
-            return NULL;
+            fp = NULL; goto done_old;
         }
         data_pos = strstr(pFilename, "DATA");
         if (data_pos == NULL) {
-            return NULL;
+            fp = NULL; goto done_old;
         }
 
         if (!GetRegisterSourceLocation(source_check)) {
-            return NULL;
+            fp = NULL; goto done_old;
         }
         if (strchr(gDir_separator, source_check[strlen(source_check) - 1]) == NULL) {
             strcat(source_check, gDir_separator);
         }
         strcat(source_check, data_pos);
         if (!PDCheckDriveExists(source_check)) {
-            return NULL;
+            fp = NULL; goto done_old;
         }
-        return PFfopen(source_check, pMode);
+        fp = PFfopen(source_check, pMode); goto done_old;
     } else {
         int len;
         char ch;
 
         if (!gDecode_thing) {
-            return fp;
+            goto done_old;
         }
         len = strlen(pFilename);
         if (strcmp(&pFilename[len - 4], ".TXT") != 0
@@ -769,36 +931,20 @@ FILE* OldDRfopen(const char* pFilename, const char* pMode) {
                 || strcmp(&pFilename[len - 10], "KEYMAP.TXT") == 0
                 || strcmp(&pFilename[len - 9], "PATHS.TXT") == 0
                 || strcmp(&pFilename[len - 11], "PRATCAM.TXT") == 0) {
-            return fp;
+            goto done_old;
         }
         ch = PFfgetc(fp);
         if (ch == gDecode_thing) {
             PFungetc(ch, fp);
-            return fp;
+            goto done_old;
         }
         PFfclose(fp);
-        return NULL;
+        fp = NULL; goto done_old;
     }
-}
 
-// FUNCTION: CARMA2_HW 0x004910b0
-void C2_HOOK_FASTCALL AllowOpenToFail(void) {
 
-    gAllow_open_to_fail = 1;
-}
-
-// FUNCTION: CARMA2_HW 0x004910c0
-void C2_HOOK_FASTCALL DoNotAllowOpenToFail(void) {
-
-}
-
-// GetCDPathFromPathsTxtFile
-
-// FUNCTION: CARMA2_HW 0x00491170
-FILE* C2_HOOK_FASTCALL DRfopen(const char* pFilename, const char* pMode) {
-    FILE *result;
-
-    result = OldDRfopen(pFilename, pMode);
+done_old:
+    result = fp;
 
     if (result == NULL && !gAllow_open_to_fail) {
         char buffer[256];
@@ -818,6 +964,7 @@ FILE* C2_HOOK_FASTCALL DRfopen(const char* pFilename, const char* pMode) {
     }
     return result;
 }
+
 
 // FUNCTION: CARMA2_HW 0x0044bb80
 void C2_HOOK_FASTCALL UnlockInterfaceStuff(void) {
@@ -842,34 +989,42 @@ void C2_HOOK_FASTCALL DisposePhysicsObject(tPhysics_object* pObject) {
     BrMemFree(pObject);
 }
 
+// C2PORT-NONMATCHING: best 38.94% | difftest PASS 2000 trials (spec difftest/specs/0044be80_DisposeCarActModDataCB.json) | reason VC5 register allocation and cleanup-loop layout
 // FUNCTION: CARMA2_HW 0x0044be80
 intptr_t C2_HOOK_CDECL DisposeCarActModDataCB(br_actor* pActor, void* pContext) {
-    tUser_crush_data* crush_data = pActor->user;
-    tCar_spec* car = pContext;
+    br_actor** model_list;
     int i;
+    br_actor** model_entry;
+    br_model* model;
+    tU8* model_user;
 
-    if (crush_data == NULL) {
+    model_list = pActor->user;
+    if (model_list == NULL) {
         return 0;
     }
-    for (i = 0; i < car->count_detail_levels; i++) {
-        br_model* model = crush_data->models[i];
-
-        if (model != NULL && model->user != NULL) {
-            tUser_detail_level_model* model_data = model->user;
-
-            if (model_data->field_0x4 != NULL) {
-                DisposeVertexData(model_data->field_0x4);
-                model_data->field_0x4 = NULL;
+    i = 0;
+    model_entry = model_list;
+    if (*(int*)((tU8*)pContext + 0xe14) > 0) {
+        do {
+            model = (br_model*)*model_entry;
+            if (model != NULL && model->user != NULL) {
+                model_user = model->user;
+                if (*(void**)(model_user + 4) != NULL) {
+                    FreeIfNotNull(*(void**)(model_user + 4));
+                    *(void**)(model_user + 4) = NULL;
+                }
+                BrMemFree(model_user);
+                model->user = NULL;
             }
-            BrMemFree(model_data);
-            model->user = NULL;
-        }
+            i++;
+            model_entry++;
+        } while (i < *(int*)((tU8*)pContext + 0xe14));
     }
-    if (crush_data->crush_data != NULL) {
-        DisposeCrushData(crush_data->crush_data);
-        crush_data->crush_data = NULL;
+    if (model_list[2] != NULL) {
+        FUN_0042c4f0((tU8*)model_list[2]);
+        model_list[2] = NULL;
     }
-    BrMemFree(crush_data);
+    BrMemFree(model_list);
     pActor->user = NULL;
     return 0;
 }
@@ -964,10 +1119,28 @@ void C2_HOOK_FASTCALL DisposeCar(tCar_spec* pCar_spec, int pOwner) {
     }
 }
 
+// FUNCTION: CARMA2_HW 0x0044bf20
+void C2_HOOK_FASTCALL FUN_0044bf20(void* pOwner) {
+    br_actor** actor;
+
+    actor = (br_actor**)((char*)pOwner + 0x10);
+    BrActorRemove(*actor);
+    BrActorFree(*actor);
+}
+
+// FUNCTION: CARMA2_HW 0x0044bf40
+void C2_HOOK_FASTCALL FUN_0044bf40(void) {
+
+}
+
 // FUNCTION: CARMA2_HW 0x0044bf70
 void C2_HOOK_FASTCALL DisposeRaceInfo(tRace_info* pRace_info) {
 
     // empty
+}
+
+// FUNCTION: CARMA2_HW 0x0044bf80
+void C2_HOOK_FASTCALL LoadingNoOp(void) {
 }
 
 // FUNCTION: CARMA2_HW 0x0044bfa0

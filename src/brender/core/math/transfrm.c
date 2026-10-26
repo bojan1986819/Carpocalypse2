@@ -85,6 +85,7 @@ br_uint_8 _CombineTransforms[7][7] = {
     },
 };
 
+// C2PORT-NONMATCHING: best 42.21% | difftest PASS 2000 trials (spec difftest/specs/00531870_BrTransformToMatrix34.json) | reason VC5 switch and x87 scheduling
 // FUNCTION: CARMA2_HW 0x00531870
 void C2_HOOK_CDECL BrTransformToMatrix34(br_matrix34* mat, const br_transform* xform) {
 
@@ -190,6 +191,7 @@ void C2_HOOK_CDECL BrMatrix4PreTransform(br_matrix4* mat, const br_transform* xf
     }
 }
 
+// C2PORT-NONMATCHING: best 45.61% | difftest PASS 2000 trials (spec difftest/specs/00531c20_BrMatrix34ToTransform.json, types 0,1,4,5) | reason switch jump-table layout; QUAT/EULER cases blocked by BrMatrix34ToQuat/BrMatrix34ToEuler mismatches
 // FUNCTION: CARMA2_HW 0x00531c20
 void C2_HOOK_CDECL BrMatrix34ToTransform(br_transform* xform, const br_matrix34* mat) {
 
@@ -203,21 +205,21 @@ void C2_HOOK_CDECL BrMatrix34ToTransform(br_transform* xform, const br_matrix34*
         break;
     case BR_TRANSFORM_QUAT:
         BrMatrix34ToQuat(&xform->t.quat.q, mat);
-        BrVector3Copy(&xform->t.quat.t, (br_vector3*)mat->m[3]);
+        xform->t.quat.t = *(br_vector3*)mat->m[3];
         break;
     case BR_TRANSFORM_EULER:
         BrMatrix34ToEuler(&xform->t.euler.e, mat);
-        BrVector3Copy(&xform->t.quat.t, (br_vector3*)mat->m[3]);
+        xform->t.quat.t = *(br_vector3*)mat->m[3];
         break;
     case BR_TRANSFORM_LOOK_UP:
         BrVector3Negate(&xform->t.look_up.look, (br_vector3*)mat->m[2]);
         if (xform->t.look_up.up.v[0] == 0.f && xform->t.look_up.up.v[1] == 0.f && xform->t.look_up.up.v[2] == 0.f) {
             BrVector3Set(&xform->t.look_up.up, 0.f, 1.f, 0.f);
         }
-        BrVector3Copy(&xform->t.look_up.t, (br_vector3*)mat->m[3]);
+        xform->t.look_up.t = *(br_vector3*)mat->m[3];
         break;
     case BR_TRANSFORM_TRANSLATION:
-        BrVector3Copy(&xform->t.quat.t, (br_vector3*)mat->m[3]);
+        xform->t.quat.t = *(br_vector3*)mat->m[3];
         break;
     default:
         abort();

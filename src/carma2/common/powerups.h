@@ -34,15 +34,23 @@ extern tCar_spec* gCloaked_cars[12];
 
 int C2_HOOK_FASTCALL GetPowerupCount(void);
 
+char* C2_HOOK_FASTCALL GetPowerupMessage(int pIndex);
+
+void C2_HOOK_FASTCALL ReceivedPowerup(tNet_message_chunk_powerup* pMessage);
+
+int C2_HOOK_FASTCALL ReceivedRepulseOpponents(tNet_message_chunk_powerup* pMessage);
+
 void C2_HOOK_FASTCALL GetPowerupPosition(int pIndex, br_vector3* pPosition);
 
-void C2_HOOK_FASTCALL InitRepulseEffects(void);
-
-void C2_HOOK_FASTCALL InitTail(void);
+void C2_HOOK_FASTCALL FUN_004df200(tPowerup* pPowerup, tCar_spec* pCar);
 
 void C2_HOOK_FASTCALL InitPowerups(void);
 
 void C2_HOOK_FASTCALL RemoveRepulseEffect(tRepulse_link* pRepulse);
+
+void C2_HOOK_FASTCALL RemoveRepulseLinksForCar(tCar_spec* pCar);
+
+void C2_HOOK_FASTCALL FUN_004ddde0(tCar_spec* pCar);
 
 void C2_HOOK_FASTCALL ResetRepulseEffects(void);
 
@@ -60,13 +68,28 @@ void C2_HOOK_FASTCALL ReadPowerupSmashables(FILE* pF);
 
 void C2_HOOK_FASTCALL InitMineShit(void);
 
+// FUNCTION: CARMA2_HW 0x004dd1b0
+void C2_HOOK_FASTCALL MinePreCollisionStuff(void);
+
+void C2_HOOK_FASTCALL CollideShitMine(tPhysics_object* pObject1, tPhysics_object* pObject2, float pCollision_speed);
+
+void C2_HOOK_FASTCALL FUN_004d9d00(tPhysics_object* pObject, int pMode);
+
 int C2_HOOK_FASTCALL MineExplode(tShit_mine *pMine);
+
+void C2_HOOK_FASTCALL InitializeMineMotion(tShit_mine* pMine, tCar_spec* pCar);
+
+void C2_HOOK_FASTCALL ConfigureShitMine(tShit_mine* pMine, tPowerup* pPowerup, tCar_spec* pCar);
 
 void C2_HOOK_FASTCALL ProcessShitMines(tU32 pTime);
 
 void C2_HOOK_FASTCALL RemoveTail(void);
 
 void C2_HOOK_FASTCALL CloseDownPowerUps(void);
+
+void C2_HOOK_FASTCALL CloseDownPowerUpsForCar(tCar_spec* pCar);
+
+void C2_HOOK_FASTCALL LoseCarPowerups(tCar_spec* pCar);
 
 void C2_HOOK_FASTCALL MaxOutAPO(void);
 
@@ -98,7 +121,7 @@ br_model* C2_HOOK_FASTCALL DuplicateModel(br_model* pModel, const char* pName);
 
 void C2_HOOK_FASTCALL SetChangingPowerup(br_actor* pActor);
 
-int C2_HOOK_FASTCALL GotPowerup(tCar_spec* pCar, int pIndex);
+void C2_HOOK_FASTCALL GotPowerup(tCar_spec* pCar, int pIndex);
 
 int C2_HOOK_FASTCALL GotCredits(tPowerup* powerup, tCar_spec* car);
 
@@ -312,6 +335,10 @@ void C2_HOOK_FASTCALL DrawKeyPowerups(tU32 pTime);
 
 void C2_HOOK_FASTCALL DrawPowerups(tU32 pTime);
 
+void C2_HOOK_FASTCALL SendCurrentPowerups(void);
+
 void C2_HOOK_FASTCALL MayQueuePowerupRespawn(int pPowerup_index, br_actor* actor);
+
+void C2_HOOK_FASTCALL IncreaseAPOLevel(tCar_spec* pCar, int pIndex);
 
 #endif //CARPOCALYPSE2_POWERUPS_H

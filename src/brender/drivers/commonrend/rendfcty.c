@@ -3,6 +3,8 @@
  */
 #include "drv.h"
 #include "commonrend.h"
+
+br_geometry_lighting* GeometryLightingNullAllocate(br_renderer_facility* type, const char* id); /* glrend/compat/compat.c */
 #include <stddef.h>
 
 /*
@@ -36,7 +38,12 @@ br_renderer_facility* BREND_FN(RendererFacility, Init)(br_device* device) {
     self->object_list = BrObjectListAllocate(self);
 
     /* Create geometry objects */
-    if (GeometryPrimitivesNullAllocate(self, "Primitives") == NULL || GeometryLightingNullAllocate(self, "Lighting") == NULL || BREND_FN(GeometryV1Model, Allocate)(self, "V1Model") == NULL) {
+    /* our core has no nulldev: only the V1 model geometry is needed (the game renders through it) */
+    if (GeometryLightingNullAllocate(self, "Lighting") == NULL || BREND_FN(GeometryV1Model, Allocate)(self, "V1Model") == NULL
+#if defined(BREND_DRIVER_GL)
+        || GeometryV1BucketsGLAllocate(self, "V1Buckets") == NULL /* our core's Zs/Zbs scenes require a buckets format */
+#endif
+    ) {
 #if defined(BREND_DRIVER_GL)
         BR_ERROR("GLREND: Error creating geometry objects.");
 #else

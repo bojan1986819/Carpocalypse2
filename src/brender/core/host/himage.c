@@ -2,7 +2,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#else
+#elif !defined(__vita__)
 #include <dlfcn.h>
 #endif
 
@@ -11,6 +11,9 @@ void* C2_HOOK_CDECL HostImageLoad(const char* name) {
 
 #ifdef _WIN32
     return LoadLibraryA(name);
+#elif defined(__vita__)
+    /* Vita drivers are linked statically; desktop dynamic libraries cannot load. */
+    return NULL;
 #else
     return dlopen(name, RTLD_NOW);
 #endif
@@ -27,6 +30,8 @@ void* C2_HOOK_CDECL HostImageLookupName(void* img, const char* name, br_uint_32 
 
 #ifdef _WIN32
     return GetProcAddress((HMODULE)img, name);
+#elif defined(__vita__)
+    return NULL;
 #else
     return dlsym(img, name);
 #endif

@@ -61,6 +61,7 @@ void C2_HOOK_CDECL BrZsOrderTablePrimitiveInsert(br_order_table* order_table, br
     order_table->table[bucket] = primitive;
 }
 
+// C2PORT-NONMATCHING: best 43.51% | difftest PASS 2000 trials (spec 005263f0_BrZsPrimitiveBucketSelect.json; tiny range 005263f0_BrZsPrimitiveBucketSelect_TINY_RANGE.json PASS 2000) | reason remaining VC5 x87 scheduling
 // FUNCTION: CARMA2_HW 0x005263f0
 br_uint_16 C2_HOOK_CDECL BrZsPrimitiveBucketSelect(br_scalar* z, br_uint_16 type, br_scalar min_z, br_scalar max_z, br_uint_16 size, br_uint_16 sort_type) {
     br_uint_16 bucket;
@@ -96,10 +97,11 @@ br_uint_16 C2_HOOK_CDECL BrZsPrimitiveBucketSelect(br_scalar* z, br_uint_16 type
         default:
             abort();
         }
+        break;
     case BRT_TRIANGLE:
         switch (sort_type) {
         case 1:
-            zprim = (z[0] + z[1] + z[3]) * (1.f / 3.f);
+            zprim = (z[0] + z[1] + z[2]) * (1.f / 3.f);
             break;
         case 2:
             zprim = z[0];
@@ -122,6 +124,7 @@ br_uint_16 C2_HOOK_CDECL BrZsPrimitiveBucketSelect(br_scalar* z, br_uint_16 type
         default:
             abort();
         }
+        break;
     default:
         abort();
     }

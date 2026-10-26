@@ -1,11 +1,14 @@
 #include "interface-graphics.h"
 
+#include <string.h>
+
 #include "interface.h"
 #include "interface-options.h"
 #include "loading2.h"
 #include "graphics1.h"
 #include "world2.h"
 #include "depth.h"
+#include "displays.h"
 #include "intrface.h"
 #include "brucetrk.h"
 #include "input.h"
@@ -121,6 +124,10 @@ void C2_HOOK_FASTCALL GetGraphicsSettingsData(tFrontend_spec* pFrontend) {
         break;
     }
 
+#ifdef __vita__
+    /* Vita: SCENERY CUTOFF items 8..11 are draw distances 120 / 100 / 80 / 35 (see Graphics_Infunc) */
+    SelectThisItemIn(pFrontend, 2, GetYon() >= 110.f ? 8 : GetYon() >= 90.f ? 9 : GetYon() >= 57.f ? 10 : 11);
+#else
     switch ((int)((35.f - GetYon()) / 5.f)) {
     case 0:
         SelectThisItemIn(pFrontend, 2, 8);
@@ -135,6 +142,7 @@ void C2_HOOK_FASTCALL GetGraphicsSettingsData(tFrontend_spec* pFrontend) {
         SelectThisItemIn(pFrontend, 2, 11);
         break;
     }
+#endif
 
     yon_factor = GetYonFactor();
     if (yon_factor >= 1.f) {
@@ -159,6 +167,13 @@ void C2_HOOK_FASTCALL GetGraphicsSettingsData(tFrontend_spec* pFrontend) {
         break;
     }
 
+#ifdef __vita__
+    /* Vita: group 5 (SOUND DETAIL) is the FRAME RATE setting, see Graphics_Infunc */
+    {
+        extern int C2VitaGetFrameMode(void);
+        SelectThisItemIn(pFrontend, 5, 22 + C2VitaGetFrameMode());
+    }
+#else
     switch (GetSoundDetailLevel()) {
     case 0:
         SelectThisItemIn(pFrontend, 5, 24);
@@ -170,6 +185,7 @@ void C2_HOOK_FASTCALL GetGraphicsSettingsData(tFrontend_spec* pFrontend) {
         SelectThisItemIn(pFrontend, 5, 22);
         break;
     }
+#endif
 
     switch (GetHowMuchBloodAndSnotToSmearAbout()) {
     case 0:
@@ -229,13 +245,43 @@ void C2_HOOK_FASTCALL GetGraphicsSettingsData(tFrontend_spec* pFrontend) {
     } else {
         SelectThisItemIn(pFrontend, 14, 52);
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    SelectThisItemIn(pFrontend, 15, C2PortGetShowFps() ? 54 : 55);
+#endif
 }
+
+#ifndef CARPOCALYPSE2_MATCHING
+/* Port: an FPS COUNTER on/off row (items 53..55, radio group 15) below AMBIENT SOUNDS.
+ * GRAPHICS.TXT describes 53 items, so the row is cloned from the AMBIENT SOUNDS one after loading. */
+static void AddFpsCounterRow(tFrontend_spec* pFrontend) {
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        pFrontend->items[53 + i] = pFrontend->items[50 + i];
+        pFrontend->items[53 + i].y += 20;
+        pFrontend->items[53 + i].y2 += 20;
+    }
+    pFrontend->items[53].stringId = 0x404;
+    strcpy(pFrontend->items[53].text, "FPS COUNTER");
+    pFrontend->items[54].group = 15;
+    pFrontend->items[55].group = 15;
+    pFrontend->radios[14] = pFrontend->radios[13];
+    pFrontend->radios[14].id = 53;
+    pFrontend->radios[14].indexFirstItem = 54;
+    pFrontend->radios[14].indexLastItem = 55;
+    pFrontend->count_radios = 15;
+    pFrontend->count_items = 56;
+}
+#endif
 
 // FUNCTION: CARMA2_HW 0x004747e0
 int C2_HOOK_FASTCALL Graphics_Infunc(tFrontend_spec* pFrontend) {
 
     if (!pFrontend->loaded) {
         LoadMenuSettings(pFrontend);
+#ifndef CARPOCALYPSE2_MATCHING
+        AddFpsCounterRow(pFrontend);
+#endif
         FuckWithWidths(pFrontend);
         if (pFrontend->previous != NULL) {
             pFrontend->previous->isPreviousSomeOtherMenu = 1;
@@ -248,6 +294,23 @@ int C2_HOOK_FASTCALL Graphics_Infunc(tFrontend_spec* pFrontend) {
     gCurrent_frontend_scrollbars = NULL;
     gConnected_items = NULL;
     gPTR_00686508 = NULL;
+#ifdef __vita__
+    /* Vita: sound detail stays at full (every sample is preloaded); its group becomes the frame
+     * rate choice. 0x404 = literal item text, sized by FuckWithWidths. */
+    {
+        static const char* const labels[4] = { "FRAME RATE", "30 FPS", "60 FPS", "UNLIMITED" };
+        /* SCENERY CUTOFF (items 8..11): draw distances 120 / 100 / 80 / 35 (retail maximum) */
+        static const char* const yon_labels[4] = { "120", "100", "80", "35" };
+        int i;
+        for (i = 0; i < 4; i++) {
+            pFrontend->items[21 + i].stringId = 0x404;
+            strcpy(pFrontend->items[21 + i].text, labels[i]);
+            pFrontend->items[8 + i].stringId = 0x404;
+            strcpy(pFrontend->items[8 + i].text, yon_labels[i]);
+        }
+        FuckWithWidths(pFrontend);
+    }
+#endif
     GetGraphicsSettingsData(pFrontend);
     return 1;
 }
@@ -270,6 +333,22 @@ void C2_HOOK_FASTCALL SetGraphicsSettingsData(tFrontend_spec* pFrontend) {
         break;
     }
 
+#ifdef __vita__
+    switch (WhichItemIsSelectedIn(pFrontend, 2)) {
+    case 8:
+        SetYon(120.f);
+        break;
+    case 9:
+        SetYon(100.f);
+        break;
+    case 10:
+        SetYon(80.f);
+        break;
+    case 11:
+        SetYon(35.f);
+        break;
+    }
+#else
     switch (WhichItemIsSelectedIn(pFrontend, 2)) {
     case 8:
         SetYon(35.f);
@@ -284,6 +363,7 @@ void C2_HOOK_FASTCALL SetGraphicsSettingsData(tFrontend_spec* pFrontend) {
         SetYon(20.f);
         break;
     }
+#endif
 
     switch (WhichItemIsSelectedIn(pFrontend, 3)) {
     case 13:
@@ -312,6 +392,15 @@ void C2_HOOK_FASTCALL SetGraphicsSettingsData(tFrontend_spec* pFrontend) {
         break;
     }
 
+#ifdef __vita__
+    {
+        extern void C2VitaSetFrameMode(int mode);
+        int item = WhichItemIsSelectedIn(pFrontend, 5);
+        if (item >= 22 && item <= 24) {
+            C2VitaSetFrameMode(item - 22);
+        }
+    }
+#else
     switch (WhichItemIsSelectedIn(pFrontend, 5)) {
     case 22:
         SetSoundDetailLevel(2);
@@ -323,6 +412,7 @@ void C2_HOOK_FASTCALL SetGraphicsSettingsData(tFrontend_spec* pFrontend) {
         SetSoundDetailLevel(0);
         break;
     }
+#endif
 
     switch (WhichItemIsSelectedIn(pFrontend, 6)) {
     case 26:
@@ -407,6 +497,9 @@ void C2_HOOK_FASTCALL SetGraphicsSettingsData(tFrontend_spec* pFrontend) {
         gAmbient_sound = 0;
         break;
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    C2PortSetShowFps(WhichItemIsSelectedIn(pFrontend, 15) == 54);
+#endif
 
     SaveOptions();
 }

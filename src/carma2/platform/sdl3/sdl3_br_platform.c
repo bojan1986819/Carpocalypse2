@@ -6,12 +6,15 @@
 
 #ifdef SDL_PLATFORM_WINDOWS
 #include <windows.h>
-#else
+#elif !defined(__vita__)
 #include <sys/mman.h>
 #endif
 
 void PDMapImageSection(void *base, size_t size, br_uint_32 flags) {
-#ifdef SDL_PLATFORM_WINDOWS
+#if defined(__vita__)
+    /* All drivers are statically linked; runtime PE image mapping is unsupported. */
+    (void)base; (void)size; (void)flags;
+#elif defined(SDL_PLATFORM_WINDOWS)
     DWORD prev_protect;
     DWORD new_protect;
     switch (flags) {

@@ -24,27 +24,169 @@
 #include <stdarg.h>
 #include <sys/stat.h>
 
+#ifdef __vita__
+#include <stdatomic.h>
+#include <SDL3/SDL.h>
+/* File probes repeat the same directory prefixes many times during loading.
+ * Keep bounded per-thread results; writes invalidate every thread's cache.
+ * Missing leaf names are cached too, until a writer may create them. */
+static atomic_uint case_generation;
+typedef struct {
+    unsigned generation, clock;
+    struct { char key[1024], value[1024]; unsigned stamp; } entries[64];
+    struct {
+        char parent[1024], names[1024][64];
+        unsigned stamp, count;
+        int complete;
+    } directories[8];
+    char fixed[1024];
+} CaseContext;
+/* VitaSDK's GCC emutls falls back to one process-global slot without gthreads.
+ * SDL uses native thread IDs, so its TLS is safe for the music worker too. */
+static SDL_TLSID case_tls;
+static CaseContext* case_context(void) {
+    CaseContext* context = SDL_GetTLS(&case_tls);
+    if (!context) {
+        context = SDL_calloc(1, sizeof(*context));
+        if (context && !SDL_SetTLS(&case_tls, context, SDL_free)) {
+            SDL_free(context);
+            context = NULL;
+        }
+    }
+    return context;
+}
+static void invalidate_case_cache(void) {
+    atomic_fetch_add(&case_generation, 1);
+}
+static int cached_component(CaseContext* context, const char* key, char* value) {
+    unsigned i, generation = atomic_load(&case_generation);
+    if (context->generation != generation) {
+        memset(context->entries, 0, sizeof(context->entries));
+        memset(context->directories, 0, sizeof(context->directories));
+        context->clock = 0;
+        context->generation = generation;
+    }
+    for (i = 0; i < 64; ++i) {
+        if (context->entries[i].stamp && !strcasecmp(key, context->entries[i].key)) {
+            strcpy(value, context->entries[i].value);
+            context->entries[i].stamp = ++context->clock;
+            return 1;
+        }
+    }
+    return 0;
+}
+/* Index directory names once instead of re-reading the same large directory
+ * for every distinct missing texture. Incomplete indexes fall back to the
+ * ordinary scan for misses, preserving long names and oversized directories. */
+static int directory_match(CaseContext* context, const char* parent, const char* name, char* match) {
+    unsigned i, slot = 0;
+    for (i = 0; i < 8; ++i) {
+        if (context->directories[i].stamp && !strcmp(parent, context->directories[i].parent)) {slot = i;break;}
+        if (context->directories[i].stamp < context->directories[slot].stamp) slot = i;
+    }
+    if (i == 8) {
+        DIR* dir;
+        struct dirent* entry;
+        memset(&context->directories[slot], 0, sizeof(context->directories[slot]));
+        strcpy(context->directories[slot].parent, parent);
+        context->directories[slot].complete = 1;
+        dir = opendir(parent);
+        if (dir) {
+            while ((entry = readdir(dir)) != NULL) {
+                unsigned count = context->directories[slot].count;
+                if (count == 1024 || strlen(entry->d_name) >= 64) {
+                    context->directories[slot].complete = 0;
+                    continue;
+                }
+                strcpy(context->directories[slot].names[count], entry->d_name);
+                ++context->directories[slot].count;
+            }
+            closedir(dir);
+        }
+    }
+    context->directories[slot].stamp = ++context->clock;
+    match[0] = 0;
+    for (i = 0; i < context->directories[slot].count; ++i) {
+        if (!strcasecmp(name, context->directories[slot].names[i])) {
+            strcpy(match, context->directories[slot].names[i]);
+            return 1;
+        }
+    }
+    return context->directories[slot].complete;
+}
+static void cache_component(CaseContext* context, const char* key, const char* value) {
+    unsigned i, slot = 0;
+    for (i = 0; i < 64; ++i)
+        if (context->entries[i].stamp < context->entries[slot].stamp) slot = i;
+    strcpy(context->entries[slot].key, key);
+    strcpy(context->entries[slot].value, value);
+    context->entries[slot].stamp = ++context->clock;
+}
+#endif
+
 const char* carpocalypse2_fix_path_case(const char* pPath) {
+#ifdef __vita__
+    CaseContext* context;
+    char* fixed;
+    char key[1024] = "";
+    char* saved;
+    int cacheable;
+    struct stat info;
+#else
     static char fixed[1024];
+#endif
     char walk[1024];
     char* component;
 
     if (pPath == NULL || strlen(pPath) >= sizeof(walk)) {
         return pPath;
     }
+#ifdef __vita__
+    if (stat(pPath, &info) == 0) return pPath;
+    context = case_context();
+    if (!context) return pPath;
+    fixed = context->fixed;
+    cacheable = strchr(pPath, ':') != NULL; /* Relative paths depend on cwd. */
+#endif
     strcpy(walk, pPath);
     fixed[0] = '\0';
     if (walk[0] == '/') {
         strcat(fixed, "/");
     }
 
+#ifdef __vita__
+    component = strtok_r(walk, "/", &saved);
+#else
     component = strtok(walk, "/");
+#endif
     while (component != NULL) {
         DIR* dir;
         struct dirent* entry;
         char match[512];
         int found;
 
+#ifdef __vita__
+        if (key[0]) strcat(key, "/");
+        strcat(key, component);
+        if (cacheable && cached_component(context, key, fixed)) {
+            component = strtok_r(NULL, "/", &saved);
+            continue;
+        }
+        /* A native mount prefix is a root, not an entry in the current cwd. */
+        if (fixed[0] == '\0' && strchr(component, ':')) {
+            strcpy(fixed, component);
+            cache_component(context, key, fixed);
+            component = strtok_r(NULL, "/", &saved);
+            continue;
+        }
+        if (cacheable && directory_match(context, fixed[0] ? fixed : ".", component, match)) {
+            if (fixed[0] && fixed[strlen(fixed) - 1] != '/') strcat(fixed, "/");
+            strcat(fixed, match[0] ? match : component);
+            cache_component(context, key, fixed);
+            component = strtok_r(NULL, "/", &saved);
+            continue;
+        }
+#endif
         dir = opendir(fixed[0] == '\0' ? "." : fixed);
         if (dir == NULL) {
             /* Cannot inspect this level; keep the rest verbatim. */
@@ -52,7 +194,12 @@ const char* carpocalypse2_fix_path_case(const char* pPath) {
                 strcat(fixed, "/");
             }
             strcat(fixed, component);
+#ifdef __vita__
+            if (cacheable) cache_component(context, key, fixed);
+            component = strtok_r(NULL, "/", &saved);
+#else
             component = strtok(NULL, "/");
+#endif
             continue;
         }
         match[0] = '\0';
@@ -75,7 +222,12 @@ const char* carpocalypse2_fix_path_case(const char* pPath) {
         } else {
             strcat(fixed, component);
         }
+#ifdef __vita__
+        if (cacheable) cache_component(context, key, fixed);
+        component = strtok_r(NULL, "/", &saved);
+#else
         component = strtok(NULL, "/");
+#endif
     }
 
     return fixed;
@@ -87,6 +239,9 @@ extern FILE* __real_fopen(const char* pPath, const char* pMode);
 FILE* __wrap_fopen(const char* pPath, const char* pMode) {
     FILE* f;
 
+#ifdef __vita__
+    if (strpbrk(pMode, "wa+")) invalidate_case_cache();
+#endif
     f = __real_fopen(pPath, pMode);
     if (f == NULL) {
         const char* fixed = carpocalypse2_fix_path_case(pPath);
@@ -98,6 +253,9 @@ FILE* __wrap_fopen(const char* pPath, const char* pMode) {
             }
         }
     }
+#ifdef __vita__
+    if (strpbrk(pMode, "wa+")) invalidate_case_cache();
+#endif
     return f;
 }
 
@@ -109,6 +267,9 @@ extern int __real_open64(const char* pPath, int pFlags, ...);
 static int case_fix_open(const char* pPath, int pFlags, mode_t pMode) {
     int fd;
 
+#ifdef __vita__
+    if ((pFlags & (O_CREAT | O_TRUNC | O_WRONLY | O_RDWR)) != 0) invalidate_case_cache();
+#endif
     fd = (int)__real_open(pPath, pFlags, pMode);
     if (fd < 0) {
         const char* fixed = carpocalypse2_fix_path_case(pPath);
@@ -117,6 +278,9 @@ static int case_fix_open(const char* pPath, int pFlags, mode_t pMode) {
             fprintf(stderr, "[open MISS] %s%s\n", pPath, (fd >= 0) ? "  (case-fixed OK)" : "");
         }
     }
+#ifdef __vita__
+    if ((pFlags & (O_CREAT | O_TRUNC | O_WRONLY | O_RDWR)) != 0) invalidate_case_cache();
+#endif
     return fd;
 }
 

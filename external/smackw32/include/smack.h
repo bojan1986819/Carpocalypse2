@@ -220,6 +220,16 @@ void SMACK_STDCALL SmackBufferNewPalette(HSMACKBUF a1, void *a2, unsigned int a3
 
 void SMACK_STDCALL SmackColorRemapWithTrans(HSMACK a1, void *a2, unsigned int a3, unsigned int a4, unsigned int a5);
 
+/* port (libsmacker backend only): the platform's audio output for the video soundtrack.
+ * open() gets the PCM format (8-bit unsigned or 16-bit signed little endian, interleaved) and
+ * returns nonzero on success, push() gets each decoded frame's samples in order, close() is
+ * called when the video is closed. */
+typedef struct {
+    int (*open)(int channels, int bits, unsigned long rate);
+    void (*push)(const void* data, unsigned long size);
+    void (*close)(void);
+} SmackAudioSink;
+void SmackSetAudioSink(const SmackAudioSink* sink);
 
 #if defined(__cplusplus)
 }

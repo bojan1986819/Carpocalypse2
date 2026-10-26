@@ -1,12 +1,21 @@
 #include "cutscene.h"
 
 #include "errors.h"
+#if !defined(CARPOCALYPSE2_MATCHING) && defined(CARPOCALYPSE2_PLATFORM_SDL3)
+/* port: on a wide display the video is drawn across the full width at its own aspect; the
+ * extra height falls into the letterbox bars baked into the 320x192 frames */
+extern float PDWidescreenFactor(void);
+extern int PDSetWorldRendering(int active);
+#define C2_WIDE_CUTSCENE 1
+#endif
 #include "globvars.h"
 #include "globvrbm.h"
 #include "graphics.h"
 #include "input.h"
 #include "sound.h"
 #include "utility.h"
+#include "drmem.h"
+#include "flicplay.h"
 
 #include <brender/brender.h>
 
@@ -255,6 +264,16 @@ void C2_HOOK_FASTCALL PlaySmackerFile(const char* pSmack_name) {
                 gSmackerModel->faces[face_start + 1].flags = 0;
             }
         }
+#ifdef C2_WIDE_CUTSCENE
+        {
+            float k = PDWidescreenFactor();
+            if (k > 1.f) {
+                for (i = 0; i < gSmackerModel->nvertices; i++) {
+                    gSmackerModel->vertices[i].p.v[1] = -240.f + (gSmackerModel->vertices[i].p.v[1] + 240.f) * k;
+                }
+            }
+        }
+#endif
         BrModelAdd(gSmackerModel);
         gSmackerActor->model = gSmackerModel;
         BrActorAdd(g2d_camera, gSmackerActor);
@@ -304,7 +323,15 @@ void C2_HOOK_FASTCALL PlaySmackerFile(const char* pSmack_name) {
                             BrMaterialUpdate(gSmackMaterials[i], BR_MATU_ALL);
                         }
                     }
+#ifdef C2_WIDE_CUTSCENE
+                    {
+                        int old_world = PDSetWorldRendering(1);
+                        BrZbSceneRender(g2d_camera, g2d_camera, gBack_screen, gDepth_buffer);
+                        PDSetWorldRendering(old_world);
+                    }
+#else
                     BrZbSceneRender(g2d_camera, g2d_camera, gBack_screen, gDepth_buffer);
+#endif
                     PDScreenBufferSwap(0);
                     PDServiceSystem(0);
                     if (currentFrame != smackHandle->Frames) {
@@ -317,6 +344,13 @@ void C2_HOOK_FASTCALL PlaySmackerFile(const char* pSmack_name) {
                             break;
                         }
                     }
+#ifndef CARPOCALYPSE2_MATCHING
+                    /* port: keys were only polled while waiting for the next frame; when decoding and
+                     * presenting run behind schedule (Vita) there is no wait, so presses were missed */
+                    if (!keyPressed) {
+                        keyPressed = AnyKeyDown();
+                    }
+#endif
                     if (keyPressed) {
                         break;
                     }
@@ -392,6 +426,13 @@ void C2_HOOK_FASTCALL PlaySmackerFile(const char* pSmack_name) {
                             break;
                         }
                     }
+#ifndef CARPOCALYPSE2_MATCHING
+                    /* port: keys were only polled while waiting for the next frame; when decoding and
+                     * presenting run behind schedule (Vita) there is no wait, so presses were missed */
+                    if (!keyPressed) {
+                        keyPressed = AnyKeyDown();
+                    }
+#endif
                     if (keyPressed) {
                         break;
                     }
@@ -442,6 +483,30 @@ void C2_HOOK_FASTCALL DoGameCompletedAnimation(void) {
 
     PlaySmackerFile("TOPRANK.SMK");
     WaitForNoKeys();
+}
+
+// FUNCTION: CARMA2_HW 0x0043f3a0
+void C2_HOOK_FASTCALL DoFeatureUnavailableInDemo(void) {
+    float sound_delay;
+
+    PrintMemoryDump(0, "BEFORE DEMO-ONLY SCREEN");
+    SuspendPendingFlic();
+    FadePaletteDown();
+    sound_delay = gFlic_sound_delay_not_in_demo;
+    gProgram_state.cut_scene = 1;
+    DRS3LoadSample(0x2136);
+    FUN_00461980(0x2136, PDGetTotalTime() - (int)(sound_delay * -1000.0f));
+    SetNonFatalAllocationErrors();
+    RunFlic(7);
+    ResetNonFatalAllocationErrors();
+    FUN_004835d0();
+    FadePaletteDown();
+    ClearEntireScreen();
+    DRS3ReleaseSound(0x2136);
+    FUN_00461980(0, 0);
+    gProgram_state.cut_scene = 0;
+    FadePaletteDown();
+    PrintMemoryDump(0, "AFTER DEMO-ONLY SCREEN");
 }
 
 // FUNCTION: CARMA2_HW 0x0043f5c0

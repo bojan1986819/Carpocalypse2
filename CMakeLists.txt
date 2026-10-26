@@ -5,6 +5,13 @@ cmake_policy(SET CMP0091 NEW)
 project(carpocalypse2 C)
 
 include(CMakeDependentOption)
+if(VITA)
+    set(CMAKE_C_STANDARD 11)
+    set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
+    # The recovered code uses retail float/int aliasing and separate operations.
+    add_compile_options(-fno-strict-aliasing -ffp-contract=off -fno-short-enums)
+endif()
+
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}" CACHE PATH "Runtime directory")
 
@@ -89,6 +96,8 @@ if(CARPOCALYPSE2_PLATFORM_WIN32)
     # platform, because only the former compiles win32/win32_dinput.c and
     # its DirectInput joystick globals.
     add_compile_definitions(CARPOCALYPSE2_PLATFORM_WIN32)
+elseif(CARPOCALYPSE2_PLATFORM_SDL3)
+    add_compile_definitions(CARPOCALYPSE2_PLATFORM_SDL3)
 endif()
 
 option(KEEP_ACTIVE_IN_BACKGROUND "Keep the game active when alt-tabbing to another application" OFF)
@@ -173,6 +182,10 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang")
         -Wno-error=return-mismatch
         -Wno-error=int-conversion
     )
+elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 14)
+    add_compile_options(-Wno-error=implicit-function-declaration
+        -Wno-error=incompatible-pointer-types -Wno-error=return-mismatch
+        -Wno-error=int-conversion)
 endif()
 
 if(KEEP_ACTIVE_IN_BACKGROUND)
@@ -188,8 +201,43 @@ if(NOT CARPOCALYPSE2_MATCHING)
     endif()
 endif()
 
+option(C2_FPU_SSE2 "Desktop test build with SSE2 single-precision floats (behaves like the Vita/ARM FPU)" OFF)
+if(MSVC AND NOT CARPOCALYPSE2_MATCHING AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+    if(C2_FPU_SSE2)
+        add_compile_options(/arch:SSE2)
+    else()
+        # x87 floating point like the original: the physics/camera code depends on x87 rounding
+        # (SSE2 single precision changes solver results and can make edge-case loops never end)
+        add_compile_options(/arch:IA32)
+    endif()
+endif()
+option(C2_VITA_UNCAPPED "Vita test build: no 30 fps cap by default (FPS30.SET restores it)" OFF)
+if(C2_VITA_UNCAPPED)
+    add_compile_definitions(C2_VITA_UNCAPPED)
+endif()
 add_subdirectory(src/brender)
 add_subdirectory(src/carma2)
+if(VITA)
+    include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
+    vita_create_self(eboot.bin carpocalypse2 UNSAFE)
+    # LiveArea bubble/background: 8-bit indexed PNGs made from the game's title screen and icon
+    set(C2_VITA_SCE_SYS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/vita/sce_sys")
+    vita_create_vpk(carpocalypse2.vpk C2VITA001 eboot.bin
+        VERSION 01.00 NAME "Carmageddon 2"
+        FILE ${C2_VITA_SCE_SYS}/icon0.png sce_sys/icon0.png
+        FILE ${C2_VITA_SCE_SYS}/pic0.png sce_sys/pic0.png
+        FILE ${C2_VITA_SCE_SYS}/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
+        FILE ${C2_VITA_SCE_SYS}/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
+        FILE ${C2_VITA_SCE_SYS}/livearea/contents/template.xml sce_sys/livearea/contents/template.xml)
+endif()
+
+
+# Opt-in host verifier; uses the production PF implementation with tracked
+# allocation/platform stubs, without starting SDL or the game.
+if(NOT CARPOCALYPSE2_MATCHING)
+    add_executable(test_lazy_twt EXCLUDE_FROM_ALL scripts/test_lazy_twt.c)
+    target_link_libraries(test_lazy_twt PRIVATE c2_common)
+endif()
 
 set(CARM2_LOCATION "" CACHE FILEPATH "Path of Carmageddon II")
 if(CARM2_LOCATION)

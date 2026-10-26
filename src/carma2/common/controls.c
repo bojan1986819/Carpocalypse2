@@ -9,6 +9,7 @@
 #include "drone.h"
 #include "errors.h"
 #include "finteray.h"
+#include "frontend_controls.h"
 #include "globvars.h"
 #include "globvrkm.h"
 #include "globvrme.h"
@@ -45,7 +46,6 @@
 #include "brender/brender.h"
 
 #include "c2_string.h"
-#include "c2_stdlib.h"
 
 #include "carpocalypse2_macros.h"
 #include "controls.h"
@@ -71,6 +71,9 @@
 extern tU32* C2_HOOK_FASTCALL KevKeyService(void);
 // GLOBAL: CARMA2_HW 0x0067c474
 int gEntering_message;
+
+// GLOBAL: CARMA2_HW 0x006923d8
+tPhysics_object* gUnknown_006923d8;
 
 // GLOBAL: CARMA2_HW 0x00590970
 tCheat gKev_keys[] = {
@@ -221,6 +224,12 @@ tToggle_element gToggle_array[44] = {
 
 // GLOBAL: CARMA2_HW 0x0067c3f8
 int gRecovery_voucher_count;
+
+// FUNCTION: CARMA2_HW 0x004446f0
+int C2_HOOK_FASTCALL FUN_004446f0(void) {
+
+    return gRecovery_voucher_count;
+}
 
 // FUNCTION: CARMA2_HW 0x00444700
 void C2_HOOK_FASTCALL AddVouchers(int amount) {
@@ -746,6 +755,7 @@ void C2_HOOK_FASTCALL ReallySetSoundDetailLevel(int pLevel) {
 #pragma auto_inline(on)
 
 // Key: 'm'
+// C2PORT-NONMATCHING: best 37.84% | difftest PASS 2000 trials (spec difftest/specs/004420e0_ToggleMiniMap.json) | reason VC5 inlines GetMiscString and tail-calls UpdateMapAndSaveOptions
 // FUNCTION: CARMA2_HW 0x004420e0
 void C2_HOOK_FASTCALL ToggleMiniMap(void) {
 
@@ -863,7 +873,14 @@ void C2_HOOK_FASTCALL ToggleMap2(void) {
     }
 }
 
+// FUNCTION: CARMA2_HW 0x004446d0
+tU32 C2_HOOK_FASTCALL GetKeyStateBit27(void) {
+
+    return (*(tU32*)&gProgram_state.current_car.keys >> 27) & 1;
+}
+
 // Key: 'tab'
+// C2PORT-NONMATCHING: best 33.73% | difftest PASS 2000 trials (spec difftest/specs/00444610_ToggleMap.json) | reason VC5 control flow split across ToggleMap2 and wrapper
 // FUNCTION: CARMA2_HW 0x00444610
 void C2_HOOK_FASTCALL ToggleMap(void) {
 
@@ -893,59 +910,74 @@ void C2_HOOK_FASTCALL ToggleMapTransparency(void) {
 }
 
 // Key: 'r'
+// C2PORT-NONMATCHING: best 24.89% | difftest PASS 2000 trials (spec difftest/specs/00442300_SetRecovery.json) | reason VC5 control-flow and register allocation
 // FUNCTION: CARMA2_HW 0x00442300
 void C2_HOOK_FASTCALL SetRecovery(void) {
+    int game_type;
 
-    if (gINT_0068b8e4
-        || gINT_0068b8e8
-        || gRace_finished
-        || gProgram_state.current_car.knackered
-        || gWait_for_it
-        || gHad_auto_recover
-        || gPalette_fade_time != 0) {
-        return;
-    }
-    if (gNet_mode == eNet_mode_none) {
-        gRecover_car = 1;
-        gRecover_timer = 0;
-    } else if (gProgram_state.current_car.time_to_recover == 0) {
-        gCancel_recover = 1;
-        if (CheckRecoverCost()) {
-            if (gCurrent_net_game->type == eNet_game_type_foxy) {
-                if (gThis_net_player_index == gIt_or_fox) {
-                    gToo_late = 0;
-                    gProgram_state.current_car.time_to_recover = GetRaceTime() + 5000;
-                } else {
-                    gToo_late = 0;
-                    gProgram_state.current_car.time_to_recover = GetRaceTime() + 1000;
-                }
-            } else {
-                if (gCurrent_net_game->type == 6 &&
-                    gNet_players[gThis_net_player_index].field_0x80 != 0) {
-                    gToo_late = 0;
-                    gProgram_state.current_car.time_to_recover = GetRaceTime() + 500;
-                } else {
-                    gToo_late = 0;
-                    gProgram_state.current_car.time_to_recover = GetRaceTime() + 3000;
+    if (gINT_0068b8e4 == 0) {
+        if (gINT_0068b8e8 == 0) {
+            if (gRace_finished == 0) {
+                if (gProgram_state.current_car.knackered == 0) {
+                    if (gWait_for_it == 0) {
+                        if (gHad_auto_recover == 0) {
+                            if (gPalette_fade_time == 0) {
+                                if (gNet_mode == eNet_mode_none) {
+                                    gRecover_car = 1;
+                                    gRecover_timer = 0;
+                                    return;
+                                }
+                                if (gProgram_state.current_car.time_to_recover == 0) {
+                                    gCancel_recover = 1;
+                                    if (!CheckRecoverCost()) {
+                                        return;
+                                    }
+                                    game_type = gCurrent_net_game->type;
+                                    if (game_type == eNet_game_type_foxy) {
+                                        if (gThis_net_player_index == gIt_or_fox) {
+                                            gToo_late = 0;
+                                            gProgram_state.current_car.time_to_recover = GetRaceTime() + 5000;
+                                        } else {
+                                            gToo_late = 0;
+                                            gProgram_state.current_car.time_to_recover = GetRaceTime() + 1000;
+                                        }
+                                        return;
+                                    }
+                                    if (game_type == 6 && gNet_players[gThis_net_player_index].field_0x80 != 0) {
+                                        gToo_late = 0;
+                                        gProgram_state.current_car.time_to_recover = GetRaceTime() + 500;
+                                        return;
+                                    }
+                                    gToo_late = 0;
+                                    gProgram_state.current_car.time_to_recover = GetRaceTime() + 3000;
+                                    return;
+                                }
+                                if (gCancel_recover) {
+                                    if (GetRaceTime() + 600 < gProgram_state.current_car.time_to_recover) {
+                                        gProgram_state.current_car.time_to_recover = 0;
+                                        if (!gINT_0067c470) {
+                                            float cost = gNet_mode == eNet_mode_none
+                                                ? gRecovery_cost.initial[gProgram_state.skill_level]
+                                                : gRecovery_cost.initial_network[gCurrent_net_game->type];
+                                            EarnCredits((int)cost);
+                                        }
+                                        NewTextHeadupSlot2(4, 0, 2000, -4, GetMiscString(eMiscString_recovery_cancelled), 0);
+                                        return;
+                                    }
+                                    NewTextHeadupSlot2(4, 0, 2000, -4, GetMiscString(eMiscString_too_late_to_cancel), 1);
+                                    gToo_late = 1;
+                                    return;
+                                }
+                            }
+                        }
+                    }
                 }
             }
-        }
-    }
-    else if (gCancel_recover) {
-        if (GetRaceTime() + 600 < gProgram_state.current_car.time_to_recover) {
-            gProgram_state.current_car.time_to_recover = 0;
-            if (!gINT_0067c470) {
-                float cost = (gNet_mode == eNet_mode_none) ? gRecovery_cost.initial[gProgram_state.skill_level] : gRecovery_cost.initial_network[gCurrent_net_game->type];
-                EarnCredits((int)cost);
-            }
-            NewTextHeadupSlot2(4, 0, 2000, -4, GetMiscString(eMiscString_recovery_cancelled), 0);
-        } else {
-            NewTextHeadupSlot2(4, 0, 2000, -4, GetMiscString(eMiscString_too_late_to_cancel), 1);
-            gToo_late = 1;
         }
     }
 }
 
+// C2PORT-NONMATCHING: best 27.08% | difftest PASS 2000 trials (spec difftest/specs/00442750_CheckRecoverCost.json) | reason vc5-network-branch-register-layout
 // FUNCTION: CARMA2_HW 0x00442750
 int C2_HOOK_FASTCALL CheckRecoverCost(void) {
     int recovery_cost;
@@ -963,14 +995,14 @@ int C2_HOOK_FASTCALL CheckRecoverCost(void) {
     }
 
     gINT_0067c470 = 0;
-    recovery_cost = (int)(gNet_mode == eNet_mode_none ? gRecovery_cost.initial[gProgram_state.skill_level] : gRecovery_cost.initial[gCurrent_net_game->type]);
+    recovery_cost = (int)(gNet_mode == eNet_mode_none ? gRecovery_cost.initial[gProgram_state.skill_level] : gRecovery_cost.initial_network[gCurrent_net_game->type]);
 
     if (recovery_cost > gProgram_state.credits) {
         int remaining_cost = recovery_cost;
         while (remaining_cost > 0
-                && gProgram_state.current_car.power_up_levels[0] != 0
-                && gProgram_state.current_car.power_up_levels[1] != 0
-                && gProgram_state.current_car.power_up_levels[2] != 0) {
+                && (gProgram_state.current_car.power_up_levels[0] != 0
+                    || gProgram_state.current_car.power_up_levels[1] != 0
+                    || gProgram_state.current_car.power_up_levels[2] != 0)) {
             int which;
 
             which = IRandomBetween(0, 2);
@@ -1019,15 +1051,25 @@ void C2_HOOK_FASTCALL ToggleHeadupLevel(void) {
     NewTextHeadupSlot2(4, 0, 250, -4, GetMiscString(eMiscString_no_HUD + (gHeadup_detail_level % 3)), 0);
 }
 
+// FUNCTION: CARMA2_HW 0x00444fa0
+void C2_HOOK_FASTCALL ToggleShellModel(void) {
+    gCar_to_view->use_shell_model = !gCar_to_view->use_shell_model;
+    if (gCar_to_view->use_shell_model) {
+        NewTextHeadupSlot(4, 0, 2000, -4, "SHELL MODEL");
+    } else {
+        NewTextHeadupSlot(4, 0, 2000, -4, "COMPLEX MODELS");
+    }
+}
+
+// C2PORT-NONMATCHING: best 100.00% | difftest PASS 2000 trials (spec difftest/specs/00441580_SetFlag.json) | reason disabling F4Key inlining restored the original call and branch order
 // FUNCTION: CARMA2_HW 0x00441580
 void C2_HOOK_FASTCALL SetFlag(int i) {
-    int match;
 
-    match = gI_am_cheating == i;
-    gI_am_cheating = i;
-    if (match) {
+    if (gI_am_cheating == i) {
         gI_am_cheating = 0;
         NewTextHeadupSlot(4, 0, 3000, -4, "Cheating Off");
+    } else {
+        gI_am_cheating = i;
     }
     F4Key();
 }
@@ -1051,6 +1093,7 @@ void C2_HOOK_FASTCALL SetFlag2(int i) {
 }
 
 // Key: 'f4'
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004414b0
 void C2_HOOK_FASTCALL F4Key(void) {
 
@@ -1083,6 +1126,7 @@ void C2_HOOK_FASTCALL F4Key(void) {
         gWhich_edit_mode = 0;
     }
 }
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x004415e0
 void C2_HOOK_FASTCALL EnsureSpecialVolumesHidden(void) {
@@ -1299,26 +1343,43 @@ void C2_HOOK_FASTCALL BuyOffense(void) {
 }
 
 // Key: ' '
+// C2PORT-NONMATCHING: best 86.49% | difftest PASS 2000 trials (spec difftest/specs/0040e430_ViewNetPlayer.json) | reason VC5 selection loop and register layout
 // FUNCTION: CARMA2_HW 0x0040e430
 void C2_HOOK_FASTCALL ViewNetPlayer(void) {
+    int i;
+    int best_last_score_index;
+    tCar_spec* car;
 
-    if (!gOpponent_viewing_mode) {
-    } else {
-        if (gProgram_state.cockpit_on) {
-            ToggleCockpit();
-        }
+    if (gOpponent_viewing_mode) {
         gNet_player_to_view_index++;
         if (gNumber_of_net_players <= gNet_player_to_view_index) {
             gNet_player_to_view_index = -1;
         }
         if (gNet_player_to_view_index >= 0) {
-            gCar_to_view = gNet_players[gNet_player_to_view_index].car;
+            car = gNet_players[gNet_player_to_view_index].car;
         } else {
-            gCar_to_view = GetRaceLeader();
+            car = gNet_players[0].car;
+            best_last_score_index = gNet_players[0].last_score_index;
+            if (gCurrent_net_game->type == eNet_game_type_foxy
+                && gIt_or_fox >= 0
+                && gIt_or_fox < gNumber_of_net_players) {
+                car = gNet_players[gIt_or_fox].car;
+            } else if (gNumber_of_net_players > 1) {
+                for (i = 1; i < gNumber_of_net_players; i++) {
+                    if (gNet_players[i].last_score_index < best_last_score_index) {
+                        car = gNet_players[i].car;
+                        best_last_score_index = gNet_players[i].last_score_index;
+                    }
+                }
+            }
         }
-        gCamera_yaw = 0;
-        InitialiseExternalCamera();
-        PositionExternalCamera(gCar_to_view, 200u);
+        NetPlayerFromCar(car);
+        if (gNet_mode == eNet_mode_host) {
+            gCar_to_view = car;
+            gCamera_yaw = 0;
+            InitialiseExternalCamera();
+            PositionExternalCamera(gCar_to_view, 200u);
+        }
     }
 }
 
@@ -1332,6 +1393,7 @@ void C2_HOOK_FASTCALL UserSendMessage(void) {
 }
 
 // Key: 't'
+// C2PORT-NONMATCHING: best 77.22% | difftest PASS 2000 trials (spec difftest/specs/004945f0_ToggleTargetLock.json) | reason stack-layout/register-allocation
 // FUNCTION: CARMA2_HW 0x004945f0
 void C2_HOOK_FASTCALL ToggleTargetLock(void) {
 
@@ -1339,24 +1401,30 @@ void C2_HOOK_FASTCALL ToggleTargetLock(void) {
         if (gCurrent_net_game->type == eNet_game_type_foxy) {
             return;
         }
-        if (!gCurrent_net_game->options.show_powerups_on_map) {
+        if (!gCurrent_net_game->options.show_players_on_map) {
             return;
         }
     }
+#ifdef __vita__
+    if (gTarget_lock_car_1 == NULL || gTarget_lock_car_2 == NULL) {
+#else
     if (gTarget_lock_car_1 == NULL) {
+#endif
         NewTextHeadupSlot2(4, 0, 1500, -4, GetMiscString(eMiscString_no_target_to_lock_onto), 0);
     } else {
         gTarget_lock_enabled = !gTarget_lock_enabled;
         if (gTarget_lock_enabled) {
             const char* driver_name;
+            char driver_name_copy[256];
             char s[256];
 
             if (gNet_mode == eNet_mode_none) {
-                driver_name = GetDriverName(gTarget_lock_car_2->car_ID >> 8, gTarget_lock_car_2->car_ID & 0xff);
+                driver_name = GetDriverName(((unsigned short)gTarget_lock_car_2->car_ID) >> 8, gTarget_lock_car_2->car_ID & 0xff);
             } else {
                 driver_name = NetPlayerFromCar(gTarget_lock_car_2)->player_name;
             }
-            sprintf(s, "%s %s", driver_name, GetMiscString(eMiscString_locked_onto));
+            strcpy(driver_name_copy, driver_name);
+            sprintf(s, "%s %s", driver_name_copy, GetMiscString(eMiscString_locked_onto));
             NewTextHeadupSlot2(4, 0, 1500, -4, s, 0);
         } else {
             NewTextHeadupSlot2(4, 0, 1500, -4, GetMiscString(eMiscString_target_lock_off), 0);
@@ -1675,15 +1743,42 @@ void C2_HOOK_FASTCALL CheckKevKeys(void) {
     }
 }
 
+// C2PORT-NONMATCHING: best 62.11% | difftest PASS 2000 trials (spec difftest/specs/00442e90_CheckSystemKeys.json) | reason register-allocation-and-loop-codegen
 // FUNCTION: CARMA2_HW 0x00442e90
 void C2_HOOK_FASTCALL CheckSystemKeys(int pRacing) {
     tU32 start_menu_time;
+    int i;
+    int new_state;
 
     start_menu_time = PDGetTotalTime();
     CheckQuit();
     AddLostTime(PDGetTotalTime() - start_menu_time);
-    CheckToggles(pRacing);
-    if (pRacing & !gAction_replay_mode) {
+    CheckKeysForMouldiness();
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(gToggle_array); i++) {
+        if (!pRacing && gToggle_array[i].in_game_only) {
+            continue;
+        }
+        if ((gTyping || gEntering_message) && gToggle_array[i].key2 == -2) {
+            continue;
+        }
+        new_state = 0;
+        if (gToggle_array[i].key1 == -2 || KeyIsDownNoMouldiness(gToggle_array[i].key1)) {
+            if (gToggle_array[i].key2 == -2 && gToggle_array[i].exact_modifiers) {
+                if (!PDKeyDown(0) && !PDKeyDown(1) && !PDKeyDown(2) && !PDKeyDown(3)) {
+                    new_state = 1;
+                }
+            } else if (KeyIsDown(gToggle_array[i].key2)) {
+                new_state = 1;
+            }
+        }
+        if (gToggle_array[i].on_last_time != new_state) {
+            gToggle_array[i].on_last_time = new_state;
+            if (new_state) {
+                gToggle_array[i].action_proc();
+            }
+        }
+    }
+    if (pRacing && !gAction_replay_mode) {
         CheckOtherRacingKeys();
     }
 }
@@ -1720,6 +1815,7 @@ void C2_HOOK_FASTCALL CheckToggles(int pRacing) {
     }
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x00443ba0
 void C2_HOOK_FASTCALL CheckHorn3D(tCar_spec* pCar) {
 
@@ -1737,6 +1833,8 @@ void C2_HOOK_FASTCALL CheckHorn3D(tCar_spec* pCar) {
         }
     }
 }
+
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x00442140
 int C2_HOOK_FASTCALL CarWorldOffFallenCheckThingy(tCar_spec* pCar, int pCheck_around) {
@@ -1831,7 +1929,7 @@ void C2_HOOK_FASTCALL CheckHorns(void) {
     }
 }
 
-void C2_HOOK_FASTCALL CheckMapRenderMove(void) {
+__inline void C2_HOOK_FASTCALL CheckMapRenderMove(void) {
     int amount;
     float old_x;
     float old_y;
@@ -1839,7 +1937,7 @@ void C2_HOOK_FASTCALL CheckMapRenderMove(void) {
     old_y = gMap_render_y;
     old_x = gMap_render_x;
     if (gMap_view == 2) {
-        amount = (int)(gFrame_period / 10.f);
+        amount = (int)(gFrame_period * 0.1);
         KeyIsDown(8);
         if (KeyIsDown(31)) {
             gMap_render_y -= (float)amount;
@@ -1871,7 +1969,7 @@ void C2_HOOK_FASTCALL CheckMapRenderMove(void) {
     }
 }
 
-int C2_HOOK_FASTCALL TradeInAPO(tS32 cost) {
+__inline int C2_HOOK_FASTCALL TradeInAPO(tS32 cost) {
 
     if (cost > 0) {
         while (cost > 0
@@ -2007,6 +2105,7 @@ void C2_HOOK_FASTCALL SortOutRecover(tCar_spec* pCar) {
     old_time = the_time;
 }
 
+// FUNCTION: CARMA2_HW 0x00442970
 void C2_HOOK_FASTCALL SetFlipUpCar(tCar_spec* pCar) {
 
     if (gNet_mode != eNet_mode_none && pCar != NULL && pCar->driver == eDriver_local_human) {
@@ -2074,7 +2173,7 @@ void C2_HOOK_FASTCALL CheckOtherRacingKeys(void) {
                 if (amount == 0.0f) {
                     new_level = 0;
                 } else {
-                    new_level = (int)((float)unit->damage_level - floorf((float)unit->damage_level * bodywork_repair_amount / amount));
+                    new_level = (int)(unit->damage_level - floor(unit->damage_level * (bodywork_repair_amount / amount)));
                 }
                 if (new_level < 0) {
                     unit->damage_level = 0;
@@ -2089,7 +2188,7 @@ void C2_HOOK_FASTCALL CheckOtherRacingKeys(void) {
                 } else {
                     ts = gRepair_cost.initial_network[gCurrent_net_game->type];
                 }
-                cost = (int)((float)cost + (float)(old_level - unit->damage_level) * ts);
+                cost = (int)((int)cost + (old_level - unit->damage_level) * ts);
                 total_difference += old_level - new_level;
             }
             total_difference %= 100;
@@ -2098,7 +2197,7 @@ void C2_HOOK_FASTCALL CheckOtherRacingKeys(void) {
                 sound_tag = DRS3StartSound(gCar_outlet, eSoundId_DamageRepair);
             }
             StopCarSmoking(&gProgram_state.current_car);
-            if (cost == 0 && bodywork_repair_amount == 0.0) {
+            if (cost == 0 && bodywork_repair_amount == 0.0f) {
                 gAuto_repair = 0;
             }
             if (!gFree_repairs) {
@@ -2202,9 +2301,11 @@ void C2_HOOK_FASTCALL CheckOtherRacingKeys(void) {
     gRecover_car = 0;
 }
 
+// C2PORT-NONMATCHING: best 47.29% | difftest PASS 2000 trials (spec difftest/specs/004429b0_FlipUpCar.json) | reason retry-loop/float-scheduling/register-allocation; fixture uses deterministic car/actor state and stubs face/placement helpers
 // FUNCTION: CARMA2_HW 0x004429b0
 void C2_HOOK_FASTCALL FlipUpCar(tCar_spec* pCar_spec) {
     int new_pos;
+    int repeat_outer;
     int i;
     int j;
     int k;
@@ -2222,9 +2323,11 @@ void C2_HOOK_FASTCALL FlipUpCar(tCar_spec* pCar_spec) {
     EnableCar(pCar_spec);
 
     new_pos = 1;
+    repeat_outer = 1;
     for (i = 0; i < 4; i++) {
         if (pCar_spec->susp_height[i / 2] <= pCar_spec->oldd[i]) {
             new_pos = 0;
+            repeat_outer = 0;
         }
     }
     for (i = 0; i < 3; i++) {
@@ -2237,6 +2340,7 @@ void C2_HOOK_FASTCALL FlipUpCar(tCar_spec* pCar_spec) {
         BrVector3Sub(&nor, &pCar_spec->car_master_actor->t.t.translate.t, (br_vector3*)pCar_spec->last_safe_positions[0].m[3]);
         if (BrVector3LengthSquared(&nor) > 8.3015966f) {
             new_pos = 0;
+            repeat_outer = 0;
         }
         BrMatrix34Copy(&pCar_spec->car_master_actor->t.t.mat, &pCar_spec->last_safe_positions[new_pos]);
         BrMatrix34Copy(&pCar_spec->collision_info->transform_matrix, &pCar_spec->last_safe_positions[new_pos]);
@@ -2265,6 +2369,9 @@ void C2_HOOK_FASTCALL FlipUpCar(tCar_spec* pCar_spec) {
             BrVector3Accumulate(&pCar_spec->car_master_actor->t.t.translate.t, &p);
             BrVector3Copy((br_vector3*)pCar_spec->collision_info->transform_matrix.m[3], &pCar_spec->car_master_actor->t.t.translate.t);
             BrVector3Copy((br_vector3*)pCar_spec->old_frame_mat.m[3], &pCar_spec->car_master_actor->t.t.translate.t);
+        }
+        if (j < 10 || repeat_outer == 0) {
+            break;
         }
     }
     BrVector3Copy((br_vector3*)pCar_spec->collision_info->transform_matrix.m[3],
@@ -2605,6 +2712,10 @@ void C2_HOOK_FASTCALL PollCarControls(tU32 pTime_difference) {
         }
     }
 
+#ifdef __vita__
+    { extern void C2VitaReadSteering(tJoystick* joystick);
+      if (!keys.left && !keys.right) C2VitaReadSteering(&joystick); }
+#endif
     if (gCredit_multiplier) {
 
         int temp;
@@ -2661,22 +2772,349 @@ void C2_HOOK_FASTCALL PollCarControls(tU32 pTime_difference) {
     c->joystick = joystick;
 }
 
+// GLOBAL: CARMA2_HW 0x00594e9c
+const char gAct_file_extension[] = ".ACT";
+
+// GLOBAL: CARMA2_HW 0x00676920
+const char gEmpty_string_00676920[] = "";
+
+// GLOBAL: CARMA2_HW 0x0079d860
+tHeadup_text_buffer gHeadup_text_buffer_0079d860;
+
+extern int C2_HOOK_FASTCALL FUN_0045a7f0(char* pFilename, int* pArg2);
+extern const char* gSelected_actor_name;
+extern void C2_HOOK_CDECL MurderLastActor(void);
+
 // FUNCTION: CARMA2_HW 0x0045a670
 void C2_HOOK_FASTCALL FUN_0045a670(void) {
+    char filter_and_callback_data[24];
+    char path[256];
+    int headup_y;
+    int* headup;
 
-    NOT_IMPLEMENTED();
+    if (gINT_0068b8e4 != 0) {
+        gINT_0068b8e4 = 0;
+        if (gAcc_poly_actor != NULL && gRender_acc_poly_actor != 0) {
+            BrActorRemove(gAcc_poly_actor);
+            gRender_acc_poly_actor = 0;
+            return;
+        }
+    } else {
+        gINT_0068b8e4 = 1;
+        PlaceHeadupAt(gProgram_state.frame_rate_headup, 10, 350);
+        headup = gRace_head_ups;
+        headup_y = 120;
+        do {
+            PlaceHeadupAt(*headup, 10, headup_y);
+            ChangeHeadupFont(*headup, -2);
+            headup_y += 10;
+            headup++;
+        } while (headup_y < 340);
+        CreateAccentPolyActor(8.f, 118.f, 130.f, 224.f);
+        if (gHeadup_text_buffer_0079d860.count == 0) {
+            PathCat(path, gRace_path, gEmpty_string_00676920);
+            if (gHeadup_text_buffer_0079d860.field_0x14 < 5) {
+                gHeadup_text_buffer_0079d860.field_0x14 = 10;
+            }
+            strcpy(filter_and_callback_data, gAct_file_extension);
+            gHeadup_text_buffer_0079d860.texts = NULL;
+            gHeadup_text_buffer_0079d860.count = 0;
+            gHeadup_text_buffer_0079d860.pos_last_add = 0;
+            gHeadup_text_buffer_0079d860.text_last_add = NULL;
+            gHeadup_text_buffer_0079d860.field_0x4 = NULL;
+            gHeadup_text_buffer_0079d860.field_0x10 = 0x16;
+            *(void**)(filter_and_callback_data + 12) = &gHeadup_text_buffer_0079d860;
+            DRstrlwr(filter_and_callback_data);
+            *(void**)(filter_and_callback_data + 16) = filter_and_callback_data;
+            PDEnumPath(path, (tEnumPathCallback)FUN_0045a7f0, (void**)(filter_and_callback_data + 12));
+            gHeadup_text_buffer_0079d860.pos_last_add = 0;
+            gHeadup_text_buffer_0079d860.text_last_add = gHeadup_text_buffer_0079d860.texts;
+        }
+    }
 }
 
 // FUNCTION: CARMA2_HW 0x0045acf0
 void C2_HOOK_FASTCALL FUN_0045acf0(void) {
+    int i;
+    int headup_x;
+    int* headup;
+    char* dest;
 
-    NOT_IMPLEMENTED();
+    if (gINT_0068b8e4 != 0) {
+        gINT_0068b8e4 = 0;
+        if (gAcc_poly_actor != NULL && gRender_acc_poly_actor != 0) {
+            BrActorRemove(gAcc_poly_actor);
+            gRender_acc_poly_actor = 0;
+        }
+        return;
+    }
+
+    gINT_0068b8e4 = 2;
+    PlaceHeadupAt(gProgram_state.frame_rate_headup, 10, 350);
+    headup = gRace_head_ups;
+    headup_x = 120;
+    do {
+        PlaceHeadupAt(*headup, 10, headup_x);
+        ChangeHeadupFont(*headup, -2);
+        headup++;
+        headup_x += 10;
+    } while (headup_x < 340);
+    CreateAccentPolyActor(8.f, 118.f, 130.f, 224.f);
+    if (gHeadup_text_buffer_0079d880.count == 0) {
+        if (gHeadup_text_buffer_0079d880.field_0x14 < 5) {
+            gHeadup_text_buffer_0079d880.field_0x14 = 10;
+        }
+        gHeadup_text_buffer_0079d880.texts = NULL;
+        gHeadup_text_buffer_0079d880.count = 0;
+        gHeadup_text_buffer_0079d880.pos_last_add = 0;
+        gHeadup_text_buffer_0079d880.text_last_add = NULL;
+        gHeadup_text_buffer_0079d880.field_0x4 = NULL;
+        gHeadup_text_buffer_0079d880.field_0x10 = 0x16;
+        for (i = 0; i < 10; i++) {
+            dest = malloc(0x3c);
+            if (dest != NULL) {
+                *(int*)dest = 0;
+                sprintf(dest, "WANKER  %02d", i);
+                InsertHeadupText(&gHeadup_text_buffer_0079d880, (tHeadup_text*)dest, 0);
+            }
+        }
+    }
+}
+
+// C2PORT-NONMATCHING: best 74.80% | difftest PASS 2000 trials (spec difftest/specs/0045ae20_FUN_0045ae20.json) | reason regalloc-loop
+// FUNCTION: CARMA2_HW 0x0045ae20
+void C2_HOOK_FASTCALL FUN_0045ae20(void) {
+    tU32 start_time;
+    int i;
+    int j;
+    int font;
+    tHeadup_text* text;
+    tHeadup_text* current;
+    int* headup;
+
+    if (gINT_0068b8e4 == 0) {
+        return;
+    }
+    start_time = PDGetTotalTime();
+    if (PDKeyDown(0x42)) {
+        if (&gHeadup_text_buffer_0079d860 != NULL
+                && gHeadup_text_buffer_0079d860.text_last_add != NULL
+                && gHeadup_text_buffer_0079d860.text_last_add != gHeadup_text_buffer_0079d860.texts) {
+            gHeadup_text_buffer_0079d860.text_last_add = gHeadup_text_buffer_0079d860.texts;
+            gHeadup_text_buffer_0079d860.pos_last_add--;
+            i = gHeadup_text_buffer_0079d860.pos_last_add;
+            if (i > 0) {
+                do {
+                    gHeadup_text_buffer_0079d860.text_last_add = gHeadup_text_buffer_0079d860.text_last_add->next;
+                    i--;
+                } while (i != 0);
+            }
+        }
+        do {
+            i = PDGetTotalTime();
+        } while ((tU32)(i - start_time) < 100U);
+    }
+    if (PDKeyDown(0x43)) {
+        if (&gHeadup_text_buffer_0079d860 != NULL
+                && gHeadup_text_buffer_0079d860.text_last_add != NULL
+                && gHeadup_text_buffer_0079d860.text_last_add->next != NULL) {
+            gHeadup_text_buffer_0079d860.text_last_add = gHeadup_text_buffer_0079d860.text_last_add->next;
+            gHeadup_text_buffer_0079d860.pos_last_add++;
+        }
+        do {
+            i = PDGetTotalTime();
+        } while ((tU32)(i - start_time) < 100U);
+    }
+    if (PDKeyDown(0x44)) {
+        i = gHeadup_text_buffer_0079d860.field_0x10 - 1;
+        if (i > 0) {
+            do {
+                if (&gHeadup_text_buffer_0079d860 != NULL
+                        && gHeadup_text_buffer_0079d860.text_last_add != NULL
+                        && gHeadup_text_buffer_0079d860.text_last_add != gHeadup_text_buffer_0079d860.texts) {
+                    gHeadup_text_buffer_0079d860.pos_last_add--;
+                    gHeadup_text_buffer_0079d860.text_last_add = gHeadup_text_buffer_0079d860.texts;
+                    j = gHeadup_text_buffer_0079d860.pos_last_add;
+                    if (j > 0) {
+                        do {
+                            gHeadup_text_buffer_0079d860.text_last_add = gHeadup_text_buffer_0079d860.text_last_add->next;
+                            j--;
+                        } while (j != 0);
+                    }
+                }
+                i--;
+            } while (i != 0);
+        }
+        while (PDKeyDown(0x44)) {
+        }
+    }
+    if (PDKeyDown(0x45)) {
+        i = gHeadup_text_buffer_0079d860.field_0x10 - 1;
+        current = gHeadup_text_buffer_0079d860.text_last_add;
+        if (i > 0) {
+            do {
+                if (&gHeadup_text_buffer_0079d860 != NULL && current != NULL && current->next != NULL) {
+                    current = current->next;
+                    gHeadup_text_buffer_0079d860.text_last_add = current;
+                    gHeadup_text_buffer_0079d860.pos_last_add++;
+                }
+                i--;
+            } while (i != 0);
+        }
+        while (PDKeyDown(0x45)) {
+        }
+    }
+    if (PDKeyDown(0x40)) {
+        gSelected_actor_name = (const char*)gHeadup_text_buffer_0079d860.text_last_add;
+        DropActor(0, 0);
+        gSelected_actor_name = NULL;
+        while (PDKeyDown(0x40)) {
+        }
+    }
+    if (PDKeyDown(0x41)) {
+        MurderLastActor();
+        while (PDKeyDown(0x41)) {
+        }
+    }
+    AdjustHeadupTextBuffer(&gHeadup_text_buffer_0079d860);
+    text = gHeadup_text_buffer_0079d860.field_0x4;
+    headup = gRace_head_ups;
+    do {
+        if (text != NULL) {
+            font = -1;
+            if (text != gHeadup_text_buffer_0079d860.text_last_add) {
+                font = -2;
+            }
+            ChangeHeadupFont(*headup, font);
+            ChangeHeadupText(*headup, text->text);
+            text = text->next;
+        } else {
+            ChangeHeadupText(*headup, "");
+        }
+        headup++;
+    } while ((int)headup < (int)&gRace_head_ups[22]);
+}
+
+// FUNCTION: CARMA2_HW 0x0045b150
+void C2_HOOK_FASTCALL FUN_0045b150(void) {
+    tU32 start_time;
+    tHeadup_text* text;
+    tHeadup_text* current;
+    int* headup;
+    int i;
+    int j;
+    int font;
+
+    if (gINT_0068b8e4 == 0) {
+        return;
+    }
+    start_time = PDGetTotalTime();
+    if (PDKeyDown(0x42)) {
+        if (&gHeadup_text_buffer_0079d880 != NULL
+                && gHeadup_text_buffer_0079d880.text_last_add != NULL
+                && gHeadup_text_buffer_0079d880.text_last_add != gHeadup_text_buffer_0079d880.texts) {
+            gHeadup_text_buffer_0079d880.text_last_add = gHeadup_text_buffer_0079d880.texts;
+            gHeadup_text_buffer_0079d880.pos_last_add--;
+            i = gHeadup_text_buffer_0079d880.pos_last_add;
+            if (i > 0) {
+                do {
+                    gHeadup_text_buffer_0079d880.text_last_add = gHeadup_text_buffer_0079d880.text_last_add->next;
+                    i--;
+                } while (i != 0);
+            }
+        }
+        do {
+            i = PDGetTotalTime();
+        } while ((tU32)(i - start_time) < 100U);
+    }
+    if (PDKeyDown(0x43)) {
+        if (&gHeadup_text_buffer_0079d880 != NULL
+                && gHeadup_text_buffer_0079d880.text_last_add != NULL
+                && gHeadup_text_buffer_0079d880.text_last_add->next != NULL) {
+            gHeadup_text_buffer_0079d880.text_last_add = gHeadup_text_buffer_0079d880.text_last_add->next;
+            gHeadup_text_buffer_0079d880.pos_last_add++;
+        }
+        do {
+            i = PDGetTotalTime();
+        } while ((tU32)(i - start_time) < 100U);
+    }
+    if (PDKeyDown(0x44)) {
+        i = gHeadup_text_buffer_0079d880.field_0x10 - 1;
+        if (i > 0) {
+            do {
+                if (&gHeadup_text_buffer_0079d880 != NULL
+                        && gHeadup_text_buffer_0079d880.text_last_add != NULL
+                        && gHeadup_text_buffer_0079d880.text_last_add != gHeadup_text_buffer_0079d880.texts) {
+                    gHeadup_text_buffer_0079d880.pos_last_add--;
+                    gHeadup_text_buffer_0079d880.text_last_add = gHeadup_text_buffer_0079d880.texts;
+                    j = gHeadup_text_buffer_0079d880.pos_last_add;
+                    if (j > 0) {
+                        do {
+                            gHeadup_text_buffer_0079d880.text_last_add = gHeadup_text_buffer_0079d880.text_last_add->next;
+                            j--;
+                        } while (j != 0);
+                    }
+                }
+                i--;
+            } while (i != 0);
+        }
+        while (PDKeyDown(0x44)) {
+        }
+    }
+    if (PDKeyDown(0x45)) {
+        i = gHeadup_text_buffer_0079d880.field_0x10 - 1;
+        current = gHeadup_text_buffer_0079d880.text_last_add;
+        if (i > 0) {
+            do {
+                if (&gHeadup_text_buffer_0079d880 != NULL && current != NULL && current->next != NULL) {
+                    current = current->next;
+                    gHeadup_text_buffer_0079d880.text_last_add = current;
+                    gHeadup_text_buffer_0079d880.pos_last_add++;
+                }
+                i--;
+            } while (i != 0);
+        }
+        while (PDKeyDown(0x45)) {
+        }
+    }
+    AdjustHeadupTextBuffer(&gHeadup_text_buffer_0079d880);
+    text = gHeadup_text_buffer_0079d880.field_0x4;
+    headup = gRace_head_ups;
+    do {
+        if (text == NULL) {
+            ChangeHeadupText(*headup, "");
+        } else {
+            font = -1;
+            if (text != gHeadup_text_buffer_0079d880.text_last_add) {
+                font = -2;
+            }
+            ChangeHeadupFont(*headup, font);
+            ChangeHeadupText(*headup, text->text);
+            text = text->next;
+        }
+        headup++;
+    } while (headup < &gRace_head_ups[22]);
+}
+
+// FUNCTION: CARMA2_HW 0x0045c5d0
+void C2_HOOK_FASTCALL FUN_0045c5d0(void) {
+
+    if (gAccent_poly_prims[2].v.i32 != -1) {
+#ifdef CARPOCALYPSE2_PLATFORM_WIN32
+        UnloadDinputFFBEffectAtIndex(gAccent_poly_prims[2].v.i32);
+#endif
+    }
+    gAccent_poly_prims[2].v.i32 = -1;
 }
 
 // FUNCTION: CARMA2_HW 0x0045c760
 void C2_HOOK_FASTCALL FUN_0045c760(void) {
 
-    NOT_IMPLEMENTED();
+    if (gAccent_poly_prims[2].v.i32 != -1) {
+#ifdef CARPOCALYPSE2_PLATFORM_WIN32
+        StopDinputEffect(gAccent_poly_prims[2].v.i32);
+#endif
+    }
 }
 
 // FUNCTION: CARMA2_HW 0x00502e70
@@ -2728,6 +3166,7 @@ void C2_HOOK_FASTCALL SteelBollock(void) {
     NewTextHeadupSlot(4, 0, 2000, -4, "STEEL GONAD O' DEATH");
 }
 
+// FUNCTION: CARMA2_HW 0x00444f10
 void C2_HOOK_FASTCALL RichardsSphere(int pNum) {
 
     TotallyRepairACar(gCar_to_view);
@@ -2808,6 +3247,39 @@ void C2_HOOK_FASTCALL ToggleAccessoryRendering(void) {
     }
 }
 
+// FUNCTION: CARMA2_HW 0x00446ad0
+void C2_HOOK_FASTCALL DecreaseYon(void) {
+    char text[256];
+    br_camera* camera;
+    int i;
+
+    gCamera_yon -= 5.f;
+    if (gCamera_yon < 5.0f) {
+        gCamera_yon = 5.0f;
+    }
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(gCamera_list); i++) {
+        camera = gCamera_list[i]->type_data;
+        camera->yon_z = gYon_multiplier * gCamera_yon;
+    }
+    sprintf(text, GetMiscString(eMiscString_yon_decreased_to_D), (int)camera->yon_z);
+    NewTextHeadupSlot(4, 0, 2000, -4, text);
+}
+
+// FUNCTION: CARMA2_HW 0x00446a40
+void C2_HOOK_FASTCALL IncreaseYon(void) {
+    char text[256];
+    br_camera* camera;
+    int i;
+
+    gCamera_yon += 5.f;
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(gCamera_list); i++) {
+        camera = gCamera_list[i]->type_data;
+        camera->yon_z = gYon_multiplier * gCamera_yon;
+    }
+    sprintf(text, GetMiscString(eMiscString_yon_increased_to_D), (int)camera->yon_z);
+    NewTextHeadupSlot(4, 0, 2000, -4, text);
+}
+
 // FUNCTION: CARMA2_HW 0x004447c0
 void C2_HOOK_FASTCALL CycleSoundDetailLevel(void) {
     int new_level;
@@ -2850,55 +3322,13 @@ void C2_HOOK_FASTCALL ShowCurrentJoystickName(void) {
 #endif
 }
 
-// UNLABELED: CARMA2_HW 0x0045c240
-void C2_HOOK_FASTCALL FUN_0045c240(void) {
-    tHeadup_text* text;
-    int i;
-
-    if (gINT_0068b8e8) {
-        gINT_0068b8e8 = 0;
-        if (gAcc_poly_actor != NULL && gRender_acc_poly_actor != 0) {
-            BrActorRemove(gAcc_poly_actor);
-            gRender_acc_poly_actor = 0;
-        }
-    } else {
-        gINT_0068b8e8 = 1;
-        FUN_0044a8a0(gProgram_state.frame_rate_headup, 10, 350);
-        for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gRace_head_ups); i++) {
-            FUN_0044a8a0(gRace_head_ups[i], 10, 120 + i * 10);
-            ChangeHeadupFont(gRace_head_ups[i], -2);
-        }
-        CreateAccentPolyActor(8.0f, 118.0f, 130.0f, 224.0f);
-        if (gJoystick_headup_buffer_0079d8a0.count == 0) {
-            if (gJoystick_headup_buffer_0079d8a0.field_0x14 < 5) {
-                gJoystick_headup_buffer_0079d8a0.field_0x14 = 10;
-            }
-            gJoystick_headup_buffer_0079d8a0.texts = NULL;
-            gJoystick_headup_buffer_0079d8a0.count = 0;
-            gJoystick_headup_buffer_0079d8a0.pos_last_add = 0;
-            gJoystick_headup_buffer_0079d8a0.text_last_add = NULL;
-            gJoystick_headup_buffer_0079d8a0.field_0x4 = NULL;
-            gJoystick_headup_buffer_0079d8a0.field_0x10 = 22;
-            for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gJoystick_headup_texts); i++) {
-                text = malloc(sizeof(tHeadup_text));
-                if (text != NULL) {
-                    text->next = NULL;
-                    strncpy(text->text, gJoystick_headup_texts[i].text, 0x28);
-                    FUN_0045a920(&gJoystick_headup_buffer_0079d8a0, text, 0);
-                }
-            }
-        }
-    }
-}
-
 // FUNCTION: CARMA2_HW 0x00511240
 void C2_HOOK_FASTCALL ToggleJoystickHeadup(void) {
-
     if (gINT_0068b8e8) {
         SaveAllJoystickData();
     }
     FUN_0045c240();
-    if (!gINT_0068b8e8) {
+    if (gINT_0068b8e8 == 0) {
         LoadJoystickPreferences();
     }
 }
@@ -2931,13 +3361,9 @@ void C2_HOOK_FASTCALL ToggleJoystickDPad(void) {
 
 // FUNCTION: CARMA2_HW 0x00511270
 void C2_HOOK_FASTCALL CycleJoystick(void) {
-#ifdef CARPOCALYPSE2_PLATFORM_WIN32
     SaveAllJoystickData();
     FUN_0045c420();
     LoadJoystickPreferences();
-#else
-    NOT_IMPLEMENTED();
-#endif
 }
 
 // FUNCTION: CARMA2_HW 0x005112d0
@@ -2948,7 +3374,7 @@ void C2_HOOK_FASTCALL ToggleJoystickEnable(void) {
         FUN_0045a0c0();
         sprintf(buffer, "Joystick Disabled");
     } else {
-        PDEnableJoysticks();
+        FUN_0045a070();
         sprintf(buffer, "Joystick Enabled");
     }
     NewTextHeadupSlot(4, 0, 3000, -4, buffer);
@@ -2994,6 +3420,33 @@ void C2_HOOK_FASTCALL CycleInvulnerability(void) {
         strcat(message, " NO WASTAGE");
     }
     NewTextHeadupSlot(4, 0, 1000, -4, message);
+}
+
+// FUNCTION: CARMA2_HW 0x004b5ab0
+void C2_HOOK_FASTCALL ResetMan(void) {
+    if (gUnknown_006923d8 != NULL) {
+        tPhysics_object* child;
+
+        BrMatrix34Translate(&gUnknown_006923d8->transform_matrix, -54.0f, 7.1325f, -155.0f);
+        gUnknown_006923d8->disable_move_rotate = 1;
+        BrVector3SetFloat(&gUnknown_006923d8->v, 0.0f, 0.0f, 0.0f);
+        BrVector3SetFloat(&gUnknown_006923d8->omega, 0.0f, 0.0f, 0.0f);
+        BrVector3SetFloat(&gUnknown_006923d8->rotate_omega, 0.0f, 0.0f, 0.0f);
+        BrVector3SetFloat(&gUnknown_006923d8->velocity_car_space, 0.0f, 0.0f, 0.0f);
+
+        for (child = gUnknown_006923d8->child; child != NULL; child = child->next) {
+            BrMatrix34Translate(&child->transform_matrix, 0.0f, 0.0f, 0.0f);
+            BrVector3SetFloat(&child->v, 0.0f, 0.0f, 0.0f);
+            BrVector3SetFloat(&child->omega, 0.0f, 0.0f, 0.0f);
+            BrVector3SetFloat(&child->rotate_omega, 0.0f, 0.0f, 0.0f);
+            BrVector3SetFloat(&child->velocity_car_space, 0.0f, 0.0f, 0.0f);
+            child->disable_move_rotate = 1;
+            if (child->child != NULL) {
+                StopObjectList(child->child);
+            }
+        }
+        PositionChildren(gUnknown_006923d8);
+    }
 }
 
 #pragma optimize("y", off)
@@ -3099,29 +3552,102 @@ void C2_HOOK_FASTCALL LoseDosh(void) {
     EarnCredits(-5000);
 }
 
+// FUNCTION: CARMA2_HW 0x0040e530
+void C2_HOOK_FASTCALL FUN_0040e530(br_actor* pActor) {
+    if (pActor == NULL) {
+        gCar_to_view = &gProgram_state.current_car;
+    } else {
+        if (pActor->parent != gNon_track_actor) {
+            gCar_to_view = (tCar_spec*)DoPullActorFromWorld(pActor);
+            if (gCar_to_view == NULL) {
+                gCar_to_view = &gProgram_state.current_car;
+            }
+        } else {
+            gCar_to_view = (tCar_spec*)pActor->type_data;
+        }
+    }
+    gCamera_yaw = 0;
+    InitialiseExternalCamera();
+    PositionExternalCamera(gCar_to_view, 0xc8);
+}
+
+// GLOBAL: CARMA2_HW 0x0058f628
+int gView_opponent_index = -1;
+
 // FUNCTION: CARMA2_HW 0x0040e590
 void C2_HOOK_FASTCALL ViewOpponent(void) {
+    char* text;
+    tNet_message* message;
 
-    NOT_IMPLEMENTED();
+    gView_opponent_index++;
+    if (gNet_mode != eNet_mode_none) {
+        if (gView_opponent_index >= gNumber_of_net_players) {
+            gView_opponent_index = 0;
+        }
+        if (gNet_mode == eNet_mode_host) {
+            gCar_to_view = gNet_players[gView_opponent_index].car;
+        } else if (gCar_to_view_id == 0) {
+            gCar_to_view_id = gNet_players[gView_opponent_index].ID;
+            message = NetBuildGuaranteedMessage(0x2f, 0);
+            *(tU32*)((tU8*)message + 0x1c) = gCar_to_view_id;
+            NetGuaranteedSendMessageToHost(gCurrent_net_game, message, NULL);
+            return;
+        }
+        text = gNet_players[gView_opponent_index].player_name;
+    } else {
+        if (gView_opponent_index >= gNum_viewable_cars) {
+            gView_opponent_index = 0;
+        }
+        gCar_to_view = gViewable_car_list[gView_opponent_index];
+        text = gCar_to_view->driver_name;
+    }
+    NewTextHeadupSlot(4, 0, 2000, -3, text);
+    gCamera_yaw = 0;
+    InitialiseExternalCamera();
+    PositionExternalCamera(gCar_to_view, 200);
+}
+
+// FUNCTION: CARMA2_HW 0x0040e680
+void C2_HOOK_FASTCALL ViewNetPlayerByID(void) {
+    int i;
+
+    if (gNet_mode != eNet_mode_client) {
+        return;
+    }
+    i = 0;
+    for (; i < gNumber_of_net_players; i++) {
+        if (gNet_players[i].ID == gCar_to_view_id) {
+            goto found_player;
+        }
+    }
+    return;
+
+found_player:
+    gCar_to_view_id = 0;
+    gCamera_yaw = 0;
+    gCar_to_view = gNet_players[i].car;
+    InitialiseExternalCamera();
+    PositionExternalCamera(gCar_to_view, 200);
 }
 
 // FUNCTION: CARMA2_HW 0x004db8e0
 void C2_HOOK_FASTCALL MungeRepulseRays(tU32 pTime) {
     int i;
+    tRepulse_link* link;
 
     ARStartPipingSession(ePipe_chunk_repulse_ray);
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gRepulse_links); i++) {
-        tRepulse_link* link = &gRepulse_links[i];
+    for (i = 0, link = gRepulse_links; (int)link < (int)&gRepulse_links[6]; i++, link++) {
         tU32 delta_time;
-        br_model *model;
+        br_model* model;
+        br_vertex* vertices1;
+        br_vertex* vertices2;
         br_vector3 delta;
         br_vector3 dir;
         br_vector3 delta_orth;
         br_vector3 delta_unit;
-        br_vector3 y_unit;
-        br_vector3 orth_dirs[5];
-        br_vector3 orth_pieces1[5];
-        br_vector3 orth_pieces2[5];
+        br_vector3 orth_dirs[12];
+        br_vector3 orth_pieces1[12];
+        br_vector3 orth_pieces2[12];
         br_vector3 p;
         int blend;
         int j;
@@ -3143,33 +3669,38 @@ void C2_HOOK_FASTCALL MungeRepulseRays(tU32 pTime) {
         if (delta.v[0] == 0.f && delta.v[2] == 0.f) {
             continue;
         }
-        BrVector3Scale(&delta_unit, &delta, 1.f / (float)(model->nvertices / 2 - 1));
+        delta_unit.v[0] = delta.v[0] / (float)(model->nvertices / 2 - 1);
+        delta_unit.v[1] = delta.v[1] / (float)(model->nvertices / 2 - 1);
+        delta_unit.v[2] = delta.v[2] / (float)(model->nvertices / 2 - 1);
         BrVector3Normalise(&dir, &delta);
-        BrVector3Set(&y_unit, 0.f, 1.f, 0.f);
-        BrVector3Cross(&delta_orth, &delta, &y_unit);
-        BrVector3Copy(&p, link->pos_origin);
+        BrVector3Cross(&delta_orth, &delta, &y_unit_vector);
+        p = *link->pos_origin;
         BrVector3Normalise(&orth_dirs[0], &delta_orth);
         for (j = 1; j < 5; j++) {
             br_matrix34 mat;
 
-            BrMatrix34Rotate(&mat, (i * (br_angle)0x10000) / 5, &dir);
-            BrMatrix34ApplyV(&orth_dirs[i], &orth_dirs[0], &mat);
+            BrMatrix34Rotate(&mat, (br_angle)((j * 0x10000) / 5), &dir);
+            BrMatrix34ApplyV(&orth_dirs[j], &orth_dirs[0], &mat);
         }
         for (j = 0; j < 5; j++) {
-            BrVector3Scale(&orth_pieces1[i], &orth_dirs[i], link->field_0x18);
-            BrVector3Scale(&orth_pieces2[i], &orth_dirs[i], link->field_0x1c);
+            orth_pieces1[j].v[0] = BR_MUL(link->field_0x18, orth_dirs[j].v[0]);
+            orth_pieces1[j].v[1] = BR_MUL(link->field_0x18, orth_dirs[j].v[1]);
+            orth_pieces1[j].v[2] = BR_MUL(link->field_0x18, orth_dirs[j].v[2]);
+            BrVector3Scale(&orth_pieces2[j], &orth_dirs[j], link->field_0x1c);
         }
-        for (j = 0; j < model->nvertices / 2; j++) {
+        vertices1 = model->vertices;
+        vertices2 = vertices1 + model->nvertices / 2;
+        for (j = 0; j < model->nvertices / 2; j++, vertices1++, vertices2++) {
             BrVector3Accumulate(&p, &delta_unit);
-            BrVector3Add(&model->vertices[j].p, &p, &orth_pieces1[j % 5]);
-            BrVector3Add(&model->vertices[j + model->nvertices / 2].p, &p, &orth_pieces2[j % 5]);
+            BrVector3Add(&vertices1->p, &p, &orth_pieces1[j % 5]);
+            BrVector3Add(&vertices2->p, &p, &orth_pieces2[j % 5]);
         }
         percentage = (float)delta_time / 700.f;
-        if (percentage > .9f) {
+        if (percentage > .9) {
             blend = 25;
-        } else if (percentage > .8f) {
+        } else if (percentage > .8) {
             blend = 50;
-        } else if (percentage > .7f) {
+        } else if (percentage > .7) {
             blend = 75;
         } else {
             blend = 100;
@@ -3188,133 +3719,88 @@ void C2_HOOK_FASTCALL MungeRepulseRays(tU32 pTime) {
     AREndPipingSession();
 }
 
-void C2_HOOK_FASTCALL GotPowerupN(int pN) {
-    int modifiers;
-
-    modifiers = 0;
-    if (PDKeyDown(0)) {
-        modifiers += 10;
-    }
-    if (PDKeyDown(1)) {
-        modifiers += 20;
-    }
-    if (PDKeyDown(2)) {
-        modifiers += 40;
-    }
-    if (PDKeyDown(4)) {
-        modifiers += 80;
-    }
-    GotPowerup(&gProgram_state.current_car, modifiers + pN);
-}
+/* The original repeats this body in every GotPowerupN function (likely a macro): the
+ * ((PDKeyDown(k) == 0) - 1) & mask form compiles to VC5's branchless neg/sbb/and sequence. */
+#define GOT_POWERUP_WITH_MODIFIERS(N)                                         \
+    int modifiers;                                                            \
+    modifiers = ((PDKeyDown(0) == 0) - 1) & 0xa;                              \
+    modifiers += ((PDKeyDown(1) == 0) - 1) & 0x14;                            \
+    modifiers += ((PDKeyDown(2) == 0) - 1) & 0x28;                            \
+    modifiers += ((PDKeyDown(4) == 0) - 1) & 0x50;                            \
+    GotPowerupEarwig(&gProgram_state.current_car, modifiers + (N), 1, 1)
 
 // FUNCTION: CARMA2_HW 0x004dbdb0
 void C2_HOOK_FASTCALL GotPowerup0(void) {
     int modifiers;
 
-    modifiers = -(PDKeyDown(0) != 0) & 10;
-    modifiers += -(PDKeyDown(1) != 0) & 20;
-    modifiers += -(PDKeyDown(2) != 0) & 40;
-    modifiers += -(PDKeyDown(4) != 0) & 80;
-    GotPowerupEarwig(&gProgram_state.current_car, modifiers + 0, 1, 1);
+    modifiers = ((PDKeyDown(0) == 0) - 1) & 0xa;
+    modifiers += ((PDKeyDown(1) == 0) - 1) & 0x14;
+    modifiers += ((PDKeyDown(2) == 0) - 1) & 0x28;
+    modifiers += ((PDKeyDown(4) == 0) - 1) & 0x50;
+    GotPowerupEarwig(&gProgram_state.current_car, modifiers, 1, 1);
 }
 
 // FUNCTION: CARMA2_HW 0x004dbe10
 void C2_HOOK_FASTCALL GotPowerup1(void) {
-    int modifiers;
-
-    modifiers = -(PDKeyDown(0) != 0) & 10;
-    modifiers += -(PDKeyDown(1) != 0) & 20;
-    modifiers += -(PDKeyDown(2) != 0) & 40;
-    modifiers += -(PDKeyDown(4) != 0) & 80;
-    GotPowerupEarwig(&gProgram_state.current_car, modifiers + 1, 1, 1);
+    GOT_POWERUP_WITH_MODIFIERS(1);
 }
 
 // FUNCTION: CARMA2_HW 0x004dbe70
 void C2_HOOK_FASTCALL GotPowerup2(void) {
     int modifiers;
 
-    modifiers = -(PDKeyDown(0) != 0) & 10;
-    modifiers += -(PDKeyDown(1) != 0) & 20;
-    modifiers += -(PDKeyDown(2) != 0) & 40;
-    modifiers += -(PDKeyDown(4) != 0) & 80;
+    modifiers = ((PDKeyDown(0) == 0) - 1) & 0xa;
+    modifiers += ((PDKeyDown(1) == 0) - 1) & 0x14;
+    modifiers += ((PDKeyDown(2) == 0) - 1) & 0x28;
+    modifiers += ((PDKeyDown(4) == 0) - 1) & 0x50;
     GotPowerupEarwig(&gProgram_state.current_car, modifiers + 2, 1, 1);
 }
 
 // FUNCTION: CARMA2_HW 0x004dbed0
 void C2_HOOK_FASTCALL GotPowerup3(void) {
-    int modifiers;
-
-    modifiers = -(PDKeyDown(0) != 0) & 10;
-    modifiers += -(PDKeyDown(1) != 0) & 20;
-    modifiers += -(PDKeyDown(2) != 0) & 40;
-    modifiers += -(PDKeyDown(4) != 0) & 80;
-    GotPowerupEarwig(&gProgram_state.current_car, modifiers + 3, 1, 1);
+    GOT_POWERUP_WITH_MODIFIERS(3);
 }
 
 // FUNCTION: CARMA2_HW 0x004dbf30
 void C2_HOOK_FASTCALL GotPowerup4(void) {
-    int modifiers;
-
-    modifiers = -(PDKeyDown(0) != 0) & 10;
-    modifiers += -(PDKeyDown(1) != 0) & 20;
-    modifiers += -(PDKeyDown(2) != 0) & 40;
-    modifiers += -(PDKeyDown(4) != 0) & 80;
-    GotPowerupEarwig(&gProgram_state.current_car, modifiers + 4, 1, 1);
+    GOT_POWERUP_WITH_MODIFIERS(4);
 }
 
 // FUNCTION: CARMA2_HW 0x004dbf90
 void C2_HOOK_FASTCALL GotPowerup5(void) {
     int modifiers;
 
-    modifiers = -(PDKeyDown(0) != 0) & 10;
-    modifiers += -(PDKeyDown(1) != 0) & 20;
-    modifiers += -(PDKeyDown(2) != 0) & 40;
-    modifiers += -(PDKeyDown(4) != 0) & 80;
+    modifiers = ((PDKeyDown(0) == 0) - 1) & 0xa;
+    modifiers += ((PDKeyDown(1) == 0) - 1) & 0x14;
+    modifiers += ((PDKeyDown(2) == 0) - 1) & 0x28;
+    modifiers += ((PDKeyDown(4) == 0) - 1) & 0x50;
     GotPowerupEarwig(&gProgram_state.current_car, modifiers + 5, 1, 1);
 }
 
 // FUNCTION: CARMA2_HW 0x004dbff0
 void C2_HOOK_FASTCALL GotPowerup6(void) {
-    int modifiers;
-
-    modifiers = -(PDKeyDown(0) != 0) & 10;
-    modifiers += -(PDKeyDown(1) != 0) & 20;
-    modifiers += -(PDKeyDown(2) != 0) & 40;
-    modifiers += -(PDKeyDown(4) != 0) & 80;
-    GotPowerupEarwig(&gProgram_state.current_car, modifiers + 6, 1, 1);
+    GOT_POWERUP_WITH_MODIFIERS(6);
 }
 
 // FUNCTION: CARMA2_HW 0x004dc050
 void C2_HOOK_FASTCALL GotPowerup7(void) {
-    int modifiers;
-
-    modifiers = -(PDKeyDown(0) != 0) & 10;
-    modifiers += -(PDKeyDown(1) != 0) & 20;
-    modifiers += -(PDKeyDown(2) != 0) & 40;
-    modifiers += -(PDKeyDown(4) != 0) & 80;
-    GotPowerupEarwig(&gProgram_state.current_car, modifiers + 7, 1, 1);
+    GOT_POWERUP_WITH_MODIFIERS(7);
 }
 
 // FUNCTION: CARMA2_HW 0x004dc0b0
 void C2_HOOK_FASTCALL GotPowerup8(void) {
     int modifiers;
 
-    modifiers = -(PDKeyDown(0) != 0) & 10;
-    modifiers += -(PDKeyDown(1) != 0) & 20;
-    modifiers += -(PDKeyDown(2) != 0) & 40;
-    modifiers += -(PDKeyDown(4) != 0) & 80;
+    modifiers = ((PDKeyDown(0) == 0) - 1) & 0xa;
+    modifiers += ((PDKeyDown(1) == 0) - 1) & 0x14;
+    modifiers += ((PDKeyDown(2) == 0) - 1) & 0x28;
+    modifiers += ((PDKeyDown(4) == 0) - 1) & 0x50;
     GotPowerupEarwig(&gProgram_state.current_car, modifiers + 8, 1, 1);
 }
 
 // FUNCTION: CARMA2_HW 0x004dc110
 void C2_HOOK_FASTCALL GotPowerup9(void) {
-    int modifiers;
-
-    modifiers = -(PDKeyDown(0) != 0) & 10;
-    modifiers += -(PDKeyDown(1) != 0) & 20;
-    modifiers += -(PDKeyDown(2) != 0) & 40;
-    modifiers += -(PDKeyDown(4) != 0) & 80;
-    GotPowerupEarwig(&gProgram_state.current_car, modifiers + 9, 1, 1);
+    GOT_POWERUP_WITH_MODIFIERS(9);
 }
 
 // FUNCTION: CARMA2_HW 0x00441e10
@@ -3368,6 +3854,11 @@ void C2_HOOK_FASTCALL LookRight(void) {
         gProgram_state.view_change_start = PDGetTotalTime();
         gProgram_state.pending_view = eView_undefined;
     }
+}
+
+// FUNCTION: CARMA2_HW 0x00441fd0
+void C2_HOOK_FASTCALL FUN_00441fd0(void) {
+
 }
 
 // FUNCTION: CARMA2_HW 0x00444c00
@@ -3523,7 +4014,7 @@ void C2_HOOK_FASTCALL CheckForCheatingGits(void) {
     tU32* keys;
 
     keys = KevKeyService();
-    if (keys[0] == 0x616fb8ea && keys[0] == 0x7c6100a8) {
+    if (keys[0] == 0x616fb8e4 && keys[1] == 0x7c6100a8) {
         ToggleSoundEnable();
         gProgram_state.game_completed = 1;
         DRS3StartSound(gEffects_outlet, eSoundId_FlaskGone);
@@ -3634,3 +4125,4 @@ void C2_HOOK_FASTCALL DisposeAbuseomatic(void) {
 // RichardsSphere
 
 // ToggleHeadupLevel
+

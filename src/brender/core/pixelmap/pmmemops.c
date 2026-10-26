@@ -72,7 +72,7 @@ br_uint_8 g_endMasks[9] = {
         br_uint_8* src_ptr = (SRC);                                                                         \
         void* dest_ptr = (DEST);                                                                            \
         for (; height != 0; height--, src_ptr += s_stride, dest_ptr = (br_uint_8*)dest_ptr + dest_stride) { \
-            br_uint_32 remaining_row = row_bytes;                                                           \
+            br_int_32 remaining_row = row_bytes;                                                           \
             br_uint_8 bits = *src_ptr & start_mask;                                                         \
                                                                                                             \
             for (; remaining_row >= 0; remaining_row--) {                                                   \
@@ -195,7 +195,6 @@ void C2_HOOK_CDECL pm_mem_fill_colour(br_uint_8 *dest, br_uint_32 qual, br_uint_
         break;
     }
     default:
-        abort();
         return;
     }
 }
@@ -253,7 +252,7 @@ void C2_HOOK_CDECL pm_mem_copy_colour(br_uint_8* dst, br_uint_32 dst_qual, br_ui
     memcpy(dst, src, nbpixels * bpp);
 }
 
-// FUNCTION: CARMA2_HW 0x0053ef0d
+// C2PORT-PORTONLY: original 0x0053ef0d pm_mem_copy_colour_rowbyrow reads DS:[ESI] and writes ES:[EDI]; native port uses linear src and dest pointers.
 void C2_HOOK_CDECL pm_mem_copy_colour_rowbyrow(br_uint_8* dest, br_uint_32 dest_qual, br_uint_8* src, br_uint_32 src_qual, br_uint_32 width, br_uint_32 height, br_uint_32 dest_stride, br_uint_32 src_stride, br_uint_32 bpp) {
 
     for (; height != 0; height--, dest += dest_stride, src += src_stride) {
@@ -285,7 +284,7 @@ void C2_HOOK_CDECL pm_mem_set_colour(br_uint_8* dest, br_uint_32 dest_qual, br_u
     }
 }
 
-// FUNCTION: CARMA2_HW 0x0053e626
+// C2PORT-PORTONLY: original 0x0053e626 pm_mem_read_colour reads through ES:[EDI]; the native port uses src as a linear pointer.
 br_uint_32 C2_HOOK_CDECL pm_mem_read_colour(void* src, br_uint_32 src_qual, br_uint_32 bpp) {
 
     switch (bpp) {

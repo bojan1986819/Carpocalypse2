@@ -1,8 +1,13 @@
+#ifdef __vita__
+#include "vita_perf.h"
+#endif
 #include "sdl3.h"
 
 #include <SDL3/SDL.h>
 
 #include "sdl3_input.h"
+#include "sdl3_display.h"
+#include <brgl_display.h>
 #include "sdl3_ssdx.h"
 
 #include "grafdata.h"
@@ -14,6 +19,12 @@
 #include "input.h"
 #include "platform.h"
 #include "utility.h"
+
+#ifdef __vita__
+#include "vita_controls.h"
+#include "vita_video.h"
+extern int gInitialisation_finished;
+#endif
 
 #include <stdlib.h>
 
@@ -102,12 +113,18 @@ static int find_gamepad_index(SDL_JoystickID which) {
 
 void SDL3ServiceMessages(void) {
     SDL_Event event;
+#ifdef __vita__
+    C2VitaPerfBegin(C2VP_INPUT);
+#endif
 
+    carpocalypse2_DisplayRefresh();
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_MOUSE_MOTION) {
-            gPD_mouse_position_x = event.motion.x;
-            gPD_mouse_position_y = event.motion.y;
+            carpocalypse2_DisplayMouse(event.motion.x,event.motion.y,&gPD_mouse_position_x,&gPD_mouse_position_y);
         } else if (event.type == SDL_EVENT_QUIT) {
+#ifdef __vita__
+            C2VitaVideoShutdown();
+#endif
             SDL_DestroyWindow(g_SDL_Window);
             g_SDL_Window = NULL;
             gHWnd = NULL;
@@ -140,8 +157,9 @@ void SDL3ServiceMessages(void) {
                 break;
             }
             if (doubleclicked) {
-                gPD_mouse_position_x = gCursorPos_LastClick_x = event.button.x;
-                gPD_mouse_position_y = gCursorPos_LastClick_y = event.button.y;
+                carpocalypse2_DisplayMouse(event.button.x,event.button.y,&gCursorPos_LastClick_x,&gCursorPos_LastClick_y);
+                gPD_mouse_position_x = gCursorPos_LastClick_x;
+                gPD_mouse_position_y = gCursorPos_LastClick_y;
                 gCursorPos_LastClick_Valid = true;
             }
         } else if (event.type == SDL_EVENT_KEY_DOWN) {
@@ -188,6 +206,9 @@ void SDL3ServiceMessages(void) {
             }
         }
     }
+#ifdef __vita__
+    C2VitaPerfEnd(C2VP_INPUT);
+#endif
 }
 
 void PDReallyAllocateActionReplayBuffer(void) {
@@ -311,6 +332,9 @@ C2_NORETURN void PDShutdownSystem(void) {
         }
         if (g_SDL_Window != NULL) {
             dr_dprintf("Destroying window...");
+#ifdef __vita__
+            C2VitaVideoShutdown();
+#endif
             SDL_DestroyWindow(g_SDL_Window);
             g_SDL_Window = NULL;
             gHWnd = NULL;
@@ -340,7 +364,7 @@ int PDGetASCIIFromKey(int pKey) {
 int PDCheckDriveExists2(const char* pThe_path, const char* pFile_name, tU32 pMin_size) {
     char the_path[256];
     const char* lookup;
-    SDL_PathInfo info;
+    SDL_PathInfo info = {0};
 
     if (pFile_name != NULL) {
         PathCat(the_path, pThe_path, pFile_name);
@@ -388,6 +412,14 @@ void PDSetPaletteEntries(br_pixelmap *pPalette, int pFirst_colour, int pCount) {
         colours[i].g = c >> 8;
         colours[i].b = c >> 0;
     }
+    {
+        extern int carpocalypse2_UseGL(void);
+        if (carpocalypse2_UseGL()) {
+            /* glrend converts the 8-bit textures with the device CLUT at draw time */
+            BrPixelmapPaletteEntrySetMany(gScreen, pFirst_colour, pCount, (br_colour*)pixels + pFirst_colour);
+            return;
+        }
+    }
     SDL_SetPaletteColors(g_SDL_Palette, colours, pFirst_colour, pCount);
     BrPixelmapDoubleBuffer(gScreen, gBack_screen);
 }
@@ -403,7 +435,14 @@ int PDServiceSystem(tU32 pTime_since_last_call) {
 
 void PDScreenBufferSwap(int pRendering_area_only) {
     extern void carpocalypse2_PresentFrame(void);
+    extern int carpocalypse2_UseGL(void);
     (void)pRendering_area_only;
+    if (carpocalypse2_UseGL()) {
+        /* glrend: composites the back FBO (+ CPU overlay), swaps and starts the next frame */
+        SDL3ServiceMessages();
+        BrPixelmapDoubleBuffer(gScreen, gBack_screen);
+        return;
+    }
     carpocalypse2_PresentFrame();
 }
 
@@ -468,107 +507,56 @@ int PDFileUnlock(const char *pThe_path) {
 #endif
 }
 
-#if defined(CARPOCALYPSE2_FIX_BUGS) && !defined(SDL_PLATFORM_WINDOWS)
-/* Case-insensitive path resolver for directory enumeration. The retail game
- * hard-codes directory names such as ".../COMMON/BOOM" and path segments that
- * differ in case from what ships on disk (".../COMMON/boom", "DATA" vs "data"),
- * which makes case-sensitive hosts (Linux) enumerate zero files. Windows gets
- * neither this resolver nor the dirent.h it is built on: its filesystem is
- * case-insensitive. Resolve each component case-insensitively. Handles
- * redundant separators. */
-static int CI_ResolveDirCaseInsensitive(const char* pPath, char* out, size_t out_size) {
-    char resolved[256];
-    char comp[256];
-    const char* p;
-    size_t comp_len;
+static const char* PDResolvePathCase(const char* pThe_path) {
+#ifndef _WIN32
+    extern const char* carpocalypse2_fix_path_case(const char* pPath);
+    static char resolved[256];
 
-    if (pPath == NULL || pPath[0] == '\0') {
-        return -1;
-    }
-    resolved[0] = '\0';
-    p = pPath;
-    for (;;) {
-        while (p[0] == '/') {
-            p++;
-        }
-        if (p[0] == '\0') {
-            break;
-        }
-        comp_len = strcspn(p, "/");
-        if (comp_len >= sizeof(comp)) {
-            return -1;
-        }
-        memcpy(comp, p, comp_len);
-        comp[comp_len] = '\0';
-        {
-            DIR* d = opendir(resolved[0] == '\0' ? "/" : resolved);
-            struct dirent* e;
-            int found = 0;
-            if (d == NULL) {
-                break;
-            }
-            while ((e = readdir(d)) != NULL) {
-                if (DRStricmp(e->d_name, comp) == 0) {
-                    size_t len = strlen(resolved);
-                    if (len == 0) {
-                        strcat(resolved, "/");
-                    } else if (resolved[len - 1] != '/') {
-                        strcat(resolved, "/");
-                    }
-                    strcat(resolved, e->d_name);
-                    found = 1;
-                    break;
-                }
-            }
-            closedir(d);
-            if (!found) {
-                break;
-            }
-        }
-        p += comp_len;
-    }
-    strncpy(out, resolved, out_size - 1);
-    out[out_size - 1] = '\0';
-    return 0;
-}
+    strcpy(resolved, carpocalypse2_fix_path_case(pThe_path));
+    return resolved;
+#else
+    return pThe_path;
 #endif
+}
 
-void PDEnumPath(const char* path, tEnumPathCallback pCallback, void* data) {
+int PDEnumPath(const char* path, tEnumPathCallback pCallback, void* data) {
     int count;
     int i;
+    int callback_res;
     char **files;
-#if defined(CARPOCALYPSE2_FIX_BUGS) && !defined(SDL_PLATFORM_WINDOWS)
     char resolved_path[256];
-    strncpy(resolved_path, path, sizeof(resolved_path) - 1);
-    resolved_path[sizeof(resolved_path) - 1] = '\0';
-    CI_ResolveDirCaseInsensitive(path, resolved_path, sizeof(resolved_path));
+    callback_res = 0;
+    /* Preserve Vita mount prefixes and use the same resolver as file loading. */
+    SDL_strlcpy(resolved_path, PDResolvePathCase(path), sizeof(resolved_path));
     files = SDL_GlobDirectory(resolved_path, "*.*", 0, &count);
-#else
-    files = SDL_GlobDirectory(path, "*.*", 0, &count);
+#ifdef __vita__
+    { extern void C2VitaLog(const char* format, ...);
+      static unsigned int asset_enum_logs;
+      if (asset_enum_logs++ < 100) C2VitaLog("ASSET ENUM requested=%s resolved=%s count=%d error=%s\n",
+          path, resolved_path, files ? count : -1, files ? "" : SDL_GetError()); }
 #endif
+    if (!files) return 0;
     for (i = 0; i < count; i++) {
         tPath_name found_path;
-        SDL_PathInfo info;
+        SDL_PathInfo info = {0};
         size_t l = SDL_strlen(files[i]);
         if (l >= 4 && SDL_strcasecmp(files[i] + l - 4, ".lnk") == 0) {
             continue;
         }
-#if defined(CARPOCALYPSE2_FIX_BUGS) && !defined(SDL_PLATFORM_WINDOWS)
         PathCat(found_path, resolved_path, files[i]);
-#else
-        PathCat(found_path, path, files[i]);
-#endif
         if (!SDL_GetPathInfo(found_path, &info)) {
             continue;
         }
         if (info.type != SDL_PATHTYPE_FILE) {
             continue;
         }
-        if (pCallback(found_path, data) != 0) {
+        callback_res = pCallback(found_path, data);
+        if (callback_res != 0) {
             break;
         }
     }
     SDL_free(files);
+    return callback_res;
 }
 
 int PDmkdir(const char *path) {
@@ -591,29 +579,18 @@ void MAMSUnlock(void **pPtr) {
 void MAMSLock(void **pPtr) {
 }
 
-static const char* PDResolvePathCase(const char* pThe_path) {
-#ifndef _WIN32
-    extern const char* carpocalypse2_fix_path_case(const char* pPath);
-    static char resolved[256];
-
-    strcpy(resolved, carpocalypse2_fix_path_case(pThe_path));
-    return resolved;
-#else
-    return pThe_path;
-#endif
-}
-
 void C2_HOOK_FASTCALL PDForEveryFileRecurse(const char *pThe_path, tPDForEveryFileRecurse_cbfn pAction_routine) {
     char **files;
     int count;
     int i;
-    const char* dir;
+    char dir[256];
 
     dr_dprintf("*PDForEveryFileRecurse() - NEW DIRECTORY '%s'", pThe_path);
-    dir = PDResolvePathCase(pThe_path);
+    SDL_strlcpy(dir, PDResolvePathCase(pThe_path), sizeof(dir));
     files = SDL_GlobDirectory(dir, "*", 0, &count);
+    if (!files) return;
     for (i = 0; i < count; i++) {
-        SDL_PathInfo info;
+        SDL_PathInfo info = {0};
         tPath_name found_path;
 
         PathCat(found_path, dir, files[i]);
@@ -634,10 +611,11 @@ void C2_HOOK_FASTCALL PDForEveryFile(const char *pThe_path, tPDForEveryFile_cbfn
     char **files;
     int count;
     int i;
-    const char* dir;
+    char dir[256];
 
-    dir = PDResolvePathCase(pThe_path);
+    SDL_strlcpy(dir, PDResolvePathCase(pThe_path), sizeof(dir));
     files = SDL_GlobDirectory(dir, "*.???", 0, &count);
+    if (!files) return;
     for (i = 0; i < count; i++) {
         tPath_name found_path;
 
@@ -760,6 +738,13 @@ void PDAllocateScreenAndBack(void) {
         extern void carpocalypse2_RegisterSDLRenderer(void);
         br_error dev_r;
 
+        extern int carpocalypse2_UseGL(void);
+        extern br_error carpocalypse2_GLBeginScreen(br_pixelmap** screen);
+
+        if (carpocalypse2_UseGL()) {
+            gRenderer = "glrend";
+            dev_r = carpocalypse2_GLBeginScreen(&gScreen);
+        } else {
         carpocalypse2_RegisterSDLRenderer();
 
         dev_r = BrDevBeginVar(&gScreen, gRenderer,
@@ -771,6 +756,7 @@ void PDAllocateScreenAndBack(void) {
             BRT_PIXEL_TYPE_U8, BR_PMT_RGB_565,
             BR_NULL_TOKEN
         );
+        }
         dr_dprintf("BrDevBeginVar('%s') -> %d", gRenderer, dev_r);
     }
     if (gScreen == NULL) {
@@ -811,7 +797,9 @@ void PDAllocateScreenAndBack(void) {
     gDouble_back_screen = BrPixelmapMatch(gBack_screen, BR_PMMATCH_OFFSCREEN);
     gHas_double_back_screen = 1;
 
-    SDL_memset(gBack_screen->pixels, 0, gBack_screen->height * gBack_screen->row_bytes);
+    if (gBack_screen->pixels != NULL) { /* the GL back buffer is an FBO with no CPU pixels */
+        SDL_memset(gBack_screen->pixels, 0, gBack_screen->height * gBack_screen->row_bytes);
+    }
 
     BrPixelmapDoubleBuffer(gScreen, gBack_screen);
 
@@ -920,14 +908,28 @@ void carpocalypse2_RequestQuit(void) {
 /* ==== Frame presentation: blit gBack_screen into the SDL window ==== */
 
 void carpocalypse2_PresentFrame(void) {
+#ifdef __vita__
+    static unsigned int frames;
+    unsigned int frame = ++frames;
+    int log_frame = frame <= 3 || (frame <= 6000 && frame % 300 == 0);
+    if (log_frame) C2VitaLog("PRESENT %u begin %llu ms\n", frame, (unsigned long long)SDL_GetTicks());
+#else
     SDL_Surface* surface;
+#endif
 
     /* The Win95 message pump ran continuously; on SDL3 the event pump must be
      * driven every frame or the window stops responding and mouse position
      * never updates */
     SDL3ServiceMessages();
 
+#ifdef __vita__
+    if (gScreen != NULL && gBack_screen != NULL) BrPixelmapDoubleBuffer(gScreen, gBack_screen);
+    return;
+#else
     if (g_SDL_Window == NULL || gBack_screen == NULL || gBack_screen->pixels == NULL) {
+#ifdef __vita__
+        if (log_frame) C2VitaLog("PRESENT %u missing window/back buffer\n", frame);
+#endif
         SDL_Delay(16);
         return;
     }
@@ -942,12 +944,13 @@ void carpocalypse2_PresentFrame(void) {
         int x, y;
         int src_w = gBack_screen->width;
         int src_h = gBack_screen->height;
-        int dst_w = surface->w;
-        int dst_h = surface->h;
+        int dst_x,dst_y,dst_w,dst_h;
+        C2GLUIRect(surface->w,surface->h,&dst_x,&dst_y,&dst_w,&dst_h);
+        SDL_FillSurfaceRect(surface,NULL,SDL_MapSurfaceRGB(surface,0,0,0));
         br_uint_16* src_base = (br_uint_16*)gBack_screen->pixels;
 
         for (y = 0; y < dst_h; y++) {
-            Uint32* drow = (Uint32*)((char*)surface->pixels + y * surface->pitch);
+            Uint32* drow = (Uint32*)((char*)surface->pixels + (y + dst_y) * surface->pitch) + dst_x;
             int sy = y * src_h / dst_h;
             if (sy >= src_h) sy = src_h - 1;
             br_uint_16* srow = (br_uint_16*)((char*)src_base + sy * gBack_screen->row_bytes);
@@ -963,4 +966,5 @@ void carpocalypse2_PresentFrame(void) {
         }
         SDL_UpdateWindowSurface(g_SDL_Window);
     }
+#endif
 }

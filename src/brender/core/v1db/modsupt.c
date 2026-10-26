@@ -10,6 +10,7 @@
 // FIXME: move this definition (+BR_MAC3+BR_MAC4) to br_defs.h (and remove from matrix34.c matrix4.c ...)
 #define BR_MAC2(A, B, C, D) ((A) * (B) + (C) * (D))
 
+// C2PORT-NONMATCHING: best 29.92% | difftest PASS 2000 trials (spec 00521490_BrModelApplyMap.json) | reason fixed sphere radius and retained fractional fixed-angle mapping
 // FUNCTION: CARMA2_HW 0x00521490
 void C2_HOOK_CDECL BrModelApplyMap(br_model* model, int map_type, br_matrix34* xform) {
     int v;
@@ -31,16 +32,16 @@ void C2_HOOK_CDECL BrModelApplyMap(br_model* model, int map_type, br_matrix34* x
             vp->map.v[1] = (mv.v[1] + 1.f) * 0.5f;
             break;
         case BR_APPLYMAP_SPHERE:
-            vp->map.v[0] = BrAngleToDegrees(BR_ATAN2(-mv.v[2], mv.v[0])) / 360.f;
-            d = BR_MAC2(mv.v[0], mv.v[0], mv.v[2], mv.v[2]);
-            vp->map.v[1] = 1.f - BrAngleToDegrees(BR_ATAN2(d, mv.v[1])) / 180.f;
+            vp->map.v[0] = (br_scalar)BR_ATAN2(-mv.v[2], mv.v[0]) / 65536.f;
+            d = (br_scalar)sqrt(BR_MAC2(mv.v[0], mv.v[0], mv.v[2], mv.v[2]));
+            vp->map.v[1] = 1.f - (br_scalar)BR_ATAN2(d, mv.v[1]) / 32768.f;
             break;
         case BR_APPLYMAP_CYLINDER:
-            vp->map.v[0] = BrAngleToDegrees(BR_ATAN2(-mv.v[2], mv.v[0])) / 360.f;
+            vp->map.v[0] = (br_scalar)BR_ATAN2(-mv.v[2], mv.v[0]) / 65536.f;
             vp->map.v[1] = (mv.v[1] + 1.f) * 0.5f;
             break;
         case BR_APPLYMAP_DISC:
-            vp->map.v[0] = BrAngleToDegrees(BR_ATAN2(-mv.v[1], mv.v[0])) / 360.f;
+            vp->map.v[0] = (br_scalar)BR_ATAN2(-mv.v[1], mv.v[0]) / 65536.f;
             vp->map.v[1] = (br_scalar)sqrt(BR_MAC2(mv.v[0], mv.v[0], mv.v[1], mv.v[1]));
             break;
         case BR_APPLYMAP_NONE:
@@ -51,6 +52,7 @@ void C2_HOOK_CDECL BrModelApplyMap(br_model* model, int map_type, br_matrix34* x
     }
 }
 
+// C2PORT-NONMATCHING: best 46.85% | difftest PASS 2000 trials (spec 00521660_BrModelFitMap.json) | reason equivalent transform with compiler float scheduling differences
 // FUNCTION: CARMA2_HW 0x00521660
 br_matrix34* C2_HOOK_CDECL BrModelFitMap(br_model* model, int axis_0, int axis_1, br_matrix34* transform) {
     br_vector3 axis_3;

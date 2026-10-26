@@ -9,6 +9,7 @@ extern char* gRaces_file_names[9];
 extern int gCurrent_race_file_index;
 extern int gCountRaceGroups;
 extern tRace_group_spec* gRace_groups;
+extern char gDefaultCar[32];
 
 
 #define DECODE_OFFSET 50
@@ -60,9 +61,6 @@ char gDecode_string[14] = {
 // GLOBAL: CARMA2_HW 0x0068c6f8
 char gUnderwater_screen_name[32];
 
-// GLOBAL: CARMA2_HW 0x00764ea0
-char gDefault_car[32];
-
 // GLOBAL: CARMA2_HW 0x00764ec0
 char gBasic_car_name[32];
 
@@ -88,11 +86,14 @@ extern int gFaded_palette;
 extern int gPalette_munged;
 extern br_pixelmap* gScratch_palette;
 br_pixelmap* gMini_map_glowing_line_palettes[3];
+// GLOBAL: CARMA2_HW 0x0074a604
 br_pixelmap* gPalette_0074a604;
 
 extern br_colour* gScratch_pixels;
+// GLOBAL: CARMA2_HW 0x0074a600
 br_pixelmap* gPalette_0074a600;
 br_pixelmap* gPalette_0074a66c;
+// GLOBAL: CARMA2_HW 0x0074a5fc
 br_pixelmap* gPalette_0074a5fc;
 br_pixelmap* gPalette_0074a670;
 
@@ -173,10 +174,10 @@ void C2_HOOK_FASTCALL LoadBunchOParameters(tSlot_info* pSlot_info) {
     GetThreeInts(gTempFile, &pSlot_info->initial[0], &pSlot_info->initial[1], &pSlot_info->initial[2]);
     /* (armour|power|offensive), each network game type */
     GetALineAndDontArgue(gTempFile, s);
-    str = strtok(s, "\t ,/");
+    str = strtok(s, gSkip_lines_delimiters);
     for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(pSlot_info->initial_network); i++) {
-        sscanf(str, "%d", &pSlot_info->initial_network[i]);
-        str = strtok(NULL, "\t ,/");
+        sscanf(str, gSkip_lines_format, &pSlot_info->initial_network[i]);
+        str = strtok(NULL, gSkip_lines_delimiters);
     }
 }
 
@@ -187,10 +188,10 @@ void C2_HOOK_FASTCALL LoadBunchOFloatParameters(tFloat_bunch_info *pBunch) {
 
     GetThreeFloats(gTempFile, &pBunch->initial[0], &pBunch->initial[1], &pBunch->initial[2]);
     GetALineAndDontArgue(gTempFile, s);
-    str = strtok(s, "\t ,/");
+    str = strtok(s, gSkip_lines_delimiters);
     for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(pBunch->initial_network); i++) {
         sscanf(str, "%f", &pBunch->initial_network[i]);
-        str = strtok(NULL, "\t ,/");
+        str = strtok(NULL, gSkip_lines_delimiters);
     }
 }
 
@@ -204,12 +205,14 @@ void C2_HOOK_FASTCALL GetHithers(void) {
 
     /* Hithers, general then cockpit mode */
     GetALineAndDontArgue(gTempFile, s);
-    result = sscanf(&s[strspn(s, whitespace)], "%f%n", &camera_hither, &position);
+    position = (int)strspn(s, whitespace);
+    result = sscanf(&s[position], "%f%n", &camera_hither, &position);
     if (result == 0) {
         FatalError(kFatalError_Mysterious_SS, s, "GENERAL.TXT");
     }
     gCamera_hither = camera_hither;
-    if (sscanf(&s[position + strspn(&s[position], "\t ,")], "%f", &cockpit_hither) == 0) {
+    position += (int)strspn(&s[position], whitespace);
+    if (sscanf(&s[position], "%f", &cockpit_hither) == 0) {
         cockpit_hither = gCamera_hither;
     }
     gCamera_hither *= 2;
@@ -298,7 +301,7 @@ void C2_HOOK_FASTCALL LoadGeneralParameters(void) {
     GetThreeInts(gTempFile, &gCunning_stunt_bonus[0], &gCunning_stunt_bonus[1], &gCunning_stunt_bonus[2]);
 
     /* Cars to use as defaults: */
-    GetAString(gTempFile, gDefault_car);
+    GetAString(gTempFile, gDefaultCar);
     GetAString(gTempFile, gBasic_car_name);
 
     gKnobbled_frame_period = 0;
@@ -388,14 +391,14 @@ void C2_HOOK_FASTCALL LoadGeneralParameters(void) {
     GetThreeInts(gTempFile, &gStarting_money[0], &gStarting_money[1], &gStarting_money[2]);
     /* Starting money in network mode */
     GetALineAndDontArgue(gTempFile, s);
-    str = strtok(s, "\t ,/");
+    str = strtok(s, gSkip_lines_delimiters);
 #if defined(CARPOCALYPSE2_FIX_BUGS)
     for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gNet_starting_money); i++) {
 #else
     for (i = 0; i < 5; i++) {
 #endif
-        sscanf(str, "%d", &gNet_starting_money[i]);
-        str = strtok(NULL, "\t ,/");
+        sscanf(str, gSkip_lines_format, &gNet_starting_money[i]);
+        str = strtok(NULL, gSkip_lines_delimiters);
     }
 
     /* Repair cost for each skill level (cred per % damage) */
@@ -416,10 +419,10 @@ void C2_HOOK_FASTCALL LoadGeneralParameters(void) {
 
     /* Score targets for each net game type */
     GetALineAndDontArgue(gTempFile, s);
-    str = strtok(s, "\t ,/");
+    str = strtok(s, gSkip_lines_delimiters);
     for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gNet_score_targets); i++) {
-        sscanf(str, "%d", &gNet_score_targets[i]);
-        str = strtok(NULL, "\t ,/");
+        sscanf(str, gSkip_lines_format, &gNet_score_targets[i]);
+        str = strtok(NULL, gSkip_lines_delimiters);
     }
 
     /* Pickup respawn min time (seconds) */
@@ -461,12 +464,12 @@ void C2_HOOK_FASTCALL LoadGeneralParameters(void) {
         gAuto_increase_credits_dt[i] = (int)((float)time / (0.02f * (float)gRecovery_cost.initial[i]));
     }
     GetALineAndDontArgue(gTempFile, s);
-    str = strtok(s, "\t ,/");
+    str = strtok(s, gSkip_lines_delimiters);
     for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gNet_score_targets); i++) {
         int t;
-        sscanf(str, "%d", &t);
+        sscanf(str, gSkip_lines_format, &t);
         gNet_auto_increase_credits_dt[i] = (int)((float)(1000 * t) / (.02f * (float)gRecovery_cost.initial_network[i]));
-        str = strtok(NULL, "\t ,/");
+        str = strtok(NULL, gSkip_lines_delimiters);
     }
 
     /* Mutant tail thing settings */
@@ -479,14 +482,6 @@ void C2_HOOK_FASTCALL LoadGeneralParameters(void) {
 
     /*  Mine / Mortar weight */
     gMass_mine = GetAFloat(gTempFile);
-}
-
-void C2_HOOK_FASTCALL FinishLoadingGeneral(void) {
-#ifndef CARPOCALYPSE2_MATCHING
-    FinishLoadGeneralParameters();
-#else
-    NOT_IMPLEMENTED();
-#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00487e10
@@ -638,7 +633,7 @@ void C2_HOOK_FASTCALL LoadRaces(tRace_list_spec* pRace_list, int* pCount, int pR
     gDev_initial_race = 0;
     low_count = GetAScalar(f);
     high_count = GetAScalar(f);
-    GetPairOfFloats(f, &y_offset, &x_offset);
+    GetPairOfFloats(f, &x_offset, &y_offset);
     GetPairOfFloats(f, &x_span, &y_span);
     low_nastiness = GetAScalar(f);
     high_nastiness = GetAScalar(f);
@@ -756,7 +751,7 @@ void C2_HOOK_FASTCALL LoadRaces(tRace_list_spec* pRace_list, int* pCount, int pR
             v = x_offset + (x_span - x_offset) * ((float)i / (*pCount - 1));
             r = y_offset + (y_span - y_offset) * ((float)i / (*pCount - 1));
             for (j = race->count_explicit_opponents; j < count; j++) {
-                val = (int)(v + (r - v) * ((float)(j - race->count_explicit_opponents) / (race->count_explicit_opponents - 1)));
+                val = (int)(v + (r - v) * ((float)(j - race->count_explicit_opponents) / (count - race->count_explicit_opponents - 1)));
                 if (val < 1) {
                     val = -1;
                 } else if (val > 5) {
@@ -1003,8 +998,69 @@ int C2_HOOK_FASTCALL SaveOptions(void) {
     PFfclose(f);
     return 1;
 #else
-    NOT_IMPLEMENTED();
-    return 0;
+    PathCat(the_path, gApplication_path, "OPTIONS.TXT");
+    PDFileUnlock(the_path);
+    f = DRfopen(the_path, "wt");
+    if (f == NULL
+        || fprintf(f, "YonFactor %f\n", GetYonFactor()) < 0
+        || fprintf(f, "SkyTextureOn %d\n", GetSkyTextureOn()) < 0
+        || fprintf(f, "CarTexturingLevel %d\n", GetCarTexturingLevel()) < 0
+        || fprintf(f, "RoadTexturingLevel %d\n", GetRoadTexturingLevel()) < 0
+        || fprintf(f, "WallTexturingLevel %d\n", GetWallTexturingLevel()) < 0
+        || fprintf(f, "ShadowLevel %d\n", GetShadowLevel()) < 0
+        || fprintf(f, "DepthCueingOn %d\n", GetDepthCueingOn()) < 0
+        || fprintf(f, "Yon %f\n", GetYon()) < 0
+        || fprintf(f, "CarSimplificationLevel %d\n", GetCarSimplificationLevel()) < 0
+        || fprintf(f, "AccessoryRendering %d\n", GetAccessoryRendering()) < 0
+        || fprintf(f, "SmokeOn %d\n", GetSmokeOn()) < 0
+        || fprintf(f, "SoundDetailLevel %d\n", GetSoundDetailLevel()) < 0
+        || fprintf(f, "ScreenSize %d\n", GetScreenSize()) < 0
+        || fprintf(f, "MapRenderX %f\n", gMap_render_x) < 0
+        || fprintf(f, "MapRenderY %f\n", gMap_render_y) < 0
+        || fprintf(f, "MapRenderWidth %f\n", gMap_render_width) < 0
+        || fprintf(f, "MapRenderHeight %f\n", gMap_render_height) < 0
+        || fprintf(f, "MapMode %d\n", 1) < 0
+        || fprintf(f, "PlayerName 0\n%s\n", gProgram_state.player_name[0] != '\0' ? gProgram_state.player_name : "MAX DAMAGE") < 0
+        || fprintf(f, "EVolume %d\n", gProgram_state.effects_volume) < 0
+        || fprintf(f, "MVolume %d\n", gProgram_state.music_volume) < 0
+        || fprintf(f, "KeyMapIndex %d\n", gKey_map_index) < 0
+        || fprintf(f, "MapTrans %d\n", gMap_trans) < 0
+        || fprintf(f, "HeadupMapX %d\n", gHeadup_map_x) < 0
+        || fprintf(f, "HeadupMapY %d\n", gHeadup_map_y) < 0
+        || fprintf(f, "HeadupMapW %d\n", gHeadup_map_w) < 0
+        || fprintf(f, "HeadupMapH %d\n", gHeadup_map_h) < 0
+        || fprintf(f, "CameraType %d\n", gCamera_type) < 0
+        || fprintf(f, "ARCameraType %d\n", gAR_camera_type) < 0
+        || fprintf(f, "GoreLevel %d\n", GetHowMuchBloodAndSnotToSmearAbout()) < 0
+        || fprintf(f, "AnimalsOn %d\n", GetAnimalsOn()) < 0
+        || fprintf(f, "FlameThrowerOn %d\n", IsItOkayToFireHorribleBallsOfNastyNapalmDeathAtPerfectlyInnocentPassersByAndByInnocentIDoMeanInTheBiblicalSense()) < 0
+        || fprintf(f, "MinesOn %d\n", IsItReallyOKThatWeDontMakeAnyEffortToProtectAnySadFuckersOutThereThatDontWishToSeeInnocentPeopleBlownToBitsByHighExplosiveMinesAndShells()) < 0
+        || fprintf(f, "DronesOn %d\n", GetDronesOn()) < 0
+        || fprintf(f, "MiniMapVisible %i\n", gMini_map_visible) < 0
+        || fprintf(f, "SkillLevel %d\n", gProgram_state.skill_level) < 0
+        || fprintf(f, "AmbientSound %i\n", gAmbient_sound) < 0
+        || fprintf(f, "AutoLoad %d\n", gAuto_load) < 0
+        || fprintf(f, "RussellsFannies %d\n", gRussels_fannies) < 0
+        || fprintf(f, "QuickTimeQuality 0\n%s\n", gQuick_time_quality) < 0
+        || fprintf(f, "QuickTimeCompressor 0\n%s\n", gQuick_time_compressor) < 0
+        || fprintf(f, "QuickTimeBanner %d\n%s\n", gQuick_time_banner_number, gQuick_time_banner_texture_name) < 0
+        || fprintf(f, "QuickTimeTempPath 0\n%s\n", gQuick_time_temp_path) < 0
+        || fprintf(f, "QuickTimeMoviePathStub 0\n%s\n", gQuick_time_movie_path_stub) < 0
+        || fprintf(f, "NETGAMETYPE %d\n", gNet_last_game_type) < 0
+        || PrintNetOptions(f, 0) < 0
+        || PrintNetOptions(f, 1) < 0
+        || PrintNetOptions(f, 2) < 0
+        || PrintNetOptions(f, 3) < 0
+        || PrintNetOptions(f, 4) < 0
+        || PrintNetOptions(f, 5) < 0
+        || PrintNetOptions(f, 6) < 0
+        || PrintNetOptions(f, 7) < 0
+        || PrintNetOptions(f, 8) < 0
+        || fprintf(f, "HeadupDetailLevel %d\n", gHeadup_detail_level) < 0
+        || PFfclose(f) != 0) {
+        return 0;
+    }
+    return 1;
 #endif
 }
 
@@ -1189,15 +1245,15 @@ void C2_HOOK_FASTCALL InitializePalettes(void) {
     gOrig_render_palette->pixels = BrMemAllocate(256 * sizeof(br_uint_32), kMem_misc);
     memcpy(gOrig_render_palette->pixels, gRender_palette->pixels, 256 * sizeof(br_uint_32));
     gFlic_palette = BrTableFind("DRACEFLC.PAL");
+    render_palette = gRender_palette;
     if (gFlic_palette == NULL) {
         FatalError(kFatalError_unableToFindRequiredPalette);
     }
-    render_palette = gRender_palette;
-    ((br_uint_32*)render_palette->pixels)[0] = 0;
-    memcpy(gCurrent_palette_pixels, render_palette->pixels, 256 * sizeof(br_uint_32));
+    ((br_uint_32*)gRender_palette->pixels)[0] = 0;
+    memcpy(gCurrent_palette_pixels, gRender_palette->pixels, 256 * sizeof(br_uint_32));
     gPalette_changed = 0;
     if (!gFaded_palette) {
-        PDSetPalette(render_palette);
+        PDSetPalette(gRender_palette);
     }
     gPalette_munged |= render_palette != gRender_palette;
     gScratch_pixels = BrMemAllocate(256 * sizeof(br_uint_32), kMem_misc);

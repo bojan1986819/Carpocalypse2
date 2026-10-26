@@ -5,6 +5,8 @@
 #include "carpocalypse2_types.h"
 
 extern tNet_game_options gNet_settings[9];
+extern int gReceived_car_details;
+extern tNet_game_options* gCurrent_net_game_options;
 
 // SetGameTarget
 
@@ -16,9 +18,11 @@ extern tNet_game_options gNet_settings[9];
 
 // RequestCarDetails
 
-// SetNetAvailability
+extern void C2_HOOK_FASTCALL SetNetAvailability(tNet_game_options* pOptions);
 
 extern void C2_HOOK_FASTCALL DefaultNetSettings(void);
+
+extern void C2_HOOK_FASTCALL PollCarDetails(tNet_game_details* pNet_game);
 
 // DisposeJoinableGame
 
@@ -54,6 +58,8 @@ void C2_HOOK_FASTCALL ReadNetGameChoices(tNet_game_type* pGame_type, tNet_game_o
 void C2_HOOK_FASTCALL DisposeJoinList(int pExemption);
 
 void C2_HOOK_FASTCALL DisposeJoinableGame(int pIndex);
+
+int C2_HOOK_FASTCALL PickARandomCar(void);
 
 int C2_HOOK_FASTCALL ChooseNetCar(tNet_game_details* pNet_game, tNet_game_options* pOptions, int* pCar_index, int pIm_the_host_so_fuck_off);
 

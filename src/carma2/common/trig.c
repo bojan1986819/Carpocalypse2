@@ -150,10 +150,10 @@ br_matrix23 mat23tmp2;
 // FUNCTION: CARMA2_HW 0x005113d0
 float C2_HOOK_FASTCALL FastFloatSin(int pAngle_in_degrees) {
 
-    if (pAngle_in_degrees < 0) {
-        pAngle_in_degrees = 360 - -pAngle_in_degrees % 360;
-    } else {
+    if (pAngle_in_degrees >= 0) {
         pAngle_in_degrees = pAngle_in_degrees % 360;
+    } else {
+        pAngle_in_degrees = 360 - -pAngle_in_degrees % 360;
     }
     if (pAngle_in_degrees > 270) {
         return -gFloat_sine_table[360 - pAngle_in_degrees];
@@ -170,10 +170,10 @@ float C2_HOOK_FASTCALL FastFloatSin(int pAngle_in_degrees) {
 // FUNCTION: CARMA2_HW 0x00511440
 float C2_HOOK_FASTCALL FastFloatCos(int pAngle_in_degrees) {
 
-    if (pAngle_in_degrees < 0) {
-        pAngle_in_degrees = 360 - -pAngle_in_degrees % 360;
-    } else {
+    if (pAngle_in_degrees >= 0) {
         pAngle_in_degrees = pAngle_in_degrees % 360;
+    } else {
+        pAngle_in_degrees = 360 - -pAngle_in_degrees % 360;
     }
 
     if (pAngle_in_degrees > 270) {
@@ -215,13 +215,13 @@ br_scalar C2_HOOK_FASTCALL FastScalarTan(int pAngle_in_degrees) {
 // FUNCTION: CARMA2_HW 0x00511780
 br_scalar C2_HOOK_FASTCALL FastScalarSinAngle(br_angle pBR_angle) {
 
-    return FastScalarSin((int)((double)pBR_angle * (360.0 / 65536.0)));
+    return FastScalarSin((int)BrAngleToDegrees(pBR_angle));
 }
 
 // FUNCTION: CARMA2_HW 0x00511810
 br_scalar C2_HOOK_FASTCALL FastScalarCosAngle(br_angle pBR_angle) {
 
-    return FastScalarCos((int)((double)pBR_angle * (360.0 / 65536.0)));
+    return FastScalarCos((int)BrAngleToDegrees(pBR_angle));
 }
 
 // FUNCTION: CARMA2_HW 0x005118a0
@@ -281,39 +281,45 @@ float C2_HOOK_STDCALL FastFloatArcTan2(float pY, float pX) {
     float abs_x;
     float abs_y;
 
-    abs_x = (float)fabs(pX);
-    abs_y = (float)fabs(pY);
-    if (pX == 0.f) {
-        if (pY < 0.f) {
-            return 270.f;
+    abs_x = fabsf(pX);
+    abs_y = fabsf(pY);
+    if (pX == 0.0f) {
+        if (pY < 0.0f) {
+            return 270.0;
+        } else if (pY == 0.0f) {
+            return 0.0f;
+        } else {
+            return 90.0f;
         }
-        if (pY > 0.f) {
-            return 90.f;
-        }
-        return 0.f;
-    }
-    if (pX < 0.f) {
-        if (pY < 0.f) {
-            if (abs_x < abs_y) {
-                return (float)((6.f - abs_x / abs_y) * 45.0);
+    } else if (pX > 0.0f) {
+        if (pY >= 0.0) {
+            if (abs_y <= abs_x) {
+                return abs_y / abs_x * 45.0f;
+            } else {
+                return (2.0f - abs_x / abs_y) * 45.0f;
             }
-            return (float)((abs_y / abs_x + 4.f) * 45.0);
+        } else {
+            if (abs_y <= abs_x) {
+                return (8.0f - abs_y / abs_x) * 45.0f;
+            } else {
+                return (abs_x / abs_y + 6.0f) * 45.0f;
+            }
         }
-        if (abs_x < abs_y) {
-            return (float)((abs_x / abs_y + 2.f) * 45.0);
+    } else {
+        if (pY >= 0.0f) {
+            if (abs_y <= abs_x) {
+                return (4.0f - abs_y / abs_x) * 45.0f;
+            } else {
+                return (abs_x / abs_y + 2.0f) * 45.0f;
+            }
+        } else {
+            if (abs_y <= abs_x) {
+                return (abs_y / abs_x + 4.0f) * 45.0f;
+            } else {
+                return (6.0f - abs_x / abs_y) * 45.0f;
+            }
         }
-        return (float)((4.f - abs_y / abs_x) * 45.0);
     }
-    if (pY < 0.f) {
-        if (abs_x < abs_y) {
-            return (float)((abs_x / abs_y + 6.f) * 45.0);
-        }
-        return (float)((8.f - abs_y / abs_x) * 45.0);
-    }
-    if (abs_x < abs_y) {
-        return (float)((2.f - abs_x / abs_y) * 45.0);
-    }
-    return (float)(abs_y / abs_x * 45.0);
 }
 
 // FUNCTION: CARMA2_HW 0x00511e50
@@ -327,39 +333,41 @@ br_angle C2_HOOK_STDCALL FastFloatArcTan2Angle(float pY, float pX) {
     float abs_x;
     float abs_y;
 
-    abs_x = (float)fabs(pX);
-    abs_y = (float)fabs(pY);
-    if (pX == 0.f) {
-        if (pY < 0.f) {
-            return BR_ANGLE_DEG(270);
-        }
-        if (pY > 0.f) {
-            return BR_ANGLE_DEG(90);
-        }
-        return 0;
-    }
-    if (pX < 0.f) {
-        if (pY < 0.f) {
-            if (abs_x < abs_y) {
-                return (br_angle)((6.f - abs_x / abs_y) * 8192.f);
+    abs_x = fabsf(pX);
+    abs_y = fabsf(pY);
+    if (pX == 0.0) {
+        if (pY >= 0.0) {
+            if (pY <= 0.0) {
+                return 0;
+            } else {
+                return 16380;
             }
-            return (br_angle)((abs_y / abs_x + 4.f) * 8192.f);
+        } else {
+            return -16396;
         }
-        if (abs_x < abs_y) {
-            return (br_angle)((abs_x / abs_y + 2.f) * 8192.f);
+    } else if (pX >= 0.0) {
+        if (pY >= 0.0) {
+            if (abs_y <= (double)abs_x) {
+                return (br_angle)(abs_y / abs_x * 8192.0f);
+            } else {
+                return (br_angle)((2.0 - abs_x / abs_y) * 8192.0f);
+            }
+        } else if (abs_y <= abs_x) {
+            return (br_angle)((8.0 - abs_y / abs_x) * 8192.0f);
+        } else {
+            return (br_angle)((abs_x / abs_y + 6.0) * 8192.0f);
         }
-        return (br_angle)((4.f - abs_y / abs_x) * 8192.f);
-    }
-    if (pY < 0.f) {
-        if (abs_x < abs_y) {
-            return (br_angle)((abs_x / abs_y + 6.f) * 8192.f);
+    } else if (pY >= 0.0) {
+        if (abs_y <= abs_x) {
+            return (br_angle)((4.0 - abs_y / abs_x) * 8192.0f);
+        } else {
+            return (br_angle)((abs_x / abs_y + 2.0) * 8192.0f);
         }
-        return (br_angle)((8.f - abs_y / abs_x) * 8192.f);
+    } else if (abs_y <= abs_x) {
+        return (br_angle)((abs_y / abs_x + 4.0) * 8192.0f);
+    } else {
+        return (br_angle)((6.0 - abs_x / abs_y) * 8192.0f);
     }
-    if (abs_x < abs_y) {
-        return (br_angle)((2.f - abs_x / abs_y) * 8192.f);
-    }
-    return (br_angle)(abs_y / abs_x * 8192.f);
 }
 
 // FUNCTION: CARMA2_HW 0x00512010
@@ -431,6 +439,7 @@ void C2_HOOK_FASTCALL DRMatrix34RotateZ(br_matrix34* mat, br_angle rz) {
     mat->m[3][2] = 0.0f;
 }
 
+// C2PORT-NONMATCHING: best 39.7% | difftest PASS 2000 trials (spec 005123f0_DRMatrix34Rotate.json) | reason corrected m[0][1] to use the z-axis sine term
 // FUNCTION: CARMA2_HW 0x005123f0
 void C2_HOOK_FASTCALL DRMatrix34Rotate(br_matrix34* mat, br_angle r, br_vector3* a) {
     br_scalar t;
@@ -454,7 +463,7 @@ void C2_HOOK_FASTCALL DRMatrix34Rotate(br_matrix34* mat, br_angle r, br_vector3*
     sz = s * a->v[2];
 
     mat->m[0][0] = a->v[0] * a->v[0] * t + c;
-    mat->m[0][1] = sx + txy;
+    mat->m[0][1] = sz + txy;
     mat->m[0][2] = txz - sy;
     mat->m[1][0] = txy - sz;
     mat->m[1][1] = a->v[1] * a->v[1] * t + c;
@@ -563,6 +572,7 @@ void C2_HOOK_FASTCALL DRMatrix23PostRotate(br_matrix23* mat, br_angle rz) {
     BrMatrix23Copy(mat, &mat23tmp1);
 }
 
+// C2PORT-NONMATCHING: best 21.65% | difftest PASS 2000 trials (spec 0040aed0_DRMatrix34RotateCos.json) | reason VC5 x87 scheduling and stack allocation
 // FUNCTION: CARMA2_HW 0x0040aed0
 void C2_HOOK_FASTCALL DRMatrix34RotateCos(br_matrix34* pDest, const br_vector3* pAxis, float pCosA) {
     float sinA;

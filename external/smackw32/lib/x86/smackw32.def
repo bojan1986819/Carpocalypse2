@@ -1,63 +1,63 @@
 LIBRARY smackw32
 EXPORTS
-    CopyData@20                       @1
-    SmackBlit@44                      @2
-    SmackBlitClear@32                 @3
-    SmackBlitClose@4                  @4
-    SmackBlitMask@52                  @5
-    SmackBlitMerge@52                 @6
-    SmackBlitOpen@4                   @7
-    SmackBlitSetFlags@8               @8
-    SmackBlitSetPalette@12            @9
-    SmackBlitString@8                 @10
-    SmackBlitTrans@48                 @11
-    SmackBufferBlit@32                @12
-    SmackBufferClear@8                @13
-    SmackBufferClose@4                @14
-    SmackBufferCopyPalette@12         @15
-    SmackBufferEndMultipleBlits@4     @16
-    SmackBufferFocused@4              @17
-    SmackBufferFromScreen@16          @18
-    SmackBufferNewPalette@12          @19
-    SmackBufferOpen@24                @20
-    SmackBufferSetPalette@4           @21
-    SmackBufferStartMultipleBlits@4   @22
-    SmackBufferString@8               @23
-    SmackBufferToBuffer@32            @24
-    SmackBufferToBufferMask@40        @25
-    SmackBufferToBufferMerge@40       @26
-    SmackBufferToBufferTrans@36       @27
-    SmackCheckCursor@20               @28
-    SmackClose@4                      @29
-    SmackColorRemapWithTrans@20       @30
-    SmackColorTrans@8                 @31
-    SmackDDSurfaceType@4              @32
-    SmackDoFrame@4                    @33
-    SmackFrameRate@4                  @34
-    SmackGetTrackData@12              @35
-    SmackGoto@8                       @36
-    SmackIsSoftwareCursor@8           @37
-    SmackNextFrame@4                  @38
-    SmackOpen@12                      @39
-    SmackRestoreCursor@4              @40
-    SmackSetSystemRes@4               @41
-    SmackSimulate@4                   @42
-    SmackSoundCheck@0                 @43
-    SmackSoundInTrack@8               @44
-    SmackSoundOnOff@8                 @45
-    SmackSoundSetDirectSoundHWND@4    @46
-    SmackSoundUseDW@12                @47
-    SmackSoundUseDirectSound@4        @48
-    SmackSoundUseMSS@4                @49
-    SmackSoundUseWin@0                @50
-    SmackSummary@8                    @51
-    SmackToBuffer@28                  @52
-    SmackToBufferRect@8               @53
-    SmackToScreen@28                  @54
-    SmackUseMMX@4                     @55
-    SmackVolumePan@16                 @56
-    SmackWait@4                       @57
-    TimerFunc@20                      @58
-    ailcallback@4                     @59
-    radfree@4                         @60
-    radmalloc@4                       @61
+    CopyData@20                       @1 NONAME
+    SmackBlit@44                      @2 NONAME
+    SmackBlitClear@32                 @3 NONAME
+    SmackBlitClose@4                  @4 NONAME
+    SmackBlitMask@52                  @5 NONAME
+    SmackBlitMerge@52                 @6 NONAME
+    SmackBlitOpen@4                   @7 NONAME
+    SmackBlitSetFlags@8               @8 NONAME
+    SmackBlitSetPalette@12            @9 NONAME
+    SmackBlitString@8                 @10 NONAME
+    SmackBlitTrans@48                 @11 NONAME
+    SmackBufferBlit@32                @12 NONAME
+    SmackBufferClear@8                @13 NONAME
+    SmackBufferClose@4                @14 NONAME
+    SmackBufferCopyPalette@12         @15 NONAME
+    SmackBufferEndMultipleBlits@4     @16 NONAME
+    SmackBufferFocused@4              @17 NONAME
+    SmackBufferFromScreen@16          @18 NONAME
+    SmackBufferNewPalette@12          @19 NONAME
+    SmackBufferOpen@24                @20 NONAME
+    SmackBufferSetPalette@4           @21 NONAME
+    SmackBufferStartMultipleBlits@4   @22 NONAME
+    SmackBufferString@8               @23 NONAME
+    SmackBufferToBuffer@32            @24 NONAME
+    SmackBufferToBufferMask@40        @25 NONAME
+    SmackBufferToBufferMerge@40       @26 NONAME
+    SmackBufferToBufferTrans@36       @27 NONAME
+    SmackCheckCursor@20               @28 NONAME
+    SmackClose@4                      @29 NONAME
+    SmackColorRemapWithTrans@20       @30 NONAME
+    SmackColorTrans@8                 @31 NONAME
+    SmackDDSurfaceType@4              @32 NONAME
+    SmackDoFrame@4                    @33 NONAME
+    SmackFrameRate@4                  @34 NONAME
+    SmackGetTrackData@12              @35 NONAME
+    SmackGoto@8                       @36 NONAME
+    SmackIsSoftwareCursor@8           @37 NONAME
+    SmackNextFrame@4                  @38 NONAME
+    SmackOpen@12                      @39 NONAME
+    SmackRestoreCursor@4              @40 NONAME
+    SmackSetSystemRes@4               @41 NONAME
+    SmackSimulate@4                   @42 NONAME
+    SmackSoundCheck@0                 @43 NONAME
+    SmackSoundInTrack@8               @44 NONAME
+    SmackSoundOnOff@8                 @45 NONAME
+    SmackSoundSetDirectSoundHWND@4    @46 NONAME
+    SmackSoundUseDW@12                @47 NONAME
+    SmackSoundUseDirectSound@4        @48 NONAME
+    SmackSoundUseMSS@4                @49 NONAME
+    SmackSoundUseWin@0                @50 NONAME
+    SmackSummary@8                    @51 NONAME
+    SmackToBuffer@28                  @52 NONAME
+    SmackToBufferRect@8               @53 NONAME
+    SmackToScreen@28                  @54 NONAME
+    SmackUseMMX@4                     @55 NONAME
+    SmackVolumePan@16                 @56 NONAME
+    SmackWait@4                       @57 NONAME
+    TimerFunc@20                      @58 NONAME
+    ailcallback@4                     @59 NONAME
+    radfree@4                         @60 NONAME
+    radmalloc@4                       @61 NONAME

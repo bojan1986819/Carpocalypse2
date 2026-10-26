@@ -285,6 +285,8 @@ void C2_HOOK_STDCALL SubdivideSetThreshold(br_int_32 subdivide_tolerance) {
     rend.subdivide_threshold = 1.f / (1.25f - 0.002f * (float)subdivide_tolerance);
 }
 
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 6.25% | difftest PASS 2000 trials (spec difftest/specs/0054c766_subdivideCheck.json) | reason VC5 floating compare tree and scratch temporary layout
 // FUNCTION: CARMA2_HW 0x0054c766
 br_boolean C2_HOOK_CDECL subdivideCheck(brp_vertex* v0, brp_vertex* v1, brp_vertex* v2) {
     br_scalar z0,z1,z2,zt;
@@ -318,22 +320,35 @@ br_boolean C2_HOOK_CDECL subdivideCheck(brp_vertex* v0, brp_vertex* v1, brp_vert
     return 1;
 }
 
+#pragma auto_inline(on)
+
+
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x00545de0
 void C2_HOOK_STDCALL triangleSubdivide(int depth, brp_block* block, brp_vertex* v0, brp_vertex* v1, brp_vertex* v2, br_uint_16* fp_vertices, br_uint_16* fp_edges) {
+    brp_vertex mid0, mid1, mid2;
     br_uint_32 combined_codes;
 
     combined_codes = v0->flags | v1->flags | v2->flags;
-
     if ((combined_codes & OUTCODES_NOT) != OUTCODES_NOT) {
         return;
     }
-
     if (combined_codes & OUTCODES_ALL) {
-        triangleSubdivideCheck(depth, block, v0,v1,v2, fp_vertices, fp_edges);
-    } else{
+        if (depth > 0 && subdivideCheck(v0, v1, v2)) {
+            averageVertices(rend.renderer, &mid1, &mid2, &mid0, v0, v1, v2);
+            triangleSubdivide(depth - 1, block, &mid0, &mid1, &mid2, fp_vertices, fp_edges);
+            triangleSubdivide(depth - 1, block, v0, &mid0, &mid2, fp_vertices, fp_edges);
+            triangleSubdivide(depth - 1, block, v1, &mid1, &mid0, fp_vertices, fp_edges);
+            triangleSubdivide(depth - 1, block, v2, &mid2, &mid1, fp_vertices, fp_edges);
+        } else {
+            block->chain->render(block->chain, v0, v1, v2, fp_vertices, fp_edges);
+        }
+    } else {
         triangleSubdivideOnScreen(depth, block, v0, v1, v2, fp_vertices, fp_edges);
     }
 }
+
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x00545f70
 void C2_HOOK_STDCALL triangleSubdivideOnScreen(int depth, brp_block* block, brp_vertex* v0, brp_vertex* v1, brp_vertex* v2, br_uint_16* fp_vertices, br_uint_16* fp_edges) {
@@ -368,9 +383,30 @@ void C2_HOOK_STDCALL triangleSubdivideCheck(int depth, brp_block* block, brp_ver
 
 // FUNCTION: CARMA2_HW 0x00545c60
 void C2_HOOK_CDECL OpTriangleSubdivide(brp_block* block, brp_vertex* v0, brp_vertex* v1, brp_vertex* v2, br_uint_16* fp_vertices, br_uint_16* fp_edges) {
+    br_uint_32 combined_codes;
+    brp_vertex mid0, mid1, mid2;
 
-    triangleSubdivide(6, block, v0, v1, v2, fp_vertices, fp_edges);
+    combined_codes = v0->flags | v1->flags | v2->flags;
+    if ((combined_codes & OUTCODES_NOT) != OUTCODES_NOT) {
+        return;
+    }
+
+    if (combined_codes & OUTCODES_ALL) {
+        if (subdivideCheck(v0, v1, v2)) {
+            averageVertices(rend.renderer, &mid1, &mid2, &mid0, v0, v1, v2);
+            triangleSubdivide(5, block, &mid0, &mid1, &mid2, fp_vertices, fp_edges);
+            triangleSubdivide(5, block, v0, &mid0, &mid2, fp_vertices, fp_edges);
+            triangleSubdivide(5, block, v1, &mid1, &mid0, fp_vertices, fp_edges);
+            triangleSubdivide(5, block, v2, &mid2, &mid1, fp_vertices, fp_edges);
+        } else {
+            block->chain->render(block->chain, v0, v1, v2, fp_vertices, fp_edges);
+        }
+    } else {
+        triangleSubdivideOnScreen(6, block, v0, v1, v2, fp_vertices, fp_edges);
+    }
 }
+
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x005460b0
 void C2_HOOK_CDECL OpTriangleSubdivideOnScreen(brp_block* block, brp_vertex* v0, brp_vertex* v1, brp_vertex* v2, br_uint_16* fp_vertices, br_uint_16* fp_edges) {

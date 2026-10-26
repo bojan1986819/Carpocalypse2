@@ -15,9 +15,11 @@
 #include "loadsave.h"
 #include "main.h"
 #include "newgame.h"
+#include "structur.h"
 #include "network.h"
 #include "utility.h"
 #include "platform.h"
+#include "world.h"
 
 #include "c2_string.h"
 
@@ -45,6 +47,9 @@ int gFrontend_net_car_index;
 
 // GLOBAL: CARMA2_HW 0x00763600
 char gFrontend_host_join_buffer[256];
+
+// GLOBAL: CARMA2_HW 0x007638a8
+const char* gJoined_game_notification;
 
 
 // GLOBAL: CARMA2_HW 0x0068703c
@@ -99,18 +104,20 @@ int C2_HOOK_FASTCALL NetworkJoinMenuInfunc(tFrontend_spec* pFrontend) {
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 95.65% | difftest PASS 2000 trials (spec 00468260_NetworkJoinMenuOutfunc.json) | reason one-past-array operand symbol
 // FUNCTION: CARMA2_HW 0x00468260
 int C2_HOOK_FASTCALL NetworkJoinMenuOutfunc(tFrontend_spec* pFrontend) {
     int i;
-    int bound;
+    int selection;
+    tJoinable_game* game;
     (void)pFrontend;
 
     NetEndJoinList();
-    bound = gLast_graph_sel;
-    for (i = 0; i < bound; i++) {
-        if (gGames_to_join[i].game != NULL) {
-            NetDisposeGameDetails(gGames_to_join[i].game);
-            gGames_to_join[i].game = NULL;
+    selection = gLast_graph_sel;
+    for (i = 0, game = gGames_to_join; (int)game < (int)&gGames_to_join[CARPOCALYPSE2_ASIZE(gGames_to_join)]; i++, game++) {
+        if (i != selection && game->game != NULL) {
+            NetDisposeGameDetails(game->game);
+            game->game = NULL;
         }
     }
     return 0;
@@ -313,21 +320,25 @@ void C2_HOOK_FASTCALL UpdateNetTrackScroller(tFrontend_spec* pFrontend) {
 void C2_HOOK_FASTCALL UpdateNetGameTypeScroller(tFrontend_spec* pFrontend) {
     tFrontend_scroller_spec* scroller;
     int i;
+    int text_idx;
 
     scroller = &pFrontend->scrollers[0];
+    text_idx = scroller->indexTopItem - scroller->indexFirstScrollableItem;
     for (i = scroller->indexFirstScrollableItem; i < scroller->indexFirstScrollableItem + scroller->nbDisplayedAtOnce; i++) {
-        int text_idx;
+        int network_type_idx;
 
-        text_idx = i - scroller->indexTopItem;
-        if (text_idx >= 2) {
+        network_type_idx = text_idx;
+        if (network_type_idx >= 2) {
             /* Skip "smashy things" network type */
-            text_idx += 1;
+            network_type_idx += 1;
         }
-        strcpy(pFrontend->items[i].text, GetMiscString(eMiscString_network_type_start + text_idx));
+        strcpy(pFrontend->items[i].text, GetMiscString(eMiscString_network_type_start + network_type_idx));
+        text_idx++;
     }
     FuckWithWidths(pFrontend);
 }
 
+// C2PORT-NONMATCHING: best 44.12% | difftest PASS 2000 trials (spec difftest/specs/00467ce0_NetGameTypeUp.json) | reason fixed scroller label offset; VC5 helper inlining and loop layout
 // FUNCTION: CARMA2_HW 0x00467ce0
 int C2_HOOK_FASTCALL NetGameTypeUp(tFrontend_spec* pFrontend) {
 
@@ -339,6 +350,7 @@ int C2_HOOK_FASTCALL NetGameTypeUp(tFrontend_spec* pFrontend) {
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 55.34% | difftest PASS 2000 trials (spec difftest/specs/00468790_NetSetRaceType.json) | reason original inlines option copies and scroller loops; VC5 register and loop layout
 // FUNCTION: CARMA2_HW 0x00468790
 int C2_HOOK_FASTCALL NetSetRaceType(tFrontend_spec* pFrontend) {
 
@@ -362,7 +374,19 @@ int C2_HOOK_FASTCALL NetSetRaceType(tFrontend_spec* pFrontend) {
     pFrontend->items[29].enabled = kFrontendItemEnabled_disabled;
     gNet_last_game_type = gFrontend_game_type;
     SaveOptions();
-    ReadNetGameChoices(&gFrontend_game_type, &gFrontend_net_options, &gRace_index);
+    gFrontend_net_options.show_players_on_map = gNet_settings[0].show_players_on_map;
+    gFrontend_net_options.enable_text_messages = gNet_settings[0].enable_text_messages;
+    gFrontend_net_options.show_powerups_on_map = gNet_settings[0].show_powerups_on_map;
+    gFrontend_net_options.powerup_respawn = gNet_settings[0].powerup_respawn;
+    gFrontend_net_options.open_game = gNet_settings[gFrontend_game_type + 1].open_game;
+    gFrontend_net_options.starting_credits = gNet_settings[0].starting_credits;
+    gFrontend_net_options.grid_start = gNet_settings[gFrontend_game_type + 1].grid_start || gNet_grid_starts[gFrontend_game_type + 1];
+    gFrontend_net_options.waste_to_transfer = gNet_settings[gFrontend_game_type + 1].waste_to_transfer;
+    gFrontend_net_options.random_car_choice = gNet_settings[gFrontend_game_type + 1].random_car_choice;
+    gFrontend_net_options.race_sequence_type = gNet_settings[0].race_sequence_type;
+    gFrontend_net_options.car_choice = gNet_settings[0].car_choice;
+    gFrontend_net_options.starting_target = gNet_settings[gFrontend_game_type + 1].starting_target;
+    gRace_index = PickNetRace(-1, gFrontend_net_options.race_sequence_type);
     LoadRaces(gRace_list, &gNumber_of_races, gFrontend_game_type);
     sprintf(pFrontend->items[30].text, "%s", GetMiscString(eMiscString_network_type_description_start + gFrontend_game_type));
     MungeMetaCharactersChar(pFrontend->items[30].text, 'R', '\r');
@@ -373,6 +397,7 @@ int C2_HOOK_FASTCALL NetSetRaceType(tFrontend_spec* pFrontend) {
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 43.3% | difftest PASS 2000 trials (spec 00467dc0_NetGameTypeDn.json) | reason behavior matches; VC5 inlined scroller helper and loop layout differ
 // FUNCTION: CARMA2_HW 0x00467dc0
 int C2_HOOK_FASTCALL NetGameTypeDn(tFrontend_spec* pFrontend) {
 
@@ -384,11 +409,12 @@ int C2_HOOK_FASTCALL NetGameTypeDn(tFrontend_spec* pFrontend) {
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 43.24% | difftest PASS 2000 trials (spec difftest/specs/00466c00_NetRaceUp.json) | reason original inlines ScrollUp and RefreshNetRacesScroller
 // FUNCTION: CARMA2_HW 0x00466c00
 int C2_HOOK_FASTCALL NetRaceUp(tFrontend_spec* pFrontend) {
 
     gFrontend_net_current_roll = PDGetTotalTime();
-    if (gFrontend_net_current_roll - gFrontend_net_last_roll < 300) {
+    if ((int)(gFrontend_net_current_roll - gFrontend_net_last_roll) < 300) {
         return 0;
     }
     gFrontend_net_last_roll = gFrontend_net_current_roll;
@@ -397,27 +423,78 @@ int C2_HOOK_FASTCALL NetRaceUp(tFrontend_spec* pFrontend) {
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 65.82% | difftest PASS 2000 trials (spec difftest/specs/004691a0_NetHostChooseThisRace.json) | reason loop-register-layout
 // FUNCTION: CARMA2_HW 0x004691a0
 int C2_HOOK_FASTCALL NetHostChooseThisRace(tFrontend_spec* pFrontend) {
+    int index;
+    int i;
+    int cmp;
+    tRace_list_spec* race;
+    char* selected_name;
+    char* description;
+    tFrontend_spec* volatile frontend_restore = pFrontend;
 
     pFrontend->items[17].enabled = kFrontendItemEnabled_enabled;
     pFrontend->items[29].enabled = kFrontendItemEnabled_disabled;
-    gProgram_state.current_race_index = RaceIndex(pFrontend->items[gFrontend_selected_item_index].text);
-    FillInRaceDescription(pFrontend->items[30].text, gProgram_state.current_race_index);
-    FuckWithWidths(pFrontend);
+    selected_name = pFrontend->items[gFrontend_selected_item_index].text;
+    index = (int)(uintptr_t)pFrontend;
+    if (gNumber_of_races > 0) {
+        race = gRace_list;
+        i = 0;
+        do {
+            cmp = DRStricmp(selected_name, race->name);
+            index = i;
+            if (cmp == 0) {
+                break;
+            }
+            i++;
+            race++;
+            index = (int)(uintptr_t)pFrontend;
+        } while (i < gNumber_of_races);
+    }
+    gProgram_state.current_race_index = index;
+    description = pFrontend->items[30].text;
+    strcpy(description, gRace_list[index].description);
+    MungeMetaCharactersChar(description, 'R', '\r');
+    MungeMetaCharactersNum(description, 'O', gRace_list[index].count_explicit_opponents);
+    MungeMetaCharactersNum(description, 'L', gRace_list[index].count_laps);
+    FuckWithWidths(frontend_restore);
     return 0;
 }
 
 // FUNCTION: CARMA2_HW 0x00466da0
 int C2_HOOK_FASTCALL NetRaceDn(tFrontend_spec* pFrontend) {
+    tFrontend_scroller_spec* scroller;
+    int i;
+    int race_index;
+    int top_item;
+    int displayed;
+    int count;
+    int first_item;
 
     gFrontend_net_current_roll = PDGetTotalTime();
-    if (gFrontend_net_current_roll - gFrontend_net_last_roll < 300) {
+    if ((int)(gFrontend_net_current_roll - gFrontend_net_last_roll) < 300) {
         return 0;
     }
     gFrontend_net_last_roll = gFrontend_net_current_roll;
-    ScrollDn(pFrontend, 1);
-    RefreshNetRacesScroller(pFrontend);
+    scroller = &pFrontend->scrollers[1];
+    top_item = pFrontend->scrollers[1].indexTopItem;
+    displayed = pFrontend->scrollers[1].nbDisplayedAtOnce;
+    count = pFrontend->scrollers[1].count;
+    first_item = pFrontend->scrollers[1].indexFirstScrollableItem;
+    if (top_item + displayed < first_item + count) {
+        top_item++;
+        scroller->indexTopItem = top_item;
+    }
+    race_index = scroller->indexTopItem - scroller->indexFirstScrollableItem;
+    if (scroller->indexFirstScrollableItem <= scroller->indexLastScrollableItem) {
+        for (i = scroller->indexFirstScrollableItem; i <= scroller->indexLastScrollableItem; i++) {
+            strcpy(pFrontend->items[i].text, gRace_list[race_index].name);
+            race_index++;
+        }
+    }
+    FuckWithWidths(pFrontend);
+    MungeButtonModels(pFrontend, 0);
     return 0;
 }
 
@@ -521,13 +598,219 @@ int C2_HOOK_FASTCALL NetworkJoinGoAhead(tFrontend_spec* pFrontend) {
     return 0;
 }
 
-// FUNCTION: CARMA2_HW 0x00468e80
-int C2_HOOK_FASTCALL NetworkStartHost(tFrontend_spec* pFrontend) {
+// FUNCTION: CARMA2_HW 0x00468460
+int C2_HOOK_FASTCALL StartNetworkGame(tFrontend_spec* pFrontend) {
+    int i;
+    int selection;
 
-    gFrontend_net_mode = eNet_mode_host;
-    return NetworkJoinGoAhead(pFrontend);
+    (void)pFrontend;
+    ClearAlwaysTyping();
+    if (gLast_graph_sel < 0) {
+        return 0;
+    }
+    NetEndJoinList();
+    selection = gLast_graph_sel;
+    {
+        tJoinable_game* game;
+
+        for (i = 0, game = gGames_to_join; (int)game < (int)&gGames_to_join[CARPOCALYPSE2_ASIZE(gGames_to_join)]; i++, game++) {
+            if (i != selection && game->game != NULL) {
+                NetDisposeGameDetails(game->game);
+                game->game = NULL;
+            }
+        }
+    }
+    SaveOptions();
+    gGame_to_join = gGames_to_join[gLast_graph_sel].game;
+    if (gFrontend_net_mode == eNet_mode_thinking_about_it) {
+        if (gGame_to_join != NULL) {
+            SolidPolyFontText("Joining a game", 200, 100, kPolyfont_hand_green_15pt_lit, eJust_left, 1);
+            gFrontend_net_car_index = -1;
+            do {
+                int i;
+
+                gNet_join_host_result = 0;
+                for (i = 0; i < kMax_netplayers; i++) {
+                    gCurrent_race.opponent_list[i].car_spec = NULL;
+                }
+                gNet_storage_space_initialized = 1;
+                InitialiseStorageSpace(0, &gNet_cars_storage_space, 2000, 50, 2000, 2000, 50);
+                gNet_join_host_result = NetJoinGame(gGame_to_join, gProgram_state.player_name,
+                                                    gFrontend_net_car_index);
+                if (gNet_join_host_result == 0) {
+                    tNet_game_details* game_to_join;
+
+                    LoadRaces(gRace_list, &gNumber_of_races, gCurrent_net_game->type);
+                    game_to_join = gGame_to_join;
+                    gProgram_state.skill_level = 1;
+                    InitGame(game_to_join->start_race);
+                    ReenableNetService();
+                    gJoined_game_notification = GetMiscString(eMiscString_has_joined_the_game);
+                    strcpy(gFrontend_host_join_buffer, gProgram_state.player_name);
+                    strcat(gFrontend_host_join_buffer, " ");
+                    strcat(gFrontend_host_join_buffer, gJoined_game_notification);
+                    NetSendHeadupToAllPlayers(gFrontend_host_join_buffer);
+                    gNet_join_host_result = 1;
+                } else {
+                    if (gNet_storage_space_initialized != 0) {
+                        DisposeStorageSpace(&gNet_cars_storage_space);
+                    }
+                    gNet_storage_space_initialized = 0;
+                }
+            } while (gNet_join_host_result == -4);
+            if (gNet_join_host_result > 0) {
+                goto success;
+            }
+            NetDisposeGameDetails(gGame_to_join);
+        }
+    } else {
+        gFrontend_net_car_index = -1;
+        gRace_index = gProgram_state.current_race_index;
+        gCurrent_net_game_options = &gFrontend_net_options;
+        SetNetAvailability(&gFrontend_net_options);
+        gFrontend_net_car_index = PickARandomCar();
+        if (gFrontend_net_car_index >= 0) {
+            gCar_details[gFrontend_net_car_index].ownership = eCar_owner_someone;
+        }
+        InitNetStorageSpace();
+        if (NetHostGame(gFrontend_game_type, &gFrontend_net_options, gRace_index,
+                        gProgram_state.player_name, gFrontend_net_car_index) != NULL) {
+            gProgram_state.skill_level = 1;
+            {
+                tNet_game_details* current_game;
+
+                current_game = gCurrent_net_game;
+                InitGame(current_game->start_race);
+            }
+            ReenableNetService();
+            goto success;
+        }
+        if (gNet_storage_space_initialized != 0) {
+            DisposeStorageSpace(&gNet_cars_storage_space);
+        }
+        gNet_storage_space_initialized = 0;
+        ReenableNetService();
+        NetLeaveGame(gCurrent_net_game);
+    }
+    {
+        tJoinable_game* game;
+
+        for (game = gGames_to_join; (int)game < (int)&gGames_to_join[CARPOCALYPSE2_ASIZE(gGames_to_join)]; game++) {
+            game->game = NULL;
+        }
+    }
+    gLast_graph_sel = -1;
+    NetStartProducingJoinList(AddToJoinList);
+    return 0;
+
+success:
+    return 1;
 }
 
+// FUNCTION: CARMA2_HW 0x00468e80
+int C2_HOOK_FASTCALL NetworkStartHost(tFrontend_spec* pFrontend) {
+    int i;
+    int selection;
+
+    (void)pFrontend;
+    gFrontend_net_mode = eNet_mode_host;
+    ClearAlwaysTyping();
+    if (gLast_graph_sel < 0) {
+        return 0;
+    }
+    NetEndJoinList();
+    selection = gLast_graph_sel;
+    {
+        tJoinable_game* game;
+
+        for (i = 0, game = gGames_to_join; (int)game < (int)&gGames_to_join[CARPOCALYPSE2_ASIZE(gGames_to_join)]; i++, game++) {
+            if (i != selection && game->game != NULL) {
+                NetDisposeGameDetails(game->game);
+                game->game = NULL;
+            }
+        }
+    }
+    SaveOptions();
+    gGame_to_join = gGames_to_join[gLast_graph_sel].game;
+    if (gFrontend_net_mode == eNet_mode_thinking_about_it) {
+        if (gGame_to_join != NULL) {
+            SolidPolyFontText("Joining a game", 200, 100, kPolyfont_hand_green_15pt_lit, eJust_left, 1);
+            gFrontend_net_car_index = -1;
+            do {
+                int i;
+
+                gNet_join_host_result = 0;
+                for (i = 0; i < kMax_netplayers; i++) {
+                    gCurrent_race.opponent_list[i].car_spec = NULL;
+                }
+                gNet_storage_space_initialized = 1;
+                InitialiseStorageSpace(0, &gNet_cars_storage_space, 2000, 50, 2000, 2000, 50);
+                gNet_join_host_result = NetJoinGame(gGame_to_join, gProgram_state.player_name,
+                                                    gFrontend_net_car_index);
+                if (gNet_join_host_result == 0) {
+                    tNet_game_details* game_to_join;
+
+                    LoadRaces(gRace_list, &gNumber_of_races, gCurrent_net_game->type);
+                    game_to_join = gGame_to_join;
+                    gProgram_state.skill_level = 1;
+                    InitGame(game_to_join->start_race);
+                    ReenableNetService();
+                    gJoined_game_notification = GetMiscString(eMiscString_has_joined_the_game);
+                    strcpy(gFrontend_host_join_buffer, gProgram_state.player_name);
+                    strcat(gFrontend_host_join_buffer, " ");
+                    strcat(gFrontend_host_join_buffer, gJoined_game_notification);
+                    NetSendHeadupToAllPlayers(gFrontend_host_join_buffer);
+                    gNet_join_host_result = 1;
+                } else {
+                    if (gNet_storage_space_initialized != 0) {
+                        DisposeStorageSpace(&gNet_cars_storage_space);
+                    }
+                    gNet_storage_space_initialized = 0;
+                }
+            } while (gNet_join_host_result == -4);
+            if (gNet_join_host_result > 0) {
+                goto success;
+            }
+            NetDisposeGameDetails(gGame_to_join);
+        }
+    } else {
+        gFrontend_net_car_index = -1;
+        gRace_index = gProgram_state.current_race_index;
+        if (ChooseNetCar(gCurrent_net_game, &gFrontend_net_options, &gFrontend_net_car_index, 1)) {
+            for (i = 0; i < CARPOCALYPSE2_ASIZE(gCurrent_race.opponent_list); i++) {
+                gCurrent_race.opponent_list[i].car_spec = NULL;
+            }
+            gNet_storage_space_initialized = 1;
+            InitialiseStorageSpace(0, &gNet_cars_storage_space, 2000, 50, 2000, 2000, 50);
+            if (NetHostGame(gFrontend_game_type, &gFrontend_net_options, gRace_index,
+                            gProgram_state.player_name, gFrontend_net_car_index)) {
+                gProgram_state.skill_level = 1;
+                InitGame(gCurrent_net_game->start_race);
+                ReenableNetService();
+                goto success;
+            }
+            if (gNet_storage_space_initialized != 0) {
+                DisposeStorageSpace(&gNet_cars_storage_space);
+            }
+            gNet_storage_space_initialized = 0;
+            ReenableNetService();
+            NetLeaveGame(gCurrent_net_game);
+        }
+    }
+    {
+        tJoinable_game* game;
+
+        for (game = gGames_to_join; (int)game < (int)&gGames_to_join[CARPOCALYPSE2_ASIZE(gGames_to_join)]; game++) {
+            game->game = NULL;
+        }
+    }
+    gLast_graph_sel = -1;
+    NetStartProducingJoinList(AddToJoinList);
+    return 0;
+
+success:
+    return 1;
+}
 void C2_HOOK_FASTCALL NetworkUpdateSelectedGameInfo(tFrontend_spec* pFrontend) {
     int netgame_idx;
 
@@ -560,6 +843,20 @@ void C2_HOOK_FASTCALL NetworkUpdateSelectedGameInfo(tFrontend_spec* pFrontend) {
     }
 }
 
+// FUNCTION: CARMA2_HW 0x004682a0
+int C2_HOOK_FASTCALL NetToggleMode(tFrontend_spec* pFrontend) {
+
+    (void)pFrontend;
+    if (gFrontend_net_mode == eNet_mode_thinking_about_it) {
+        gFrontend_net_mode = eNet_mode_host;
+    } else {
+        gFrontend_net_mode = eNet_mode_thinking_about_it;
+    }
+    WaitFor(6000);
+    return 0;
+}
+
+// C2PORT-NONMATCHING: best 28.57% | difftest PASS 2000 trials (spec difftest/specs/004682c0_NetJoinChooseThisGame.json) | reason selected-game refresh was inlined into the original callback
 // FUNCTION: CARMA2_HW 0x004682c0
 int C2_HOOK_FASTCALL NetJoinChooseThisGame(tFrontend_spec* pFrontend) {
     tJoinable_game* jgame;
@@ -586,6 +883,7 @@ int C2_HOOK_FASTCALL NetGameToggleTyping(tFrontend_spec* pFrontend) {
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 37.04% | difftest PASS 2000 trials (spec difftest/specs/00468a50_NetworkStartJoin.json) | reason network-session helper and UI codegen
 // FUNCTION: CARMA2_HW 0x00468a50
 int C2_HOOK_FASTCALL NetworkStartJoin(tFrontend_spec* pFrontend) {
 

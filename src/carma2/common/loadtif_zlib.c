@@ -32,10 +32,25 @@ br_uint_32 C2_HOOK_CDECL ZlibFsGetAttributes(void) {
     return BR_FS_ATTR_READABLE | BR_FS_ATTR_WRITEABLE | BR_FS_ATTR_HAS_BINARY;
 }
 
+#pragma auto_inline(off)
+// FUNCTION: CARMA2_HW 0x0055db20
+void* C2_HOOK_FASTCALL ZlibOpenWithMode(const char* path, const char* mode) {
+
+    return gzopen(path, mode);
+}
+#pragma auto_inline(on)
+
 // FUNCTION: CARMA2_HW 0x0051dc10
 void* C2_HOOK_CDECL ZlibFsOpenRead(const char* buffer, br_size_t capacity, br_mode_test_cbfn* cbfn, int* type) {
-
-    return gzopen(buffer, "rb");
+    const char* path = buffer;
+#ifndef _WIN32
+    /* Linux case-sensitivity: resolve to the actual on-disk casing. */
+    path = carpocalypse2_fix_path_case(buffer);
+#endif
+    (void)capacity;
+    (void)cbfn;
+    (void)type;
+    return ZlibOpenWithMode(path, "rb");
 }
 
 // FUNCTION: CARMA2_HW 0x0051dc20
@@ -128,6 +143,7 @@ void C2_HOOK_CDECL ZlibFsPutLine(char* line, void* context) {
     gzwrite(context, newline_buffer, sizeof(newline_buffer));
 }
 
+// C2PORT-NONMATCHING: best 35.71% | difftest PASS 2000 trials (spec 0051db60_ZlibFsAdvance.json) | reason VC5 counter and register allocation differ
 // FUNCTION: CARMA2_HW 0x0051db60
 void C2_HOOK_CDECL ZlibFsAdvance(br_size_t advance, void* context) {
     size_t i;

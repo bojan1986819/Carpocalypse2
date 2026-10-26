@@ -5,6 +5,7 @@
 #include "car.h"
 #include "crush.h"
 #include "depth.h"
+#include "displays.h"
 #include "drmem.h"
 #include "errors.h"
 #include "finteray.h"
@@ -12,10 +13,13 @@
 #include "globvars.h"
 #include "globvrpb.h"
 #include "graphics.h"
+#include "input.h"
 #include "loading.h"
+#include "network.h"
 #include "opponent.h"
 #include "pedestrn.h"
 #include "piping.h"
+#include "powerups.h"
 #include "replay.h"
 #include "shrapnel.h"
 #include "skidmark.h"
@@ -50,7 +54,7 @@
 #define RGB888_G(V) (((V) >> 8) & 0xff)
 #define RGB888_B(V) (((V) >> 0) & 0xff)
 
-#define SAW(T, PERIOD) (fmodf((T), (PERIOD)) / (PERIOD))
+#define SAW(T, PERIOD) (fmod((T), (PERIOD)) / (PERIOD))
 
 #define MOVE_FUNK_PARAMETER(DEST, MODE, PERIOD, TEXTUREBITS, AMPLITUDE, FLASH_VALUE)            \
     do {                                                                                        \
@@ -76,7 +80,7 @@
             }                                                                                   \
             break;                                                                              \
         case eMove_flash:                                                                       \
-            if (2 * fmodf(f_the_time, (PERIOD)) > (PERIOD)) {                                   \
+            if (2 * fmod(f_the_time, (PERIOD)) > (PERIOD)) {                                    \
                 DEST = (FLASH_VALUE);                                                           \
             } else {                                                                            \
                 DEST = -(FLASH_VALUE);                                                          \
@@ -194,6 +198,9 @@ int gCount_track_smashable_environment_specs;
 // GLOBAL: CARMA2_HW 0x006a8288
 int gCount_track_smashable_environment_specs_2;
 
+// GLOBAL: CARMA2_HW 0x006a8294
+int gINT_006a8294;
+
 // GLOBAL: CARMA2_HW 0x006a3330
 int gCapacity_track_smashables;
 
@@ -210,6 +217,9 @@ const char* gDepth_effect_names[3] = {
     "fog",
     "colour",
 };
+
+// GLOBAL: CARMA2_HW 0x006611dc
+const char gMurdered_headup[] = "Murdered ";
 
 // GLOBAL: CARMA2_HW 0x006b6400
 char gAdditional_model_path[256];
@@ -228,6 +238,36 @@ int gNumber_of_additional_models;
 
 // GLOBAL: CARMA2_HW 0x006b6600
 br_actor* gLast_actor;
+
+// GLOBAL: CARMA2_HW 0x006ab94c
+const char* gSelected_actor_name;
+
+// GLOBAL: CARMA2_HW 0x006b75c4
+int gCurrent_dropped_actor_index;
+
+// GLOBAL: CARMA2_HW 0x006ab798
+br_vector3 gLast_actor_position_cache;
+
+// GLOBAL: CARMA2_HW 0x006ab7a4
+br_actor* gLast_actor_position_cache_actor;
+
+// GLOBAL: CARMA2_HW 0x0058b1e8
+br_scalar gNegative_one = -1.f;
+
+// GLOBAL: CARMA2_HW 0x0058b1c8
+br_scalar gZero_0058b1c8 = 0.f;
+
+// GLOBAL: CARMA2_HW 0x0058b1ec
+br_scalar gOne_0058b1ec = 1.f;
+
+// GLOBAL: CARMA2_HW 0x0058b1f0
+double gDouble_0058b1f0 = 0.9;
+
+// GLOBAL: CARMA2_HW 0x0058b1e0
+double gDouble_0058b1e0 = 0.001;
+
+// GLOBAL: CARMA2_HW 0x0058b1fc
+br_scalar gNegative_half = -0.5f;
 
 // GLOBAL: CARMA2_HW 0x006aaf40
 tU8* gTrack_flic_buffer;
@@ -375,7 +415,7 @@ const char* gGroove_object_names[4] = {
 };
 
 // GLOBAL: CARMA2_HW 0x006a55c0
-tStored_smash* gNet_host_smashes;
+tNet_stored_smash* gNet_host_smashes;
 
 // GLOBAL: CARMA2_HW 0x006ab7a8
 int gDelete_count;
@@ -446,7 +486,11 @@ br_pixelmap* C2_HOOK_FASTCALL Read_DEFAULT_ACT(const char* textureDir, int flags
         *errorCode = 5;
         return NULL;
     }
+#ifdef CARPOCALYPSE2_MATCHING
     if (fread(defaultActBuffer, CARPOCALYPSE2_ASIZE(defaultActBuffer), 1, (FILE*)f) == 0) {
+#else
+    if (PFfread(defaultActBuffer, CARPOCALYPSE2_ASIZE(defaultActBuffer), 1, f) == 0) {
+#endif
         PFfclose(f);
         *errorCode = 5;
         return NULL;
@@ -693,7 +737,6 @@ br_pixelmap* C2_HOOK_FASTCALL LoadTiffTexture_WithShadeTable(const char *path, i
     return pm;
 }
 
-// FUNCTION: CARMA2_HW 0x004864a0
 br_pixelmap* C2_HOOK_FASTCALL LoadTiffTexture_16BitRGB(const char *path, int flags, int *errorCode) {
     TIFF* tif;
     br_pixelmap* pm;
@@ -767,18 +810,24 @@ void C2_HOOK_FASTCALL TwatPIX16(const char* pPath) {
 
 }
 
+// C2PORT-NONMATCHING: best 35.00% | difftest PASS 2000 trials (spec difftest/specs/00486860_LoadTiffTextureCB.json) | reason regalloc-stack-layout
 // FUNCTION: CARMA2_HW 0x00486860
 int C2_HOOK_FASTCALL LoadTiffTextureCB(const char* filePath, tLoadDirectoryStructureCBData* data) {
-    size_t filePathLength;
     tPath_name textureName;
+    int filePathLength;
     tLoadDirectoryStructureCBResult* itemResult;
     br_pixelmap* texture;
 
+    texture = NULL;
     filePathLength = strlen(filePath);
-    if (DRstrcmpi(filePath + filePathLength - 4, ".TIF") != 0) {
+    filePathLength -= 4;
+    if (filePathLength <= 0) {
         return 0;
     }
-    sprintf(textureName, "%.*s", filePathLength - 4, filePath);
+    if (DRstrcmpi(filePath + filePathLength, ".TIF") != 0) {
+        return 0;
+    }
+    sprintf(textureName, "%.*s", filePathLength, filePath);
     if (!data->isTiffx && data->results != NULL) {
         for (itemResult = data->results; itemResult != NULL; itemResult = itemResult->next) {
             if (DRstrcmpi(textureName, itemResult->name) == 0) {
@@ -788,20 +837,20 @@ int C2_HOOK_FASTCALL LoadTiffTextureCB(const char* filePath, tLoadDirectoryStruc
     }
     if (!(data->loadFlags & kLoadTextureFlags_16bbp)) {
         texture = LoadTiffTexture_Ex2(data->directory, textureName, data->pPalette, data->loadFlags, data->errorCode, 1);
-        if (texture == NULL) {
-            texture = LoadTiffTexture_Ex2(data->directory, textureName, data->pPalette, data->loadFlags, data->errorCode, 0);
-        }
-        if (texture != NULL) {
-            texture->identifier = BrResStrDup(texture, textureName);
-            if (texture->identifier == NULL) {
-                BrPixelmapFree(texture);
-                *data->errorCode = 2;
-                texture = NULL;
-            }
-        }
-        if (texture != NULL) {
+    }
+    if (texture == NULL) {
+        texture = LoadTiffTexture_Ex2(data->directory, textureName, data->pPalette, data->loadFlags, data->errorCode, 0);
+    }
+    if (texture != NULL) {
+        texture->identifier = BrResStrDup(texture, textureName);
+        if (texture->identifier == NULL) {
             BrPixelmapFree(texture);
+            *data->errorCode = 2;
+            texture = NULL;
         }
+    }
+    if (texture != NULL) {
+        BrPixelmapFree(texture);
     }
     if (*data->errorCode != 0) {
         return *data->errorCode;
@@ -928,10 +977,12 @@ int C2_HOOK_FASTCALL CreatePathLink(const char* targetPath, const char* linkPath
 
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x0047d850
 int C2_HOOK_FASTCALL DRstrcmpi(const char* str1, const char* str2) {
     return strcasecmp(str1, str2);
 }
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x0047d860
 int C2_HOOK_FASTCALL DRmemicmp(const char* str1, const char* str2, size_t count) {
@@ -990,26 +1041,26 @@ br_pixelmap* C2_HOOK_FASTCALL SwapPixelmapInStorage(br_pixelmap* pNew, br_pixelm
 
 // FUNCTION: CARMA2_HW 0x004761e0
 br_uint_32 C2_HOOK_FASTCALL CalcProximities(br_actor* pActor, br_material* pMat, void* pData) {
-    tFunkotronic_spec* the_funk;
-    br_face* the_face;
     int i;
-
-    (void)pMat;
-    the_funk = pData;
+    tFunkotronic_spec* the_funk = pData;
 
     C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, material, 0x8);
     C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, proximity_count, 0x150);
 
     if (pActor->model != NULL) {
-        for (i = 0, the_face = pActor->model->faces; i < pActor->model->nfaces; i++, the_face++) {
+        for (i = 0; i < pActor->model->nfaces; i++) {
+            br_face* the_face;
+
+            the_face = &pActor->model->faces[i];
             if (the_face->material == the_funk->material) {
-                the_funk->proximity_count++;
+                the_funk->proximity_count += 1;
             }
         }
     }
     return 0;
 }
 
+// C2PORT-NONMATCHING: best 34.4% | difftest PASS 2000 trials (spec 00476230_AddProximities.json) | reason output topology and proximity math match; remaining diff is VC5 codegen
 // FUNCTION: CARMA2_HW 0x00476230
 br_uint_32 C2_HOOK_FASTCALL AddProximities(br_actor* pActor, br_material* pMat, void* pData) {
     tFunkotronic_spec* the_funk = pData;
@@ -1991,12 +2042,6 @@ void C2_HOOK_FASTCALL AddGroovidelics(FILE* pF, int pOwner, br_actor* pParent_ac
     }
 }
 
-// UNLABELED: CARMA2_HW 0x004ff030
-void C2_HOOK_FASTCALL FUN_004ff030(void) {
-
-    NOT_IMPLEMENTED();
-}
-
 // FUNCTION: CARMA2_HW 0x004ff110
 tSpecial_volume* C2_HOOK_FASTCALL GetDefaultSpecialVolumeForWater(void) {
 
@@ -2155,6 +2200,8 @@ void C2_HOOK_FASTCALL ReadConnotations(FILE* pF, tConnotations* pConnotations, t
 void C2_HOOK_FASTCALL ReadSmashableEnvironment(FILE* pF, const char* pPath) {
     int i;
     char s[256];
+    char replacement_name[256];
+    tSmashable_item_spec* spec;
 
     gCount_smashable_noncars = 0;
     gCount_smashable_noncar_shrapnel_actors = 0;
@@ -2164,8 +2211,8 @@ void C2_HOOK_FASTCALL ReadSmashableEnvironment(FILE* pF, const char* pPath) {
     /* Number of smash specs */
     gCount_track_smashable_environment_specs = GetAnInt(pF);
 
-    gCapacity_track_smashables = 5 * (gCount_track_smashable_environment_specs + 30);
     gCount_track_smashable_environment_specs_2 = gCount_track_smashable_environment_specs;
+    gCapacity_track_smashables = 5 * (gCount_track_smashable_environment_specs + 30);
     gTrack_smashable_environment_specs = BrMemAllocate(gCapacity_track_smashables * sizeof(tSmashable_item_spec), kMem_smashable_env_info);
     C2_HOOK_BUG_ON(sizeof(tSmashable_item_spec) != 736);
 
@@ -2174,8 +2221,8 @@ void C2_HOOK_FASTCALL ReadSmashableEnvironment(FILE* pF, const char* pPath) {
     memset(gSmashable_track_indexable_triggers, 0, sizeof(gSmashable_track_indexable_triggers));
     C2_HOOK_BUG_ON(sizeof(gSmashable_track_indexable_triggers) != 400);
 
-    for (i = 0; i < gCount_track_smashable_environment_specs; i++) {
-        tSmashable_item_spec* spec = &gTrack_smashable_environment_specs[i];
+    spec = gTrack_smashable_environment_specs;
+    for (i = 0; i < gCount_track_smashable_environment_specs; i++, spec++) {
 
         C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tSmashable_item_spec, flags, 0x0);
         C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tSmashable_item_spec, field_0x10, 0x10);
@@ -2214,7 +2261,8 @@ void C2_HOOK_FASTCALL ReadSmashableEnvironment(FILE* pF, const char* pPath) {
             }
             break;
         case kSmashableTrigger_Number:
-            spec->trigger_object.number.field_0x0 = (s[1] + 24) * 10 + s[2]; /* FIXME: why 24? (-'0' == -48) */
+            /* The low byte is the two-digit index: -528 and +240 differ by 3 * 256. */
+            spec->trigger_object.number.field_0x0 = (s[1] + 24) * 10 + s[2];
             spec->trigger_object.number.field_0x1 = GetAnInt(pF);
             gSmashable_track_indexable_triggers[spec->trigger_object.number.field_0x0] = spec;
             break;
@@ -2226,7 +2274,27 @@ void C2_HOOK_FASTCALL ReadSmashableEnvironment(FILE* pF, const char* pPath) {
         case kSmashableMode_Decal:
         case kSmashableMode_TextureChange:
             C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tSmashable_item_spec, mode_data, 0x14);
-            ReadSmashTexture(spec, &spec->mode_data.texture_change, pF);
+            /* The original reuses the replacement-name buffer here, even before
+             * the first replacement has initialized it. Preserve that behavior. */
+            spec->mode_data.texture_change.levels = NULL;
+            strcpy(spec->mode_data.texture_change.undefined_0x0, replacement_name);
+            spec->mode_data.texture_change.field_0x40 = -1;
+            spec->mode_data.texture_change.trigger = spec->trigger_object;
+            spec->mode_data.texture_change.field_0x4c = 0;
+            spec->mode_data.texture_change.field_0x40 = -1;
+            spec->mode_data.texture_change.field_0x6c = 0;
+            spec->mode_data.texture_change.field_0x70 = 0;
+            spec->mode_data.texture_change.field_0x74 = 0;
+            spec->mode_data.texture_change.field_0x78 = 0;
+            spec->mode_data.texture_change.field_0x54 = 0.f;
+            spec->mode_data.texture_change.field_0x58 = 0.f;
+            spec->mode_data.texture_change.field_0x5c = 0.f;
+            spec->mode_data.texture_change.field_0x60 = 1.f;
+            spec->mode_data.texture_change.field_0x64 = 0.f;
+            spec->mode_data.texture_change.field_0x68 = 0.f;
+            LoadSmashableLevels(pF, &spec->mode_data.texture_change.levels,
+                &spec->mode_data.texture_change.count_levels,
+                spec->mode == kSmashableMode_TextureChange, &gTrack_storage_space);
             break;
         default:
             /* Removal threshold */
@@ -2235,7 +2303,12 @@ void C2_HOOK_FASTCALL ReadSmashableEnvironment(FILE* pF, const char* pPath) {
             break;
         }
         if (spec->mode == kSmashableMode_ReplaceModel) {
-            ReadSmashReplace(&spec->replace, pF);
+            GetAString(pF, replacement_name);
+            spec->replace.model = BrModelFind(replacement_name);
+            if (spec->replace.model == NULL) {
+                FatalError(kFatalError_CannotFindSmashActorModel_S, replacement_name);
+            }
+            ReadSmokeFireChance(pF, &spec->replace.smoke_fire_chance);
         }
         /* reserved 1 */
         GetAnInt(pF);
@@ -2245,13 +2318,11 @@ void C2_HOOK_FASTCALL ReadSmashableEnvironment(FILE* pF, const char* pPath) {
         GetAnInt(pF);
         GetAnInt(pF);
 
-        spec->field_0x2d4 = 0;
         spec->field_0x2d8 = 0;
+        spec->field_0x2d4 = 0;
         spec->field_0x2dc = 0;
     }
-    for (i = gCount_track_smashable_environment_specs; i < gCapacity_track_smashables; i++) {
-        tSmashable_item_spec* spec = &gTrack_smashable_environment_specs[i];
-
+    for (; i < gCapacity_track_smashables; i++, spec++) {
         spec->trigger_type = -1;
     }
 }
@@ -2275,12 +2346,78 @@ int C2_HOOK_FASTCALL SmashFaceMustBeUpdateable(br_material *pMaterial) {
     return 0;
 }
 
+void C2_HOOK_FASTCALL FreeConnotations(tConnotations* pConnotations, int pKeepActors);
+
 // FUNCTION: CARMA2_HW 0x004f09c0
 void C2_HOOK_FASTCALL FreeEnvSmash(tSmashable_item_spec* pSmash) {
+    int i;
 
-    NOT_IMPLEMENTED();
+    if (pSmash->trigger_type != (tSmashable_trigger_type)-1) {
+        if ((pSmash->mode == kSmashableMode_Decal || pSmash->mode == kSmashableMode_TextureChange)
+                && pSmash->mode_data.texture_change.levels != NULL) {
+            if (pSmash->mode_data.texture_change.field_0x70 != 0) {
+                BrMemFree((void*)pSmash->mode_data.texture_change.field_0x70);
+            }
+            if (pSmash->mode_data.texture_change.field_0x78 != 0) {
+                BrMemFree((void*)pSmash->mode_data.texture_change.field_0x78);
+            }
+            i = 1;
+            if (i < pSmash->mode_data.texture_change.count_levels) {
+                do {
+                    FreeConnotations((tConnotations*)((tU8*)pSmash->mode_data.texture_change.levels + i * 0x2c4 + 0x14),
+                        (unsigned char)pSmash->field_0x2dc);
+                    i++;
+                } while (i < pSmash->mode_data.texture_change.count_levels);
+            }
+            BrMemFree(pSmash->mode_data.texture_change.levels);
+        } else {
+            FreeConnotations(&pSmash->mode_data.shrapnel.connotations, (unsigned char)pSmash->field_0x2dc);
+        }
+        if ((pSmash->flags & 0x80000000) != 0) {
+            BrMaterialRemove(pSmash->trigger_object.material);
+            BrMaterialFree(pSmash->trigger_object.material);
+        }
+    }
 }
 
+#pragma auto_inline(off)
+// FUNCTION: CARMA2_HW 0x004f0a80
+void C2_HOOK_FASTCALL FreeConnotations(tConnotations* pConnotations, int pKeepActors) {
+    int i;
+    int j;
+    tExplosion_animation_group* pGroup;
+
+    for (i = 0; i < pConnotations->count_shrapnel; i++) {
+        if (pConnotations->shrapnel[i].type == kShrapnelType_GhostParts && !pKeepActors) {
+            for (j = 0; j < pConnotations->shrapnel[i].type_info.ghost.count_actors; j++) {
+                BrActorFree(pConnotations->shrapnel[i].type_info.ghost.actors[j]);
+            }
+            BrMemFree(pConnotations->shrapnel[i].type_info.ghost.actors);
+        } else if (pConnotations->shrapnel[i].type == kShrapnelType_NonCars && !pKeepActors) {
+            for (j = 0; j < pConnotations->shrapnel[i].type_info.noncar.count_actors; j++) {
+                if (pConnotations->shrapnel[i].type_info.noncar.actors[j]->parent == NULL) {
+                    BrActorFree(pConnotations->shrapnel[i].type_info.noncar.actors[j]);
+                }
+            }
+            BrMemFree(pConnotations->shrapnel[i].type_info.noncar.actors);
+        }
+    }
+    if (pConnotations->special_effects.explosion_animation.count_groups != 0) {
+        pGroup = pConnotations->special_effects.explosion_animation.groups;
+        for (i = 0; i < pConnotations->special_effects.explosion_animation.count_groups; i++) {
+            BrMemFree(pGroup->frames);
+            pGroup++;
+        }
+        BrMemFree(pConnotations->special_effects.explosion_animation.groups);
+    }
+    if (pConnotations->side_effects.activations.count_activations != 0) {
+        BrMemFree(pConnotations->side_effects.activations.activations);
+    }
+    if (pConnotations->side_effects.side_effects.count_side_effects != 0) {
+        BrMemFree(pConnotations->side_effects.side_effects.side_effects);
+    }
+}
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004f0960
 void C2_HOOK_FASTCALL DisposeSmashableEnvironment(void) {
     int i;
@@ -2297,6 +2434,7 @@ void C2_HOOK_FASTCALL DisposeSmashableEnvironment(void) {
         BrMemFree(gNet_host_smashes);
     }
 }
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x004f5750
 void C2_HOOK_FASTCALL ReinitSmashing(void) {
@@ -2332,6 +2470,14 @@ void C2_HOOK_FASTCALL DisposeSmashEnvNonCars(void) {
     BrMemFree(gSmashable_noncars);
 }
 
+// FUNCTION: CARMA2_HW 0x004f0950
+void C2_HOOK_FASTCALL FUN_004f0950(void) {
+
+    gCount_track_smashable_environment_specs = 0;
+    gTrack_smashable_environment_specs = NULL;
+}
+
+// C2PORT-NONMATCHING: best 45.45% | difftest PASS 2000 trials (spec difftest/specs/004ffd80_ReadSpecialVolumes.json) | reason codegen-record-layout-x87
 // FUNCTION: CARMA2_HW 0x004ffd80
 void C2_HOOK_FASTCALL ReadSpecialVolumes(FILE* pF) {
 
@@ -2559,35 +2705,32 @@ void C2_HOOK_FASTCALL FreeExceptions(void) {
     gMaterial_exceptions = NULL;
 }
 
-// FUNCTION: CARMA2_HW 0x00486db0
 void C2_HOOK_FASTCALL LoadStaticLightingForRace(const char* race_lighting_path) {
 
 }
 
+#pragma auto_inline(off)
+// C2PORT-NONMATCHING: best 11.59% | difftest PASS 2000 trials (spec difftest/specs/004489d0_DisposeTexturingMaterials.json) | reason VC5 control flow and register allocation
 // FUNCTION: CARMA2_HW 0x004489d0
 void C2_HOOK_FASTCALL DisposeTexturingMaterials(void) {
+    br_actor* track_actor;
 
-    switch (gWall_texturing_level) {
-    case eWTL_linear:
-        ProcessFaceMaterials(gProgram_state.track_spec.the_actor, WallLinearToPersp);
-        break;
-    case eWTL_none:
-        ProcessFaceMaterials(gProgram_state.track_spec.the_actor, WallUntexToPersp);
-        break;
-    default:
-        break;
+    track_actor = gProgram_state.track_spec.the_actor;
+
+    if (gWall_texturing_level == eWTL_linear) {
+        ProcessFaceMaterials(track_actor, WallLinearToPersp);
     }
-    switch (gRoad_texturing_level) {
-    case eRTL_none:
-        ProcessFaceMaterials(gProgram_state.track_spec.the_actor, RoadUntexToPersp);
-        break;
-    default:
-        break;
+    if (gWall_texturing_level == eWTL_none) {
+        ProcessFaceMaterials(track_actor, WallUntexToPersp);
+    }
+    if (gRoad_texturing_level == eRTL_none) {
+        ProcessFaceMaterials(track_actor, RoadUntexToPersp);
     }
     if (gWall_texturing_level != eWTL_full || gRoad_texturing_level != eRTL_full) {
-        ProcessFaceMaterials(gProgram_state.track_spec.the_actor, DisposeSuffixedMaterials);
+        ProcessFaceMaterials(track_actor, DisposeSuffixedMaterials);
     }
 }
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x00506e20
 intptr_t C2_HOOK_CDECL RemoveBounds(br_actor* pActor, void* pArg) {
@@ -2607,23 +2750,29 @@ void C2_HOOK_FASTCALL RemoveBoundsStructures(br_actor* pActor) {
 // FUNCTION: CARMA2_HW 0x00506c20
 void C2_HOOK_FASTCALL FreeTrack(tTrack_spec* pTrack_spec) {
     int i;
+    int zero;
+    int driver_code;
+    tNon_car_spec* non_car;
+    tPhysics_object** collision_info_slot;
+    br_actor** actor_slot;
 
     DisposeSmashableEnvironment();
-    if (gAdditional_actors != NULL) {
+    zero = 0;
+    if (gAdditional_actors != zero) {
         BrActorRemove(gAdditional_actors);
         BrActorFree(gAdditional_actors);
     }
     PossibleService();
     DisposeTexturingMaterials();
     PossibleService();
-    RemoveBoundsStructures(pTrack_spec->the_actor);
+    DRActorEnumRecurse(pTrack_spec->the_actor, RemoveBounds, NULL);
     PossibleService();
     DisposeColumns(pTrack_spec);
     PossibleService();
     DisposeFunkotronics(-2);
     PossibleService();
     ClearOutStorageSpace(&gTrack_storage_space);
-    gProgram_state.current_depth_effect.sky_texture = NULL;
+    gProgram_state.current_depth_effect.sky_texture = zero;
     PossibleService();
     DisposeGroovidelics(-2);
     PossibleService();
@@ -2633,8 +2782,8 @@ void C2_HOOK_FASTCALL FreeTrack(tTrack_spec* pTrack_spec) {
     PossibleService();
     BrActorRemove(pTrack_spec->the_actor);
     BrActorFree(pTrack_spec->the_actor);
-    pTrack_spec->the_actor = NULL;
-    gTrack_actor = NULL;
+    pTrack_spec->the_actor = zero;
+    gTrack_actor = zero;
     if (gProgram_state.special_volume_count != 0) {
         BrMemFree(gProgram_state.special_volumes);
     }
@@ -2642,27 +2791,35 @@ void C2_HOOK_FASTCALL FreeTrack(tTrack_spec* pTrack_spec) {
         BrMemFree(gProgram_state.special_screens);
     }
     PossibleService();
-    for (i = 0; i < 40; i++) { /* FIXME: magic number 40 */
-        tNon_car_spec *non_car;
-
-        non_car = &gProgram_state.non_cars[i];
-        non_car->collision_info->shape = NULL;
-        non_car->collision_info->physics_joint1 = NULL;
-        non_car->collision_info->physics_joint2 = NULL;
-    }
-    for (i = 0; i < gProgram_state.num_non_car_spaces; i++) {
-        tNon_car_spec* non_car;
-
-        non_car = &gProgram_state.non_cars[i];
-        PossibleService();
-        /* FIXME: comparison with eDriver_non_car in dethrace */
-        if (non_car->driver == eDriver_4 && non_car->actor != NULL) {
-            if (non_car->actor->parent != NULL) {
-                BrActorRemove(non_car->actor);
+    /* FIXME: magic number 40 */
+    i = 40;
+    collision_info_slot = &gProgram_state.non_cars->collision_info;
+    do {
+        collision_info_slot += sizeof(tNon_car_spec) / sizeof(*collision_info_slot);
+        i--;
+        collision_info_slot[-(sizeof(tNon_car_spec) / sizeof(*collision_info_slot))]->shape = zero;
+        collision_info_slot[-(sizeof(tNon_car_spec) / sizeof(*collision_info_slot))]->physics_joint1 = zero;
+        collision_info_slot[-(sizeof(tNon_car_spec) / sizeof(*collision_info_slot))]->physics_joint2 = zero;
+    } while (i != 0);
+    i = 0;
+    if (i < gProgram_state.num_non_car_spaces) {
+        non_car = gProgram_state.non_cars;
+        actor_slot = &non_car->actor;
+        driver_code = eDriver_4;
+        do {
+            PossibleService();
+            /* FIXME: comparison with eDriver_non_car in dethrace */
+            if (non_car->driver == driver_code && *actor_slot != NULL) {
+                if ((*actor_slot)->parent != NULL) {
+                    BrActorRemove(*actor_slot);
+                }
+                BrActorFree(*actor_slot);
             }
-            BrActorFree(non_car->actor);
-        }
-        DisposePhysicsObject(non_car->collision_info);
+            DisposePhysicsObject(non_car->collision_info);
+            i++;
+            actor_slot += sizeof(tNon_car_spec) / sizeof(*actor_slot);
+            non_car++;
+        } while (i < gProgram_state.num_non_car_spaces);
     }
     if (gProgram_state.non_cars != NULL) {
         BrMemFree(gProgram_state.non_cars);
@@ -2674,12 +2831,13 @@ void C2_HOOK_FASTCALL FreeTrack(tTrack_spec* pTrack_spec) {
         BrMemFree(gTrack_flic_buffer);
         EndFlic(&gTrack_flic_descriptor);
         BrMemFree(gProgram_state.default_depth_effect.sky_texture->pixels);
-        gProgram_state.default_depth_effect.sky_texture->pixels = NULL;
+        gProgram_state.default_depth_effect.sky_texture->pixels = zero;
         BrPixelmapFree(gProgram_state.default_depth_effect.sky_texture);
-        gTrack_flic_buffer = NULL;
+        gTrack_flic_buffer = zero;
     }
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004ffd20
 void C2_HOOK_FASTCALL FindInverseAndWorldBox(tSpecial_volume* pSpec) {
     br_bounds bnds;
@@ -2689,6 +2847,7 @@ void C2_HOOK_FASTCALL FindInverseAndWorldBox(tSpecial_volume* pSpec) {
     GetNewBoundingBox(&pSpec->boundary.box.bounds, &bnds, &pSpec->boundary.box.mat);
     BrMatrix34Inverse(&pSpec->boundary.box.inv_mat, &pSpec->boundary.box.mat);
 }
+#pragma auto_inline(on)
 
 // FUNCTION: CARMA2_HW 0x005074d0
 void C2_HOOK_FASTCALL MungeMaterialSV(br_matrix34* pMat, br_material* pMat_1, br_material* pMat_2, int pAxis_0, int pAxis_1) {
@@ -2710,14 +2869,390 @@ br_uint_32 C2_HOOK_FASTCALL ApplyTransToModels(br_actor* pActor, br_matrix34* pM
     }
     if (pActor->model != NULL) {
         for (i = 0; i < pActor->model->nvertices; i++) {
-            br_vector3 p = pActor->model->vertices[i].p;
+            br_vector3 p;
 
+            BrVector3Copy(&p, &pActor->model->vertices[i].p);
             BrMatrix34ApplyP(&pActor->model->vertices[i].p, &p, pMat);
         }
         BrModelUpdate(pActor->model, BR_MODU_ALL);
     }
     BrMatrix34Identity(&pActor->t.t.mat);
     return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00507580
+void C2_HOOK_FASTCALL LoadAdditionalStuff(void) {
+    int i;
+
+    if (gNum_active_non_cars != 0) {
+        NewTextHeadupSlot(4, 0, 2000, -2, "Can't load with active non cars");
+        return;
+    }
+    NewTextHeadupSlot(4, 0, 2000, -2, "Loading Additional Stuff");
+    for (i = 0; i < gNumber_of_additional_models; i++) {
+        BrModelRemove(gAdditional_models[i]);
+        BrModelFree(gAdditional_models[i]);
+    }
+    BrActorRemove(gAdditional_actors);
+    BrActorFree(gAdditional_actors);
+    gLast_actor = NULL;
+    gNumber_of_additional_models = BrModelLoadMany(gAdditional_model_path, gAdditional_models, 1000);
+    for (i = 0; i < gNumber_of_additional_models; i++) {
+        gAdditional_models[i]->flags = 0x80;
+    }
+    BrModelAddMany(gAdditional_models, gNumber_of_additional_models);
+    gAdditional_actors = BrActorLoad(gAdditional_actor_path);
+    if (gAdditional_actors == NULL) {
+        gAdditional_actors = BrActorAllocate(0, NULL);
+    }
+    BrActorAdd(gUniverse_actor, gAdditional_actors);
+}
+
+// FUNCTION: CARMA2_HW 0x00508050
+intptr_t C2_HOOK_CDECL FindHighestPowerupActorNumber(br_actor* pActor, int* pHighest) {
+    char name[256];
+    int number;
+
+    if (pActor->identifier != NULL && pActor->identifier[0] == '@') {
+        strcpy(name, &pActor->identifier[4]);
+        name[4] = '\0';
+        sscanf(name, "%d", &number);
+        if (*pHighest < number) {
+            *pHighest = number;
+        }
+    }
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x005080d0
+intptr_t C2_HOOK_CDECL DuplicatePowerupActorModel(br_actor* pActor, int* pHighest) {
+    char actor_name[256];
+    char model_name[256];
+    br_model* model;
+    br_model* new_model;
+
+    if (pActor->identifier != NULL && pActor->identifier[0] != '@') {
+        *pHighest += 1;
+        strcpy(actor_name, pActor->identifier);
+        actor_name[0] = '@';
+        strtok(actor_name, ".");
+        strcat(actor_name, "0000");
+        sprintf(&actor_name[4], "%04d", *pHighest);
+        strcpy(model_name, actor_name);
+        strcat(actor_name, ".ACT");
+        BrResFree(pActor->identifier);
+        pActor->identifier = BrResStrDup(pActor, actor_name);
+        model = pActor->model;
+        if (model != NULL) {
+            strcat(model_name, ".DAT");
+            new_model = BrModelAllocate(model_name, model->nvertices, model->nfaces);
+            memcpy(new_model->vertices, model->vertices, model->nvertices * sizeof(br_vertex));
+            memcpy(new_model->faces, model->faces, model->nfaces * sizeof(br_face));
+            new_model->flags |= BR_MODF_UPDATEABLE;
+            BrModelAdd(new_model);
+            BrModelUpdate(new_model, BR_MODU_ALL);
+            pActor->model = new_model;
+            gAdditional_models[gNumber_of_additional_models] = new_model;
+            gNumber_of_additional_models++;
+        }
+    }
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00507ea0
+intptr_t C2_HOOK_CDECL FindHighestSpecialActorNumber(br_actor* pActor, int* pHighest) {
+    char name[256];
+    int number;
+
+    if (pActor->identifier != NULL && pActor->identifier[0] == '&' && strlen(pActor->identifier) == 12) {
+        strcpy(name, &pActor->identifier[4]);
+        strtok(name, ".");
+        sscanf(name, "%d", &number);
+        if (*pHighest < number) {
+            *pHighest = number;
+        }
+    }
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00507f40
+intptr_t C2_HOOK_CDECL RenameSpecialActor(br_actor* pActor, int pNumber) {
+    char actor_name[256];
+
+    if (pActor->identifier != NULL) {
+        strcpy(actor_name, pActor->identifier);
+        strtok(actor_name, ".");
+        if (gCurrent_dropped_actor_index >= 0) {
+            sprintf(&actor_name[1], "\xA3%02d", gCurrent_dropped_actor_index);
+        }
+        strcat(actor_name, "0000");
+        sprintf(&actor_name[4], "%04d", pNumber);
+        strcat(actor_name, ".ACT");
+        BrResFree(pActor->identifier);
+        pActor->identifier = BrResStrDup(pActor, actor_name);
+    }
+    return 0;
+}
+
+// C2PORT-NONMATCHING: best 51.03% | difftest PASS 2000 trials (spec difftest/specs/005076a0_DropActor_full.json) | reason VC5 x87 scheduling, register allocation, and stack layout
+// FUNCTION: CARMA2_HW 0x005076a0
+void C2_HOOK_FASTCALL DropActor(int pIndex, int pPowerup) {
+    FILE* file;
+    tPath_name path;
+    char actor_name[256];
+    char error_text[256];
+    char status_text[256];
+    tBounds bounds;
+    tFace_ref faces[50];
+    br_transform new_transform;
+    tSpecial_volume* special_volume;
+    int face_count;
+    int face_index;
+    int actor_path_length;
+    int current_index;
+    int mode;
+    int i;
+    int highest;
+    float nearest_distance;
+    float distance;
+    float axis_x;
+    float axis_y;
+
+    current_index = pIndex;
+    mode = pPowerup;
+    if (gSelected_actor_name == NULL) {
+        if (PDKeyDown(4)) {
+            pIndex += 0x50;
+            current_index = pIndex;
+        }
+        if (PDKeyDown(2)) {
+            pIndex += 0x28;
+            current_index = pIndex;
+        }
+        if (PDKeyDown(1)) {
+            pIndex += 0x14;
+            current_index = pIndex;
+        }
+        if (PDKeyDown(0)) {
+            pIndex += 10;
+            current_index = pIndex;
+        }
+        PathCat(path, gApplication_path, mode ? "POWRSHIT.TXT" : "ACCESSRY.TXT");
+        file = DRfopen(path, "rt");
+        if (pIndex >= 0) {
+            pIndex += 1;
+            do {
+                GetAString(file, actor_name);
+                pIndex -= 1;
+            } while (pIndex != 0);
+        }
+    } else {
+        sprintf(actor_name, "%s", gSelected_actor_name);
+        file = NULL;
+    }
+
+    gLast_actor = LoadActor(actor_name);
+    if (gLast_actor == NULL || gLast_actor->model == NULL) {
+        sprintf(error_text, "CAN'T FIND %s", actor_name);
+        NewTextHeadupSlot(4, 0, 2000, -2, error_text);
+        goto done;
+    } else {
+        if (gLast_actor->identifier != NULL && gLast_actor->identifier[0] != '&'
+                && gLast_actor->model->nvertices == 0) {
+            sprintf(error_text, "CAN'T SHIT %s BECAUSE MODEL MUST BE IN REG OR START WITH '-'", actor_name);
+            NewTextHeadupSlot(4, 0, 2000, -2, error_text);
+            gLast_actor = NULL;
+            goto done;
+        }
+        if (strlen(actor_name) > 3 && gLast_actor->identifier != NULL && strlen(gLast_actor->identifier) > 3) {
+            gLast_actor->identifier[0] = actor_name[0];
+            gLast_actor->identifier[1] = actor_name[1];
+            gLast_actor->identifier[2] = actor_name[2];
+        }
+        if (gLast_actor->identifier[0] == '&' && gLast_actor->identifier[1] >= '0'
+                && gLast_actor->identifier[1] <= '9'
+                && gNon_car_indices[gLast_actor->identifier[1] * 10 + gLast_actor->identifier[2]] == 0) {
+            sprintf(error_text, "CAN'T SHIT %s BECAUSE YOU DON'T HAVE A NONCAR.TXT FILE", actor_name);
+            NewTextHeadupSlot(4, 0, 2000, -2, error_text);
+            gLast_actor = NULL;
+            goto done;
+        }
+
+        BrMatrix34Identity(&gLast_actor->t.t.mat);
+        bounds.original_bounds.min.v[0] = -0.05f;
+        bounds.original_bounds.min.v[1] = -0.05f;
+        bounds.original_bounds.min.v[2] = -0.05f;
+        bounds.original_bounds.max.v[0] = 0.05f;
+        bounds.original_bounds.max.v[1] = 0.05f;
+        bounds.original_bounds.max.v[2] = 0.05f;
+        bounds.mat = &gPlayer_car_master_actor->t.t.mat;
+        do {
+            face_count = FindFacesInBox(&bounds, faces, 50, NULL);
+            bounds.original_bounds.min.v[0] += bounds.original_bounds.min.v[0];
+            bounds.original_bounds.min.v[1] += bounds.original_bounds.min.v[1];
+            bounds.original_bounds.min.v[2] += bounds.original_bounds.min.v[2];
+            bounds.original_bounds.max.v[0] += bounds.original_bounds.max.v[0];
+            bounds.original_bounds.max.v[1] += bounds.original_bounds.max.v[1];
+            bounds.original_bounds.max.v[2] += bounds.original_bounds.max.v[2];
+        } while (face_count == 0);
+
+        face_index = -1;
+        nearest_distance = 3.402823466e+38F;
+        for (i = 0; i < face_count; i++) {
+            distance = DistanceFromFace(gOur_pos, &faces[i]);
+            if (fabsf(distance) < fabsf(nearest_distance)) {
+                face_index = i;
+                nearest_distance = distance;
+            }
+        }
+        if (face_index < 0) {
+            goto done;
+        }
+
+        if (gLast_actor->identifier[0] == '&' && gLast_actor->identifier[1] >= '0'
+                && gLast_actor->identifier[1] <= '9' && gLast_actor->model->bounds.min.v[1] < gDouble_0058b1e0) {
+            nearest_distance += gLast_actor->model->bounds.min.v[1] - gDouble_0058b1e0;
+        }
+        nearest_distance = -nearest_distance;
+        gLast_actor->t.t.translate.t.v[0] = faces[face_index].normal.v[0] * nearest_distance + gOur_pos->v[0];
+        gLast_actor->t.t.translate.t.v[1] = faces[face_index].normal.v[1] * nearest_distance + gOur_pos->v[1];
+        gLast_actor->t.t.translate.t.v[2] = faces[face_index].normal.v[2] * nearest_distance + gOur_pos->v[2];
+
+        if (!PDKeyDown(4)) {
+            axis_x = gNegative_one;
+            axis_y = gZero_0058b1c8;
+            if (gDouble_0058b1f0 < fabsf(0.0f - faces[face_index].normal.v[0] * gOne_0058b1ec)) {
+                axis_x = gZero_0058b1c8;
+                axis_y = gNegative_one;
+            }
+            new_transform.type = BR_TRANSFORM_LOOK_UP;
+            new_transform.t.look_up.look.v[0] = faces[face_index].normal.v[2] * axis_y;
+            new_transform.t.look_up.look.v[1] = -faces[face_index].normal.v[2] * axis_x;
+            new_transform.t.look_up.look.v[2] = faces[face_index].normal.v[1] * axis_x - faces[face_index].normal.v[0] * axis_y;
+            new_transform.t.look_up.up = faces[face_index].normal;
+            new_transform.t.look_up.t = gLast_actor->t.t.translate.t;
+            BrTransformToTransform(&gLast_actor->t, &new_transform);
+        }
+
+        gLast_actor_position_cache_actor = gLast_actor;
+        gLast_actor_position_cache.v[0] = gLast_actor->t.t.translate.t.v[0];
+        gLast_actor_position_cache.v[1] = gLast_actor->t.t.translate.t.v[1];
+        gLast_actor_position_cache.v[2] = gLast_actor->t.t.translate.t.v[2];
+        if (mode != 0) {
+            if (current_index > 0x41 && current_index < 0x56) {
+                SetSpinningPowerup(gLast_actor, 0);
+            }
+            if (current_index > 0x55 && current_index < 0x58) {
+                SetChangingPowerup(gLast_actor);
+            }
+        }
+        if (mode == 0) {
+            if (gLast_actor->identifier != NULL && gLast_actor->identifier[0] != '&') {
+                highest = 0;
+                DRActorEnumRecurse(gUniverse_actor, (br_actor_enum_cbfn*)FindHighestPowerupActorNumber, &highest);
+                DRActorEnumRecurse(gLast_actor, (br_actor_enum_cbfn*)DuplicatePowerupActorModel, &highest);
+            }
+        } else {
+            gLast_actor->identifier[0] = '&';
+        }
+        if (mode == 0) {
+            current_index = -1;
+        }
+        if (gLast_actor->identifier != NULL && gLast_actor->identifier[0] != '@') {
+            highest = 0;
+            DRActorEnumRecurse(gUniverse_actor, (br_actor_enum_cbfn*)FindHighestSpecialActorNumber, &highest);
+            gCurrent_dropped_actor_index = current_index;
+            DRActorEnumRecurse(gLast_actor, (br_actor_enum_cbfn*)RenameSpecialActor, (void*)(highest + 1));
+        }
+
+        BrActorAdd(gAdditional_actors, gLast_actor);
+        actor_path_length = strlen(gAdditional_actor_path);
+        strcat(gAdditional_actor_path, " autosave");
+        strcat(gAdditional_model_path, " autosave");
+        if (gSpec_vol_mode == 0) {
+            SaveAdditionalActors();
+        } else {
+            for (i = 0; i < gProgram_state.special_volume_count; i++) {
+                if (gSpec_vol_actors[i] == gLast_actor) {
+                    break;
+                }
+            }
+            if (i < gProgram_state.special_volume_count) {
+                special_volume = &gProgram_state.special_volumes[i];
+                BrMatrix34Copy(&special_volume->boundary.box.mat, &gLast_actor->t.t.mat);
+                FindInverseAndWorldBox(special_volume);
+                MungeMaterialSV(&gLast_actor->t.t.mat,
+                    *(br_material**)((char*)gLast_actor->model->faces + 0xd0),
+                    *(br_material**)((char*)gLast_actor->model->faces + 0x2b0), 0, 1);
+                MungeMaterialSV(&gLast_actor->t.t.mat,
+                    *(br_material**)((char*)gLast_actor->model->faces + 0x1c0),
+                    *(br_material**)((char*)gLast_actor->model->faces + 0x3a0), 1, 2);
+                MungeMaterialSV(&gLast_actor->t.t.mat,
+                    *(br_material**)((char*)gLast_actor->model->faces + 0x120),
+                    *(br_material**)((char*)gLast_actor->model->faces + 0x300), 0, 2);
+            }
+            SaveSpecialVolumes();
+        }
+        gAdditional_actor_path[actor_path_length] = '\0';
+        gAdditional_model_path[strlen(gAdditional_model_path) - strlen(" autosave")] = '\0';
+        FlushAllPedCaches();
+        if (mode != 0) {
+            sprintf(actor_name, "SHAT OUT A %s", GetPowerupMessage(current_index));
+            NewTextHeadupSlot(4, 0, 2000, -2, actor_name);
+        } else {
+            strcpy(status_text, "Shat out ");
+            if (gLast_actor->identifier != NULL) {
+                strcat(status_text, gLast_actor->identifier);
+            }
+            NewTextHeadupSlot(4, 0, 2000, -2, status_text);
+        }
+    }
+
+done:
+    if (gSelected_actor_name == NULL) {
+        PFfclose(file);
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x00508e50
+intptr_t C2_HOOK_CDECL MoveModelVertices(br_actor* pActor, br_vector3* pOffset) {
+    int i;
+
+    if (pActor->model != NULL) {
+        i = 0;
+        if (pActor->model->nvertices > 0) {
+            do {
+                pActor->model->vertices[i].p.v[0] += pOffset->v[0];
+                pActor->model->vertices[i].p.v[1] += pOffset->v[1];
+                pActor->model->vertices[i].p.v[2] += pOffset->v[2];
+                i++;
+            } while (i < pActor->model->nvertices);
+        }
+    }
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00508ec0
+void C2_HOOK_FASTCALL RecenterActorModels(br_actor* pActor, br_vector3* pOffset) {
+    if (pActor->model != NULL) {
+        if (gLast_actor_position_cache_actor == gLast_actor) {
+            pOffset->v[0] = gNegative_one * gLast_actor_position_cache.v[0];
+            pOffset->v[1] = gNegative_one * gLast_actor_position_cache.v[1];
+            pOffset->v[2] = gNegative_one * gLast_actor_position_cache.v[2];
+        } else {
+            pOffset->v[0] = (pActor->model->bounds.max.v[0] + pActor->model->bounds.min.v[0]) * gNegative_half;
+            pOffset->v[1] = (pActor->model->bounds.max.v[1] + pActor->model->bounds.min.v[1]) * gNegative_half;
+            pOffset->v[2] = (pActor->model->bounds.max.v[2] + pActor->model->bounds.min.v[2]) * gNegative_half;
+        }
+    } else {
+        pOffset->v[0] = 0.f;
+        pOffset->v[1] = 0.f;
+        pOffset->v[2] = 0.f;
+    }
+    DRActorEnumRecurse(pActor, MoveModelVertices, pOffset);
+    pOffset->v[0] = -pOffset->v[0];
+    pOffset->v[1] = -pOffset->v[1];
+    pOffset->v[2] = -pOffset->v[2];
 }
 
 // FUNCTION: CARMA2_HW 0x00507210
@@ -2878,6 +3413,13 @@ void C2_HOOK_FASTCALL SaveSpecialVolumes(void) {
         fprintf(f, "\n");
     }
     PFfclose(f);
+}
+
+// FUNCTION: CARMA2_HW 0x00507340
+void C2_HOOK_FASTCALL FUN_00507340(void) {
+
+    NewTextHeadupSlot(4, 0, 2000, -2, "Saving Additional Stuff");
+    SaveAdditionalActors();
 }
 
 void C2_HOOK_FASTCALL DoSaveAdditionalStuff(void) {
@@ -3095,6 +3637,7 @@ void C2_HOOK_FASTCALL PathGrooveBastard(tGroovidelic_spec* pGroove, tU32 pTime, 
     }
 }
 
+// C2PORT-NONMATCHING: best 40.32% | difftest PASS 2000 trials (spec difftest/specs/00479890_object_groove_bastard.json) | reason shear and double precision behavior fixed; remaining x87/codegen diff
 // FUNCTION: CARMA2_HW 0x00479890
 void C2_HOOK_FASTCALL ObjectGrooveBastard(tGroovidelic_spec* pGroove, tU32 pTime, br_matrix34* pMat, int pInterrupt_it) {
     int rock_it;
@@ -3103,7 +3646,7 @@ void C2_HOOK_FASTCALL ObjectGrooveBastard(tGroovidelic_spec* pGroove, tU32 pTime
     br_scalar z_size;
     br_scalar pos;
     br_bounds* bounds;
-    float f_the_time = (float)pTime;
+    double f_the_time = (double)pTime;
 
 #ifndef CARPOCALYPSE2_MATCHING
     C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, object_type, 0x5c);
@@ -3197,7 +3740,7 @@ void C2_HOOK_FASTCALL ObjectGrooveBastard(tGroovidelic_spec* pGroove, tU32 pTime
         if (pGroove->object_data.shear_info.x_magnitude == 0.0) {
             MOVE_FUNK_PARAMETER(z_size, pGroove->object_mode, pGroove->object_data.shear_info.z_period.value, pGroove->object_data.shear_info.z_texture_info.data, pGroove->object_data.shear_info.z_magnitude, -pGroove->object_data.shear_info.z_magnitude);
             MOVE_FUNK_PARAMETER(y_size, pGroove->object_mode, pGroove->object_data.shear_info.y_period.value, pGroove->object_data.shear_info.y_texture_info.data, pGroove->object_data.shear_info.y_magnitude, -pGroove->object_data.shear_info.y_magnitude);
-            BrMatrix34PostShearX(pMat, y_size / (bounds->max.v[1] - bounds->min.v[1]), z_size / bounds->max.v[2] - bounds->min.v[2]);
+            BrMatrix34PostShearX(pMat, y_size / (bounds->max.v[1] - bounds->min.v[1]), z_size / (bounds->max.v[2] - bounds->min.v[2]));
         } else if (pGroove->object_data.shear_info.y_magnitude == 0.0) {
             MOVE_FUNK_PARAMETER(z_size, pGroove->object_mode, pGroove->object_data.shear_info.z_period.value, pGroove->object_data.shear_info.z_texture_info.data, pGroove->object_data.shear_info.z_magnitude, -pGroove->object_data.shear_info.z_magnitude);
             MOVE_FUNK_PARAMETER(x_size, pGroove->object_mode, pGroove->object_data.shear_info.x_period.value, pGroove->object_data.shear_info.x_texture_info.data, pGroove->object_data.shear_info.x_magnitude, -pGroove->object_data.shear_info.x_magnitude);
@@ -3713,9 +4256,82 @@ void C2_HOOK_FASTCALL FunkThoseTronics(void) {
 // FUNCTION: CARMA2_HW 0x0047b1e0
 void C2_HOOK_FASTCALL ResetGrooveFlags(void) {
     int i;
+    tGroovidelic_spec* the_groove;
 
-    for (i = 0; i < gGroovidelics_array_size; i++) {
-        gGroovidelics_array[i].done_this_frame = 0;
+    i = 0;
+    if (gGroovidelics_array_size > 0) {
+        the_groove = gGroovidelics_array;
+        do {
+            the_groove->done_this_frame = 0;
+            i++;
+            the_groove++;
+        } while (i < gGroovidelics_array_size);
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x0047b210
+int C2_HOOK_CDECL DisownGroovesOfActor(br_actor* pActor) {
+    int i;
+    tGroovidelic_spec* the_groove;
+
+    the_groove = gGroovidelics_array;
+    for (i = 0; i < gGroovidelics_array_size; i++, the_groove++) {
+        if (pActor == the_groove->actor) {
+            the_groove->owner = -999;
+        }
+    }
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x00508830
+intptr_t C2_HOOK_CDECL RemoveAdditionalActorModel(br_actor* pActor, void* pArg) {
+    int i;
+
+    for (i = 0; i < gNumber_of_additional_models; i++) {
+        if (pActor->model == gAdditional_models[i]) {
+            BrModelRemove(pActor->model);
+            BrModelFree(pActor->model);
+            memmove(&gAdditional_models[i], &gAdditional_models[i + 1],
+                (gNumber_of_additional_models - i - 1) * sizeof(gAdditional_models[0]));
+            gNumber_of_additional_models--;
+            break;
+        }
+    }
+    return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x005088b0
+void C2_HOOK_CDECL MurderLastActor(void) {
+    char text[256];
+    int actor_path_length;
+    int model_path_length;
+
+    if (gLast_actor != NULL) {
+        if (gLast_actor->parent != gAdditional_actors) {
+            RemoveNonCarFromActiveList(gLast_actor);
+        }
+        strcpy(text, gMurdered_headup);
+        if (gLast_actor->identifier != NULL) {
+            strcat(text, gLast_actor->identifier);
+        }
+        NewTextHeadupSlot(4, 0, 2000, -2, text);
+        DRActorEnumRecurse(gLast_actor, (br_actor_enum_cbfn*)RemoveAdditionalActorModel, NULL);
+        DRActorEnumRecurse(gLast_actor, (br_actor_enum_cbfn*)DisownGroovesOfActor, NULL);
+        BrActorRemove(gLast_actor);
+        BrActorFree(gLast_actor);
+        actor_path_length = strlen(gAdditional_actor_path);
+        model_path_length = strlen(gAdditional_actor_path);
+        strcat(gAdditional_actor_path, " autosave");
+        strcat(gAdditional_model_path, " autosave");
+        gLast_actor = NULL;
+        if (gSpec_vol_mode != 0) {
+            SaveSpecialVolumes();
+        } else {
+            SaveAdditionalActors();
+        }
+        gAdditional_actor_path[actor_path_length] = '\0';
+        gAdditional_model_path[model_path_length] = '\0';
+        FlushAllPedCaches();
     }
 }
 
@@ -3734,33 +4350,32 @@ void C2_HOOK_FASTCALL EnableFunkotronic(int pIndex) {
 }
 
 // FUNCTION: CARMA2_HW 0x0047b0e0
-void C2_HOOK_FASTCALL StopGroovidelic(br_actor* pActor) {
-    tGroovidelic_spec* the_groove;
-    int count;
-    int i;
-
-    the_groove = gGroovidelics_array;
-    count = gGroovidelics_array_size;
-    for (i = 0; i < count; i++, the_groove++) {
-        if (the_groove->actor == pActor) {
-            if (the_groove->path_interrupt_status == eInterrupt_none
-                && the_groove->object_interrupt_status == eInterrupt_none) {
-                GrooveThisDelic(the_groove, gPrevious_groove_times[1], 1);
-            }
-            return;
-        }
-    }
-}
-
-// FUNCTION: CARMA2_HW 0x0047b360
-tGroovidelic_spec* C2_HOOK_FASTCALL ActorsGroove(br_actor* pActor) {
+void C2_HOOK_FASTCALL StopGroovidelic(br_actor* actor) {
     tGroovidelic_spec* groove;
     int count;
     int i;
 
     groove = gGroovidelics_array;
     count = gGroovidelics_array_size;
-    for (i = 0; i < count; i++, groove++) {
+    for (i = 0; i < count; i++) {
+        if (groove->actor == actor) {
+            if (groove->path_interrupt_status == eInterrupt_none &&
+                    groove->object_interrupt_status == eInterrupt_none) {
+                GrooveThisDelic(groove, gPrevious_groove_times[1], 1);
+            }
+            return;
+        }
+        groove = (tGroovidelic_spec*)((char*)groove + sizeof(*groove));
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x0047b360
+tGroovidelic_spec* C2_HOOK_FASTCALL ActorsGroove(br_actor* pActor) {
+    int i;
+
+    for (i = 0; i < gGroovidelics_array_size; i++) {
+        tGroovidelic_spec* groove = &gGroovidelics_array[i];
+
         if (groove->actor == pActor) {
             return groove;
         }
@@ -3768,20 +4383,79 @@ tGroovidelic_spec* C2_HOOK_FASTCALL ActorsGroove(br_actor* pActor) {
     return NULL;
 }
 
-// FUNCTION: CARMA2_HW 0x0047b160
-void C2_HOOK_FASTCALL EnableGroovidelic(br_actor* pActor, tU32 pBlock_flags) {
-    tGroovidelic_spec* the_groove;
-    int i;
+// C2PORT-NONMATCHING: best 85.71% | difftest PASS 2000 trials (spec difftest/specs/0047b390_FUN_0047b390.json) | reason VC5 register allocation in nested pixel loops
+// FUNCTION: CARMA2_HW 0x0047b390
+void C2_HOOK_FASTCALL FUN_0047b390(br_device_pixelmap* pPixelmap, int pWidth, int pHeight, int pMask) {
+    br_uint_16* pixels;
+    int row_stride;
+    int y;
+    int x;
 
-    the_groove = gGroovidelics_array;
-    for (i = 0; i < gGroovidelics_array_size; i++, the_groove++) {
-        if (the_groove->actor == pActor) {
-            the_groove->block_flags &= ~pBlock_flags;
+    row_stride = pPixelmap->pm_row_bytes / 2;
+    pixels = (br_uint_16*)pPixelmap->pm_pixels;
+    y = pHeight;
+    if (y > 0) do {
+        x = pWidth;
+        if (x > 0) do {
+            br_uint_16 pixel = *pixels++;
+
+            if (pixel != 0) {
+                *pixels = pixel | pMask;
+            }
+            pixels++;
+        } while (--x != 0);
+        pixels += row_stride;
+    } while (--y != 0);
+}
+
+// FUNCTION: CARMA2_HW 0x0047b130
+void C2_HOOK_FASTCALL DisableGroovidelic(br_actor* pActor, tU32 pBlock_flags) {
+    int i;
+    tGroovidelic_spec* groove;
+
+    groove = gGroovidelics_array;
+    for (i = 0; i < gGroovidelics_array_size; i++, groove++) {
+        if (groove->actor == pActor) {
+            groove->block_flags |= pBlock_flags;
             return;
         }
     }
 }
 
+// C2PORT-NONMATCHING: best 91.30% | difftest PASS 2000 trials (spec difftest/specs/0047b160_EnableGroovidelic.json) | reason remaining diff is VC5 branch layout and array-load placement
+// FUNCTION: CARMA2_HW 0x0047b160
+void C2_HOOK_FASTCALL EnableGroovidelic(br_actor *pActor, tU32 pBlock_flags) {
+    int i;
+
+    for (i = 0; i < gGroovidelics_array_size; i++) {
+        tGroovidelic_spec* groove = &gGroovidelics_array[i];
+
+        if (groove->actor == pActor) {
+            groove->block_flags &= ~pBlock_flags;
+            return;
+        }
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x0047b1a0
+void C2_HOOK_FASTCALL SetGrooveInterrupt(int pGroove_index, br_matrix34* pMatrix, int pPath_interrupt, int pObject_interrupt, float pPath_resumption, float pObject_resumption) {
+    tGroovidelic_spec* groove;
+
+    C2_HOOK_BUG_ON(sizeof(tGroovidelic_spec) != 0x84);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_interrupt_status, 0x20);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, object_interrupt_status, 0x64);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_resumption_value, 0x24);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, object_resumption_value, 0x68);
+
+    groove = &gGroovidelics_array[pGroove_index];
+    groove->path_interrupt_status = pPath_interrupt;
+    groove->object_interrupt_status = pObject_interrupt;
+    groove->path_resumption_value = pPath_resumption;
+    groove->object_resumption_value = pObject_resumption;
+    BrMatrix34Copy(&groove->actor->t.t.mat, pMatrix);
+}
+
+// C2PORT-NONMATCHING: best 35.60% | difftest PASS 2000 trials (spec difftest/specs/004ff120_FindSpecialVolume.json) | reason register allocation and x87 scheduling across volume scan
 // FUNCTION: CARMA2_HW 0x004ff120
 tSpecial_volume* C2_HOOK_FASTCALL FindSpecialVolume(br_vector3* pP, tSpecial_volume* pLast_vol, int pArg3) {
     int i;
@@ -3878,7 +4552,7 @@ void C2_HOOK_FAKE_THISCALL ControlBoundFunkGroove(int pSlot_number, undefined4 p
     if (pSlot_number < 0) {
         return;
     }
-    if (pSlot_number >= (int)CARPOCALYPSE2_ASIZE(gGroove_funk_bindings)) {
+    if (pSlot_number >= CARPOCALYPSE2_ASIZE(gGroove_funk_bindings)) {
         FatalError(kFatalError_UsedRefNumOfControlledGroovidelicFunkotronicIsOutOfRange);
     }
     if (!gGroove_funk_bindings[pSlot_number].field_0x4) {
@@ -3892,7 +4566,7 @@ float C2_HOOK_FAKE_THISCALL ControlBoundFunkGroovePlus(int pSlot_number, undefin
     if (pSlot_number < 0) {
         return 0.f;
     }
-    if (pSlot_number >= (int)CARPOCALYPSE2_ASIZE(gGroove_funk_bindings)) {
+    if (pSlot_number >= CARPOCALYPSE2_ASIZE(gGroove_funk_bindings)) {
         FatalError(kFatalError_UsedRefNumOfControlledGroovidelicFunkotronicIsOutOfRange);
     }
     if (!gGroove_funk_bindings[pSlot_number].field_0x4) {
@@ -3904,8 +4578,44 @@ float C2_HOOK_FAKE_THISCALL ControlBoundFunkGroovePlus(int pSlot_number, undefin
 // FUNCTION: CARMA2_HW 0x00506e50
 void C2_HOOK_FASTCALL ProcessTrack(br_actor* pWorld, tTrack_spec* pTrack_spec, br_actor* pCamera, br_matrix34* pCamera_to_world_transform) {
 
+#if defined(__vita__) || defined(C2_FAST_GEOMETRY)
+    {   /* track geometry only changes through BrModelUpdate (audited 2026-10-21); see vita_geometry_cache.h */
+        extern int C2VitaStaticGeometry;
+        C2VitaStaticGeometry = 1;
+        RenderTrack(pWorld, pTrack_spec, pCamera, pCamera_to_world_transform);
+        C2VitaStaticGeometry = 0;
+    }
+#else
     RenderTrack(pWorld, pTrack_spec, pCamera, pCamera_to_world_transform);
+#endif
     if (gAdditional_actors) {
         BrZbsSceneRenderAdd(gAdditional_actors);
     }
 }
+
+// FUNCTION: CARMA2_HW 0x004f0f80
+void C2_HOOK_FASTCALL FUN_004f0f80(tNet_game_player_info* pArg1) {
+    tNet_message* message;
+    tU8 uVar1;
+    tU8 uVar2;
+    int i;
+    int offset;
+
+    message = NetBuildMessage(0x21, 0);
+    uVar1 = *((tU8*)message + 0x18);
+    uVar2 = *((tU8*)message + 0x19);
+    i = 0;
+    if (0 < gCount_host_smashes) {
+        offset = 0;
+        do {
+            memcpy((tU8*)message + 0x18, (tU8*)gNet_host_smashes + offset, 0x38);
+            *((tU8*)message + 0x18) = uVar1;
+            *(tU32*)((tU8*)message + 0x4c) |= 1;
+            *((tU8*)message + 0x19) = uVar2;
+            NetSendMessageToPlayer(gCurrent_net_game, message, *(tPlayer_ID*)((tU8*)pArg1 + 0x24));
+            i++;
+            offset += 0x38;
+        } while (i < gCount_host_smashes);
+    }
+}
+

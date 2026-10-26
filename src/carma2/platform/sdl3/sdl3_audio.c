@@ -6,9 +6,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __vita__
+#include "vita_music.h"
+#include "vita_controls.h"
+#else
 #include "stb/stb_vorbis.c"
+#endif
 
 #include <s3/internal/audio.h>
+#include <smack.h>
 
 static const int gS3_audio_max_volume = 255;
 
@@ -44,6 +50,22 @@ typedef struct {
 
 static tS3_cda_state gS3_cda;
 
+/* port: all sample voices share ONE playback device; each voice keeps its own stream bound to it.
+ * Opening a device stream per played sample (the previous code) is cheap on desktop but on the
+ * Vita opens an audio port and a mixer thread each time: tens of ms on the game thread for every
+ * skid/crash/ped sound, i.e. the physics-time stutters. */
+static SDL_AudioDeviceID gS3_sample_device;
+static int PDS3_EnsureSampleDevice(void) {
+    if (gS3_sample_device == 0) {
+        gS3_sample_device = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, NULL);
+        if (gS3_sample_device == 0) {
+            return 0;
+        }
+        SDL_ResumeAudioDevice(gS3_sample_device);
+    }
+    return 1;
+}
+
 static tS3_audio_voice* PDS3_GetVoice(tS3_channel* pChannel) {
     tS3_audio_voice* voice;
 
@@ -67,8 +89,8 @@ static void PDS3_CloseVoice(tS3_audio_voice* voice) {
         return;
     }
     if (voice->stream != NULL) {
-        SDL_DestroyAudioStream(voice->stream);
-        voice->stream = NULL;
+        /* keep the bound stream for the next sample on this voice; just drop what is queued */
+        SDL_ClearAudioStream(voice->stream);
     }
     if (voice->owned_data != NULL) {
         free(voice->owned_data);
@@ -76,9 +98,14 @@ static void PDS3_CloseVoice(tS3_audio_voice* voice) {
         voice->owned_len = 0;
     }
     voice->looping = 0;
+    voice->end_time = 0;
 }
 
 static void PDS3_CloseCDA(void) {
+#ifdef __vita__
+    C2VitaMusicStop();
+    SDL_zero(gS3_cda);
+#else
     if (gS3_cda.stream != NULL) {
         SDL_DestroyAudioStream(gS3_cda.stream);
         gS3_cda.stream = NULL;
@@ -89,6 +116,7 @@ static void PDS3_CloseCDA(void) {
     }
     gS3_cda.data_len = 0;
     gS3_cda.playing = 0;
+#endif
 }
 
 static SDL_AudioFormat S3FormatFromBits(int pBits_per_sample) {
@@ -98,7 +126,46 @@ static SDL_AudioFormat S3FormatFromBits(int pBits_per_sample) {
     return SDL_AUDIO_U8;
 }
 
+/* Smacker cutscene soundtrack: one stream on the shared sample device, fed frame by frame. */
+static SDL_AudioStream* gS3_smack_stream;
+
+static int PDS3_SmackAudioOpen(int pChannels, int pBits, unsigned long pRate) {
+    SDL_AudioSpec spec;
+
+    if (!PDS3_EnsureSampleDevice()) {
+        return 0;
+    }
+    spec.format = pBits == 16 ? SDL_AUDIO_S16LE : SDL_AUDIO_U8;
+    spec.channels = pChannels;
+    spec.freq = (int)pRate;
+    gS3_smack_stream = SDL_CreateAudioStream(&spec, NULL);
+    if (gS3_smack_stream == NULL) {
+        return 0;
+    }
+    if (!SDL_BindAudioStream(gS3_sample_device, gS3_smack_stream)) {
+        SDL_DestroyAudioStream(gS3_smack_stream);
+        gS3_smack_stream = NULL;
+        return 0;
+    }
+    return 1;
+}
+
+static void PDS3_SmackAudioPush(const void* pData, unsigned long pSize) {
+    if (gS3_smack_stream != NULL) {
+        SDL_PutAudioStreamData(gS3_smack_stream, pData, (int)pSize);
+    }
+}
+
+static void PDS3_SmackAudioClose(void) {
+    if (gS3_smack_stream != NULL) {
+        SDL_DestroyAudioStream(gS3_smack_stream);
+        gS3_smack_stream = NULL;
+    }
+}
+
 int PDS3Init(void) {
+    static const SmackAudioSink smack_sink = { PDS3_SmackAudioOpen, PDS3_SmackAudioPush, PDS3_SmackAudioClose };
+
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
         fprintf(stderr, "SDL3 audio init error: %s\n", SDL_GetError());
         return 0;
@@ -107,6 +174,7 @@ int PDS3Init(void) {
     strcpy(gS3_sound_folder_name, "SOUND");
     S3Enable();
     PDS3InitCDA();
+    SmackSetAudioSink(&smack_sink);
     return 1;
 }
 
@@ -116,7 +184,7 @@ void PDS3Stop(void) {
 }
 
 int PDS3InitCDA(void) {
-    SDL_PathInfo path_info;
+    SDL_PathInfo path_info = {0};
     const char* resolved_path;
 #ifndef _WIN32
     /* SDL_GetPathInfo runs inside libSDL3, which the fopen/open --wrap cannot
@@ -231,16 +299,29 @@ int PDS3PlaySample(tS3_channel* pChannel) {
     }
 
     PDS3_CloseVoice(voice);
-    voice->spec = sample->spec;
-    voice->stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &voice->spec, NULL, NULL);
-    if (voice->stream == NULL) {
+    if (!PDS3_EnsureSampleDevice()) {
         return 1;
+    }
+    if (voice->stream == NULL) {
+        voice->spec = sample->spec;
+        voice->stream = SDL_CreateAudioStream(&voice->spec, NULL);
+        if (voice->stream == NULL) {
+            return 1;
+        }
+        if (!SDL_BindAudioStream(gS3_sample_device, voice->stream)) {
+            SDL_DestroyAudioStream(voice->stream);
+            voice->stream = NULL;
+            return 1;
+        }
+    } else if (voice->spec.format != sample->spec.format || voice->spec.channels != sample->spec.channels
+            || voice->spec.freq != sample->spec.freq) {
+        voice->spec = sample->spec;
+        SDL_SetAudioStreamFormat(voice->stream, &voice->spec, NULL);
     }
     if (!SDL_PutAudioStreamData(voice->stream, sample->data, (int)sample->size)) {
         PDS3_CloseVoice(voice);
         return 1;
     }
-    SDL_ResumeAudioStreamDevice(voice->stream);
 
     voice->looping = (pChannel->repetitions == 0);
     if (voice->looping) {
@@ -275,6 +356,9 @@ int PDS3IsSamplePlaying(tS3_channel* pChannel) {
     if (voice == NULL || voice->stream == NULL) {
         PDS3StopSampleChannel(pChannel);
         return 0;
+    }
+    if (!voice->looping && voice->end_time == 0) {
+        return 0; /* stopped; the stream itself is kept for reuse */
     }
     if (voice->looping) {
         int queued = SDL_GetAudioStreamQueued(voice->stream);
@@ -412,12 +496,14 @@ tS3_error_codes PDS3PlayCDAChannel(tS3_channel* pChannel) {
     char path[256];
     char* endptr;
     int track;
+#ifndef __vita__
     int channels;
     int sample_rate;
     int sample_count;
     short* decoded;
     SDL_AudioSpec spec;
-    SDL_PathInfo path_info;
+#endif
+    SDL_PathInfo path_info = {0};
     const char* resolved_path;
     float volume;
 
@@ -444,6 +530,17 @@ tS3_error_codes PDS3PlayCDAChannel(tS3_channel* pChannel) {
         return eS3_error_start_cda;
     }
 
+#ifdef __vita__
+    PDS3_CloseCDA();
+    C2VitaCheckpoint("MUSIC streaming open");
+    gS3_cda.stream = C2VitaMusicStart(resolved_path);
+    if (gS3_cda.stream == NULL) {
+        C2VitaLog("MUSIC streaming failed: %s\n", SDL_GetError());
+        return eS3_error_start_cda;
+    }
+    C2VitaLog("MUSIC streaming: %s; PCM queue capped at 128 KiB plus one 16 KiB chunk\n", resolved_path);
+    C2VitaCheckpoint("MUSIC streaming ready");
+#else
     decoded = NULL;
     sample_count = stb_vorbis_decode_filename(resolved_path, &channels, &sample_rate, &decoded);
     if (sample_count <= 0 || decoded == NULL || channels <= 0 || sample_rate <= 0) {
@@ -471,6 +568,7 @@ tS3_error_codes PDS3PlayCDAChannel(tS3_channel* pChannel) {
         return eS3_error_start_cda;
     }
     SDL_ResumeAudioStreamDevice(gS3_cda.stream);
+#endif
     gS3_cda.playing = 1;
     if (pChannel->owner_outlet != NULL) {
         volume = pChannel->owner_outlet->volume / 255.0f;
@@ -512,6 +610,10 @@ void PDS3UpdateCDAVolume(tS3_channel* pChannel, int pVolume) {
 
 int PDS3IsCDAPlaying(void) {
 
+#ifdef __vita__
+    gS3_cda.playing = C2VitaMusicPlaying();
+    return gS3_cda.playing;
+#else
     if (gS3_cda.stream == NULL || !gS3_cda.playing) {
         return 0;
     }
@@ -520,4 +622,5 @@ int PDS3IsCDAPlaying(void) {
         return 0;
     }
     return 1;
+#endif
 }

@@ -1,4 +1,9 @@
 #include "graphics.h"
+#ifdef CARPOCALYPSE2_PLATFORM_SDL3
+extern float PDWidescreenFactor(void);
+extern int PDSetWorldRendering(int active);
+extern void PDDisplayFlush(br_pixelmap* pm);
+#endif
 
 #include "car.h"
 #include "controls.h"
@@ -39,6 +44,9 @@
 #include "brender/br_types.h"
 #include "../../brender/core/v1db/dbsetup.h"
 #include "carpocalypse2_macros.h"
+#ifdef __vita__
+#include "sdl3/vita_perf.h"
+#endif
 #include "carpocalypse2_types.h"
 
 #include "c2_string.h"
@@ -137,6 +145,9 @@ br_matrix34 gIdentity34 = {
 
 // GLOBAL: CARMA2_HW 0x006a2440
 int gShadow_dim_amount;
+
+// GLOBAL: CARMA2_HW 0x006a2128
+void* gLollipop_queue[100];
 
 // GLOBAL: CARMA2_HW 0x006a22c4
 int gNumber_of_lollipops;
@@ -251,6 +262,66 @@ void C2_HOOK_FASTCALL MungePalette(void) {
 
 }
 
+// C2PORT-NONMATCHING: best 42.11% | difftest PASS 2000 trials (spec 005184c0_FindBestMatchingPaletteIndex.json) | reason equivalent palette distance with different x87/register codegen
+// FUNCTION: CARMA2_HW 0x005184c0
+int C2_HOOK_FASTCALL FindBestMatchingPaletteIndex(br_colour pColour) {
+    double min_error = DBL_MAX;
+    int i;
+    int pal_index;
+    br_colour* pal_colours;
+
+    pal_index = 127;
+    pal_colours = gRender_palette->pixels;
+    for (i = 0; i < 256; i++) {
+        int dr, dg, db;
+        double error;
+
+        dr = ((pal_colours[i] >> 16) & 0xff) - ((pColour >> 16) & 0xff);
+        dg = ((pal_colours[i] >>  8) & 0xff) - ((pColour >>  8) & 0xff);
+        db = ((pal_colours[i] >>  0) & 0xff) - ((pColour >>  0) & 0xff);
+        error = (double)(dr * dr + dg * dg + db * db);
+        if (error < min_error) {
+            pal_index = i;
+            min_error = error;
+        }
+    }
+    return pal_index;
+}
+
+// FUNCTION: CARMA2_HW 0x00518590
+br_actor* C2_HOOK_FASTCALL CreateBoundsActor(br_actor* pParent, const br_bounds* pBounds) {
+    br_actor* actor;
+
+    actor = BrActorAllocate(1, NULL);
+    actor->model = BrModelAllocate("Bounds", 3, 1);
+    actor->model->faces->vertices[0] = 0;
+    actor->model->faces->vertices[1] = 1;
+    actor->model->faces->vertices[2] = 2;
+    actor->model->vertices[0].p.v[0] = 0.f;
+    actor->model->vertices[0].p.v[1] = 0.f;
+    actor->model->vertices[0].p.v[2] = 1.f;
+    actor->model->vertices[1].p.v[0] = 0.f;
+    actor->model->vertices[1].p.v[1] = 1.f;
+    actor->model->vertices[1].p.v[2] = 1.f;
+    actor->model->vertices[2].p.v[0] = 1.f;
+    actor->model->vertices[2].p.v[1] = 0.f;
+    actor->model->vertices[2].p.v[2] = 1.f;
+    BrModelAdd(actor->model);
+    actor->model->bounds = *pBounds;
+    actor->render_style = 6;
+    BrActorAdd(pParent, actor);
+    return actor;
+}
+
+// FUNCTION: CARMA2_HW 0x00518660
+void C2_HOOK_FASTCALL DisposeActorAndModel(br_actor* pActor) {
+
+    BrModelRemove(pActor->model);
+    BrModelFree(pActor->model);
+    BrActorRemove(pActor);
+    BrActorFree(pActor);
+}
+
 // FUNCTION: CARMA2_HW 0x0047d6a0
 void C2_HOOK_FASTCALL DisableLights(void) {
     int i;
@@ -264,6 +335,65 @@ void C2_HOOK_FASTCALL DisableLights(void) {
 int C2_HOOK_FASTCALL SwitchToLoresMode(void) {
 
     return 0;
+}
+
+// FUNCTION: CARMA2_HW 0x0047c670
+void C2_HOOK_FASTCALL FUN_0047c670(br_pixelmap* pDest, br_pixelmap* pSrc, int pWidth, int pHeight, int pArg5, int pDest_y) {
+    int dest_width;
+    int dest_step;
+    int src_step;
+    int src_pixels_per_row;
+    int pixels_left;
+    tU16 pixel;
+    tU8 pixel_high;
+    tU8 pixel_low;
+    tU8* dest_top;
+    tU8* dest_bottom;
+    int src_row;
+
+    dest_width = (short)pDest->row_bytes;
+    dest_step = dest_width - pWidth;
+    dest_step *= 2;
+    src_step = ((short)pSrc->row_bytes - pWidth) / 2;
+    src_row = (int)pSrc->pixels + ((pHeight * (short)pSrc->row_bytes) / 2 - src_step) * 2;
+    dest_top = (tU8*)((pDest_y - 1 + pHeight * 2) * dest_width + (int)pDest->pixels + pWidth * 2);
+    dest_bottom = dest_top - dest_width;
+    src_pixels_per_row = pWidth / 2;
+    if (pHeight > 0) {
+        pWidth = pHeight;
+        do {
+            pixels_left = src_pixels_per_row;
+            if (pixels_left > 0) {
+                do {
+                    pixel = *(tU16*)(src_row - 2);
+                    src_row = src_row - 2;
+                    pixel_high = (tU8)(pixel >> 8);
+                    dest_top--;
+                    dest_bottom--;
+                    *dest_top = pixel_high;
+                    dest_top--;
+                    *dest_bottom = pixel_high;
+                    dest_bottom--;
+                    *dest_top = pixel_high;
+                    dest_top--;
+                    *dest_bottom = pixel_high;
+                    dest_bottom--;
+                    pixel_low = (tU8)pixel;
+                    *dest_top = pixel_low;
+                    dest_top--;
+                    *dest_bottom = pixel_low;
+                    dest_bottom--;
+                    *dest_top = pixel_low;
+                    pixels_left--;
+                    *dest_bottom = pixel_low;
+                } while (pixels_left != 0);
+            }
+            dest_top -= dest_step;
+            dest_bottom -= dest_step;
+            src_row += src_step * -2;
+            pWidth--;
+        } while (pWidth != 0);
+    }
 }
 
 // FUNCTION: CARMA2_HW 0x004e4b40
@@ -534,10 +664,25 @@ void C2_HOOK_FASTCALL RenderAFrame(int pDepth_mask_on) {
         DoACompleteRenderPass(1, &gRearview_camera_to_world, gRearview_camera, gRearview_screen, gRearview_depth_buffer);
         gRearview_camera->t.t.mat = old_mirror_cam_matrix;
     }
+#ifdef __vita__
+    C2VitaPerfBegin(C2VP_HUD);
+#endif
+#ifdef __vita__
+    C2VitaPerfBegin(C2VP_TINT);
+#endif
     RenderTintedPolys();
+#ifdef __vita__
+    C2VitaPerfEnd(C2VP_TINT);
+#endif
     if (gMap_view != 2) {
         DimAFewBits();
+#ifdef __vita__
+        C2VitaPerfBegin(C2VP_DAMAGE);
+#endif
         DoDamageScreen(the_time);
+#ifdef __vita__
+        C2VitaPerfEnd(C2VP_DAMAGE);
+#endif
         if (!gAction_replay_mode || gAR_fudge_headups) {
             DoHeadups(the_time);
         }
@@ -548,7 +693,13 @@ void C2_HOOK_FASTCALL RenderAFrame(int pDepth_mask_on) {
     }
     if (gMap_view != 2 && (!gAction_replay_mode || gAR_fudge_headups)) {
         DoTestHeadup();
+#ifdef __vita__
+        C2VitaPerfBegin(C2VP_APO);
+#endif
         DoPSPowerupHeadups();
+#ifdef __vita__
+        C2VitaPerfEnd(C2VP_APO);
+#endif
     }
     MapStuffAfterRender();
     if (gNet_mode != eNet_mode_none) {
@@ -560,25 +711,53 @@ void C2_HOOK_FASTCALL RenderAFrame(int pDepth_mask_on) {
     if (gAction_replay_mode && !gAR_fudge_headups) {
         DoActionReplayHeadups();
     }
+#ifdef __vita__
+    C2VitaPerfBegin(C2VP_HUD_SCENE);
+#endif
     StopRenderingHeadups();
+#ifdef __vita__
+    C2VitaPerfEnd(C2VP_HUD_SCENE);
+#endif
     if (gAction_replay_mode) {
         SynchronizeActionReplay();
     } else {
         PipeSingleFrameFinish();
     }
     gRender_screen->pixels = old_pixels;
+#ifdef __vita__
+    C2VitaPerfEnd(C2VP_HUD);
+    C2VitaPerfBegin(C2VP_PRESENT);
+#endif
     if (!gPalette_fade_time || GetRaceTime() > gPalette_fade_time + 500u) {
         PDScreenBufferSwap(0);
     }
     if (gAction_replay_mode) {
         DoActionReplayPostSwap();
     }
+#ifdef __vita__
+    C2VitaPerfEnd(C2VP_PRESENT);
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004e4900
 void C2_HOOK_FASTCALL ResetLollipopQueue(void) {
 
     gNumber_of_lollipops = 0;
+}
+
+// FUNCTION: CARMA2_HW 0x004e4910
+int C2_HOOK_FASTCALL AddToLollipopQueue(void* pItem, int pIndex) {
+
+    if (pIndex < 0) {
+        if (gNumber_of_lollipops < 100) {
+            gLollipop_queue[gNumber_of_lollipops] = pItem;
+            gNumber_of_lollipops++;
+            return gNumber_of_lollipops - 1;
+        }
+        return -1;
+    }
+    gLollipop_queue[pIndex] = pItem;
+    return pIndex;
 }
 
 // FUNCTION: CARMA2_HW 0x004b52b0
@@ -866,13 +1045,13 @@ void C2_HOOK_FASTCALL ProcessShadow(tCar_spec* pCar, br_actor* pWorld, tTrack_sp
                         GetOilSpillDetails(i, &oily_actor, &oily_size);
                         if (oily_actor) {
                             MungeIndexedOilsHeightAboveGround(i);
-                            BrZbSceneRenderAdd(oily_actor);
+                            BrZbsSceneRenderAdd(oily_actor);
                         }
                     }
                 }
             }
             BrSetScreenZOffset(0);
-            BrZbSceneRenderEnd();
+            BrZbsSceneRenderEnd();
 
             for (i = 0; i < f_num; i++) {
                 if (gFancy_shadow) {
@@ -934,6 +1113,26 @@ void C2_HOOK_FASTCALL CopyMapToScreen(void) {
     if (gCurrent_race.map_image != NULL) {
         if (gGraf_data_index != 0) {
             PossibleUnlock(1);
+#if !defined(CARPOCALYPSE2_MATCHING) && defined(CARPOCALYPSE2_PLATFORM_SDL3)
+            /* port: FRONTEND_Redraw stretches menu backdrops across a wide display, but the map's
+             * blips, arrows and checkpoints are drawn in the 4:3 HUD layer: keep the map 4:3 too,
+             * over a black wide backdrop so the side bars do not show the world */
+            {
+                static br_pixelmap* black;
+                if (black == NULL) {
+                    black = BrPixelmapAllocate(BR_PMT_RGB_565, 640, 480, NULL, BR_PMAF_NORMAL);
+                    BrPixelmapFill(black, 0);
+                }
+                FRONTEND_Redraw(gBack_screen, 0, 0, black, 0, 0, 640, 480);
+            }
+            BrPixelmapRectangleCopy(gBack_screen,
+                -gBack_screen->origin_x,
+                -gBack_screen->origin_y,
+                gCurrent_race.map_image,
+                gCurrent_race.map_image->origin_x,
+                gCurrent_race.map_image->origin_y,
+                640, 480);
+#else
             FRONTEND_Redraw(gBack_screen,
                 -gBack_screen->origin_x,
                 -gBack_screen->origin_y,
@@ -941,6 +1140,7 @@ void C2_HOOK_FASTCALL CopyMapToScreen(void) {
                 gCurrent_race.map_image->origin_x,
                 gCurrent_race.map_image->origin_y,
                 640, 480);
+#endif
         } else {
             DRPixelmapCopy(gBack_screen, gCurrent_race.map_image);
         }
@@ -974,6 +1174,26 @@ void C2_HOOK_FASTCALL DoARenderPass(br_matrix34* pMat34, br_actor* pCamera, br_p
     tCar_spec* fox_car;
     br_pixelmap* sky_pixelmap;
     int bgnd_col;
+#ifdef CARPOCALYPSE2_PLATFORM_SDL3
+    br_scalar original_aspect = camera_data->aspect;
+    int old_world_rendering;
+    PDDisplayFlush(pColour);
+    old_world_rendering = PDSetWorldRendering(1);
+    if (pColour == gRender_screen || (pColour->width == gBack_screen->width && pColour->height == gBack_screen->height))
+        camera_data->aspect *= PDWidescreenFactor();
+#endif
+#ifdef __vita__
+    C2VitaPerfBegin(C2VP_SKY);
+#endif
+#if defined(__vita__) || defined(C2_FAST_OVERLAY)
+    /* The 3D part of the pass (sky, shadows, track, cars, peds, sparks, smoke, rays) writes no CPU 2D
+     * pixels (audited 2026-10-21), so its scene begins need not rescan the overlay (~1.3 ms each).
+     * Not in the net 'foxy' variant, which renders tinted polys in between. */
+    if (gNet_mode == eNet_mode_none && (pColour == gRender_screen || pColour == gBack_screen)) {
+        extern void C2VitaOverlayBeginClean(void* pm);
+        C2VitaOverlayBeginClean(pColour);
+    }
+#endif
     camera_data->yon_z *= pYon_factor;
     BrPixelmapFill(pDepth, 0xffffffff);
     if (!gAFE) {
@@ -1061,9 +1281,17 @@ void C2_HOOK_FASTCALL DoARenderPass(br_matrix34* pMat34, br_actor* pCamera, br_p
         }
     }
     DoSpecialCameraEffect(pCamera, pMat34);
+#ifdef __vita__
+    C2VitaPerfEnd(C2VP_SKY);
+    C2VitaPerfBegin(C2VP_SHADOWS);
+#endif
     if (pShadows) {
         RenderShadows(gUniverse_actor, &gProgram_state.track_spec, pCamera, pMat34);
     }
+#ifdef __vita__
+    C2VitaPerfEnd(C2VP_SHADOWS);
+    C2VitaPerfBegin(C2VP_WORLD);
+#endif
     FixificateClipulatingPlaneyThings();
     BrZbsSceneRenderBegin(gUniverse_actor, pCamera, pColour, pDepth);
     for (i = CARPOCALYPSE2_ASIZE(gOther_selfs); i > 0; i--) {
@@ -1085,7 +1313,21 @@ void C2_HOOK_FASTCALL DoARenderPass(br_matrix34* pMat34, br_actor* pCamera, br_p
     }
     BrZbsSceneRenderEnd();
     CancelificateClipulatingPlaneyThings();
+#if defined(__vita__) || defined(C2_FAST_OVERLAY)
+    {
+        extern void C2VitaOverlayEndClean(void);
+        C2VitaOverlayEndClean();
+    }
+#endif
     camera_data->yon_z = original_yon;
+#ifdef CARPOCALYPSE2_PLATFORM_SDL3
+    PDDisplayFlush(pColour);
+    camera_data->aspect = original_aspect;
+    PDSetWorldRendering(old_world_rendering);
+#endif
+#ifdef __vita__
+    C2VitaPerfEnd(C2VP_WORLD);
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004e54f0
@@ -1169,6 +1411,7 @@ void C2_HOOK_FASTCALL DoSomeThingsToCheckpoints(br_pixelmap* pMap, tU32 pTime, t
     }
 }
 
+// C2PORT-NONMATCHING: best 45% | difftest PASS 2000 trials (spec 004968f0_CalcMapCheckpoint.json) | reason local stack and register allocation
 // FUNCTION: CARMA2_HW 0x004968f0
 void C2_HOOK_FASTCALL CalcMapCheckpoint(br_pixelmap* pMap, int pCheckpoint, tU32 pTime, int pTarget) {
     br_vector3 p;
@@ -1241,7 +1484,8 @@ void C2_HOOK_FASTCALL DrawMapSmallBlip(br_pixelmap* pScreen, tU32 pTime, const b
         if (gBack_screen->type == BR_PMT_INDEX_8) {
             ((br_uint_8*)pScreen->pixels)[(int)map_pos.v[1] * pScreen->row_bytes + (int)map_pos.v[0]] = pColour;
         } else {
-            ((br_uint_16*)pScreen->pixels)[(int)map_pos.v[1] * pScreen->row_bytes + (int)map_pos.v[0]] = PaletteEntry16Bit(gRender_palette, pColour);
+            /* row_bytes is a byte stride (retail 0x496898: lea edx, [y * row_bytes + x * 2]) */
+            *(br_uint_16*)((br_uint_8*)pScreen->pixels + (int)map_pos.v[1] * pScreen->row_bytes + (int)map_pos.v[0] * 2) = PaletteEntry16Bit(gRender_palette, pColour);
         }
         if (gMap_view == 2) {
             PossibleUnlock(1);
@@ -1265,6 +1509,7 @@ br_uint_32 C2_HOOK_FASTCALL OppositeColour(br_uint_32 pColour) {
     }
 }
 
+// C2PORT-NONMATCHING: best 37.86% | difftest PASS 2000 trials (spec difftest/specs/00495a00_DrawArrow.json) | reason original loop register allocation differs; pixel plotting calls are traced
 // FUNCTION: CARMA2_HW 0x00495a00
 void C2_HOOK_FASTCALL DrawArrow(br_pixelmap* pScreen, br_uint_32 pArrow_index, const br_vector3 *pPos, br_uint_32 pColour) {
     int colours[2];
@@ -1434,17 +1679,18 @@ void C2_HOOK_FASTCALL DrawMapBlip(br_pixelmap* pScreen, tCar_spec* pCar, tU32 pT
     }
 }
 
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x0047d260
 void C2_HOOK_FASTCALL DRPixelmapBlendedLine(br_pixelmap* pMap, int pX1, int pY1, int pX2, int pY2, br_uint_32 pColour, br_pixelmap* pPalette) {
     br_uint_32 colour;
 
-    (void)pPalette;
     colour = pColour;
     if (gBack_screen->type != BR_PMT_INDEX_8) {
         colour = PaletteEntry16Bit(gRender_palette, colour);
     }
     BrPixelmapLine(pMap, pX1, pY1, pX2, pY2, colour);
 }
+#pragma auto_inline(on)
 
 void C2_HOOK_FASTCALL DR8BitFancyDrawLine(br_pixelmap* pMap, int pX1, int pY1, int pX2, int pY2, br_uint_32 pColour, tU32 pTime_period) {
     int anim_index;
@@ -1460,18 +1706,56 @@ void C2_HOOK_FASTCALL DR8BitFancyDrawLine(br_pixelmap* pMap, int pX1, int pY1, i
     }
 }
 
+// C2PORT-NONMATCHING: best 25.00% | difftest PASS 2000 trials (spec difftest/specs/0047d2b0_FancyDrawLine.json) | reason graphics-call-codegen-register-layout
 // FUNCTION: CARMA2_HW 0x0047d2b0
 void C2_HOOK_FASTCALL FancyDrawLine(br_pixelmap *pMap, int pX1, int pY1, int pX2, int pY2, br_uint_32 pColour, tU32 pTime_period) {
+    int anim_index;
+    int x_diff;
+    int y_diff;
+    br_uint_32 colour;
 
-    if (pMap->type == BR_PMT_INDEX_8) {
-        DR8BitFancyDrawLine(pMap, pX1, pY1, pX2, pY2, pColour, pTime_period);
-    } else {
+    if (pMap->type != BR_PMT_INDEX_8) {
         BrPixelmapLine(pMap, pX1, pY1, pX2, pY2, PaletteEntry16Bit(gRender_palette, pColour));
+        return;
+    }
+    x_diff = pX2 - pX1;
+    y_diff = pY2 - pY1;
+    anim_index = (PDGetTotalTime() / pTime_period) % 5;
+    colour = pColour;
+    if (gBack_screen->type != BR_PMT_INDEX_8) {
+        colour = PaletteEntry16Bit(gRender_palette, pColour);
+    }
+    BrPixelmapLine(pMap, pX1, pY1, pX2, pY2, colour);
+    if (fabsf((float)y_diff) < fabsf((float)x_diff)) {
+        colour = pColour;
+        if (gBack_screen->type != BR_PMT_INDEX_8) {
+            colour = PaletteEntry16Bit(gRender_palette, pColour);
+        }
+        BrPixelmapLine(pMap, pX1, pY1 - 1, pX2, pY2 - 1, colour);
+        colour = pColour;
+        if (gBack_screen->type != BR_PMT_INDEX_8) {
+            colour = PaletteEntry16Bit(gRender_palette, pColour);
+        }
+        BrPixelmapLine(pMap, pX1, pY1 + 1, pX2, pY2 + 1, colour);
+    } else {
+        DRPixelmapBlendedLine(pMap, pX1 - 1, pY1, pX2 - 1, pY2, pColour, gMini_map_glowing_line_palettes[gMini_map_glowing_line_animation_indices[anim_index]]);
+        DRPixelmapBlendedLine(pMap, pX1 + 1, pY1, pX2 + 1, pY2, pColour, gMini_map_glowing_line_palettes[gMini_map_glowing_line_animation_indices[anim_index]]);
     }
 }
 
+// FUNCTION: CARMA2_HW 0x0047d470
+void C2_HOOK_FASTCALL DrawBevelledRectangle(br_pixelmap* pMap, int pLeft, int pTop, int pWidth, int pHeight, br_uint_32 pColour) {
+    if (gBack_screen->type != BR_PMT_INDEX_8) {
+        pColour = PaletteEntry16Bit(gRender_palette, pColour);
+    }
+    BrPixelmapRectangleFill(pMap, pLeft, pTop + 1, pWidth, pHeight - 2, pColour);
+    BrPixelmapLine(pMap, pLeft, pTop, pLeft + pWidth - 1, pTop, pColour + 2);
+    BrPixelmapLine(pMap, pLeft, pTop + pHeight - 1, pLeft + pWidth - 1, pTop + pHeight - 1, pColour - 2);
+}
+
+// C2PORT-NONMATCHING: best 35.34% | difftest PASS 2000 trials (spec difftest/specs/0047d0d0_DR16BitPixelmapRotatedAndFeatheredCopy.json) | reason corrected stack signature; remaining VC5 x87 and loop layout
 // FUNCTION: CARMA2_HW 0x0047d0d0
-void C2_HOOK_FASTCALL DR16BitPixelmapRotatedAndFeatheredCopy(br_matrix23* pMat, br_pixelmap* pDest, tS16 pDest_x, tS16 pDest_y, br_pixelmap* pSrc, tS16 pSrc_x, tS16 pSrc_y, tS16 pSrc_width, tS16 pSrc_height) {
+void C2_HOOK_FASTCALL DR16BitPixelmapRotatedAndFeatheredCopy(br_matrix23* pMat, br_pixelmap* pDest, tS16 pDest_x, tS16 pDest_y, br_pixelmap* pSrc, tS16 pSrc_x, tS16 pSrc_y, tS16 pSrc_width, tS16 pSrc_height, int pTrans) {
     float base_x;
     float src_x0;
     float base_y;
@@ -1505,6 +1789,7 @@ void C2_HOOK_FASTCALL DR16BitPixelmapRotatedAndFeatheredCopy(br_matrix23* pMat, 
     }
 }
 
+// C2PORT-NONMATCHING: best 37.70% | difftest PASS 2000 trials (spec difftest/specs/0047cd40_DRPixelmapRotatedAndFeatheredCopy.json) | reason x87-order,register-allocation,stack-layout
 // FUNCTION: CARMA2_HW 0x0047cd40
 void C2_HOOK_FASTCALL DRPixelmapRotatedAndFeatheredCopy(br_matrix23* pMat, br_pixelmap* pDest, tS16 pDest_x, tS16 pDest_y, br_pixelmap* pSrc, tS16 pSrc_x, tS16 pSrc_y, tS16 pSrc_width, tS16 pSrc_height, int pTrans) {
     int width_div_2;
@@ -1522,18 +1807,20 @@ void C2_HOOK_FASTCALL DRPixelmapRotatedAndFeatheredCopy(br_matrix23* pMat, br_pi
     tU8 src_pix;
     float src_f_x;
     float src_f_y;
+    int width_full;
+    int height_full;
+    float height_half;
+    float f_src_x;
+    float f_src_y;
+    float xbase;
+    float ybase;
     tU8* ptr_write;
     int dy;
     int dx;
 
     if (pDest->type == BR_PMT_INDEX_8) {
-        int width_full = pSrc_width;
-        int height_full = pSrc_height;
-        float height_half;
-        float f_src_x;
-        float f_src_y;
-        float xbase;
-        float ybase;
+        width_full = pSrc_width;
+        height_full = pSrc_height;
 
         width_div_2 = width_full / 2;
         height_div_2 = height_full / 2;
@@ -1588,10 +1875,11 @@ void C2_HOOK_FASTCALL DRPixelmapRotatedAndFeatheredCopy(br_matrix23* pMat, br_pi
             }
         }
     } else {
-        DR16BitPixelmapRotatedAndFeatheredCopy(pMat, pDest, pDest_x, pDest_y, pSrc, pSrc_x, pSrc_y, pSrc_width, pSrc_height);
+        DR16BitPixelmapRotatedAndFeatheredCopy(pMat, pDest, pDest_x, pDest_y, pSrc, pSrc_x, pSrc_y, pSrc_width, pSrc_height, pTrans);
     }
 }
 
+// C2PORT-NONMATCHING: best 29.9% | difftest PASS 2000 trials (spec 0047d5b0_DRPixelmapCopyMapBlack.json) | reason pixel copy logic matches; VC5 loop code differs
 // FUNCTION: CARMA2_HW 0x0047d5b0
 void C2_HOOK_FASTCALL DRPixelmapCopyMapBlack(br_pixelmap* pDest, br_pixelmap* pSrc) {
     if (pDest->type == BR_PMT_INDEX_8) {
@@ -1684,3 +1972,4 @@ void C2_HOOK_FASTCALL RenderShadows(br_actor* pWorld, tTrack_spec* pTrack_spec, 
         }
     }
 }
+

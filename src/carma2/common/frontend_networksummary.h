@@ -9,8 +9,6 @@ extern tFrontend_spec gFrontend_NETWORK_SUMMARY;
 extern int gPlayer_lookup_netsummary[14];
 
 
-void C2_HOOK_FASTCALL NetworkSummarySetup(tFrontend_spec* pFrontend);
-
 int C2_HOOK_FASTCALL NetSummary_Infunc(tFrontend_spec* pFrontend);
 
 void C2_HOOK_FASTCALL DrawThisCarIconNow(int pCar_index, int pX, int pY);
