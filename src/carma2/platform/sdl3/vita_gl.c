@@ -3,6 +3,8 @@
  * transparent draws depend on restoring the exact texture/buffer state. */
 #include "vita_gl.h"
 #include "vita_pack.h"
+#include "vita_perf.h"
+#include "vita_glqueue.h"
 #include <vitaGL.h>
 #include <string.h>
 #include <stdarg.h>
@@ -23,7 +25,7 @@ enum { TEXTURE_SLOTS = 16384 };
  * glGetTexParameteriv reports before the first set). */
 static struct { GLint min, mag, s, t; unsigned char known; unsigned char content; unsigned short w, h; } textures[TEXTURE_SLOTS];
 /* content: what level 0 can make the BRender fragment shader discard (shader variants). */
-enum { TEXC_KNOWN = 1, TEXC_BLACK = 2, TEXC_LOW_ALPHA = 4 };
+enum { TEXC_KNOWN = 1, TEXC_BLACK = 2, TEXC_LOW_ALPHA = 4, TEXC_CUTOUT = 8 /* alpha only 0 or full */ };
 static GLuint uniform_buffer, vertex_array;
 static GLint bound_texture_2d(void);
 
@@ -51,6 +53,18 @@ static unsigned char texture_content(GLsizei w, GLsizei h, GLenum format, GLenum
             if ((p[0] | p[1] | p[2]) == 0) c |= TEXC_BLACK;
             if (p[3] <= 1) c |= TEXC_LOW_ALPHA;
         }
+        return c;
+    }
+    if (format == GL_RGBA && type == GL_UNSIGNED_SHORT_4_4_4_4) {
+        const unsigned short* p = (const unsigned short*)data;
+        int partial = 0;
+        for (i = 0; i < n; ++i) {
+            unsigned a = p[i] & 0xf;
+            if ((p[i] >> 4) == 0) c |= TEXC_BLACK;
+            if (a == 0) c |= TEXC_LOW_ALPHA;
+            else if (a != 0xf) partial = 1;
+        }
+        if ((c & TEXC_LOW_ALPHA) && !partial) c |= TEXC_CUTOUT;
         return c;
     }
     if (format == GL_RGB && type == GL_UNSIGNED_SHORT_5_6_5) {
@@ -179,7 +193,7 @@ static void measured_buffer_subdata(GLenum target, GLintptr offset, GLsizeiptr s
 static GLuint brender_main_program, current_program;
 static int brender_active;
 static GLuint (*brender_variant)(unsigned key);
-static unsigned variant_draws, variant_switches, variant_fallbacks;
+static unsigned variant_draws, variant_switches, variant_fallbacks, fast_draws, fast_switches;
 void C2VitaGLSetBrenderVariants(GLuint main_program, GLuint (*get)(unsigned key)) {
     brender_main_program = main_program;
     brender_variant = get;
@@ -201,6 +215,7 @@ static void tracked_use_program(GLuint program) {
     glUseProgram(program);
 }
 static GLint unit0_texture(void);
+static int shadow_blend_off(void);
 static void select_brender_variant(void) {
     unsigned key = 0, content;
     GLuint program;
@@ -215,6 +230,7 @@ static void select_brender_variant(void) {
         if (!(content & TEXC_KNOWN)) content = TEXC_BLACK | TEXC_LOW_ALPHA;
         if (!ubo_model.disable_colour_key && (content & TEXC_BLACK)) key |= 8;
         if (content & TEXC_LOW_ALPHA) key |= 16;
+        if ((content & TEXC_CUTOUT) && shadow_blend_off()) key |= 128; /* cut-out drawn unblended */
     }
     if (ubo_model.fog_enabled) key |= 32;
     if (ubo_model.lighting == 1 || ubo_model.prelit == 1) key |= 64;
@@ -263,6 +279,9 @@ static struct {
     GLenum active_unit;
     GLuint bound_2d[4];
 } gl_shadow;
+static int shadow_blend_off(void) {
+    return gl_shadow.blend == 1; /* known disabled */
+}
 void C2VitaGLInvalidateState(void) {
     memset(&gl_shadow, 0, sizeof(gl_shadow));
     brender_active = 0;
@@ -384,6 +403,38 @@ static GLint bound_texture_2d(void) {
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &id);
     return id;
 }
+extern void vglFastDrawElementsTexture(GLsizei count, const GLvoid* gl_indices);
+/* The next group of a stored model whose material state equals that of the group drawn last except
+ * for its texture (gstored.c): binds that texture with the filtering the last one was given and
+ * draws, reusing everything else of the last draw in vitaGL (patch 0006); when the texture needs
+ * another shader variant it is a normal draw. 0: not possible here (the caller draws normally). */
+int C2VitaGLFastTextureDraw(GLuint texture, GLsizei count, const void* offset) {
+    GLuint last, program;
+    GLint min, mag;
+    Uint64 start;
+    if (!brender_active || brender_variant == NULL || !ubo_model.valid || ubo_model.disable_texture
+            || !gl_shadow.units_valid || gl_shadow.active_unit != GL_TEXTURE0 || texture == 0 || texture >= TEXTURE_SLOTS
+            || C2VitaGLQueueActive()) {
+        return 0;
+    }
+    last = gl_shadow.bound_2d[0];
+    if (last == 0 || last >= TEXTURE_SLOTS || (textures[last].known & 3) != 3) return 0;
+    start = detail_ticks();
+    min = textures[last].min;
+    mag = textures[last].mag;
+    shadow_bind_texture(GL_TEXTURE_2D, texture);
+    tracked_tex_parameter(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, min);
+    tracked_tex_parameter(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, mag);
+    program = current_program;
+    select_brender_variant();
+    ++frame_draws;
+    stall_draws = frame_draws; stall_count = (unsigned)count; stall_mode = GL_TRIANGLES;
+    stall_program = (unsigned)current_program; stall_texture = texture;
+    if (current_program != program) { ++fast_switches; glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_SHORT, offset); }
+    else { ++fast_draws; vglFastDrawElementsTexture(count, offset); }
+    frame_draw_ms += detail_ticks() - start;
+    return 1;
+}
 static void shadow_delete_textures(GLsizei count, const GLuint* ids) {
     GLsizei i;
     unsigned u;
@@ -416,7 +467,11 @@ static void measured_blit(GLint sx0, GLint sy0, GLint sx1, GLint sy1,
     glBlitFramebuffer(sx0,sy0,sx1,sy1,dx0,dy0,dx1,dy1,mask,filter);
     frame_blit_ms += SDL_GetTicks() - start;
 }
+unsigned C2VitaGLWindowFrames; /* frames so far in the current 120-frame FPS window (test screenshots) */
+/* the time at the last frame swap (C2VitaGLFrameStats): a clock for checks that need no precision */
+unsigned long long C2VitaGLFrameNS;
 void C2VitaGLFrameStats(unsigned int frame, int world, unsigned long long interval, unsigned long long swap_ms) {
+    C2VitaGLFrameNS = SDL_GetTicksNS();
     static unsigned int world_frames;
     extern void C2VitaLog(const char* format, ...);
     int logged = frame <= 8 || (world && ++world_frames <= 30) || frame % 600 == 0;
@@ -433,14 +488,16 @@ void C2VitaGLFrameStats(unsigned int frame, int world, unsigned long long interv
             end0 = vgl_c2_swap_endscene_us; queue0 = vgl_c2_swap_queue_us; gc0 = vgl_c2_swap_gc_us;
         }
         ++window_frames;
+        C2VitaGLWindowFrames = window_frames % 120;
         window_world += world != 0;
         if (window_frames == 120) {
             Uint64 span = now - window_start;
             extern float GetYon(void); /* draw distance (depth.c) */
-            C2VitaLog("VITA FPS frames=120 world_frames=%u yon=%.0f span_ms=%llu fps=%.1f avg_frame_ms=%.1f swap_endscene_us=%u swap_queue_us=%u swap_gc_us=%u\n",
+            C2VitaLog("VITA FPS frames=120 world_frames=%u yon=%.0f span_ms=%llu fps=%.1f avg_frame_ms=%.1f swap_endscene_us=%u swap_queue_us=%u swap_gc_us=%u ab=%d\n",
                 window_world, (double)GetYon(), (unsigned long long)span, span ? 120000.0 / (double)span : 0.0, (double)span / 120.0,
                 (unsigned)((vgl_c2_swap_endscene_us - end0) / 120), (unsigned)((vgl_c2_swap_queue_us - queue0) / 120),
-                (unsigned)((vgl_c2_swap_gc_us - gc0) / 120));
+                (unsigned)((vgl_c2_swap_gc_us - gc0) / 120), C2VitaABName() != NULL ? C2VitaAB : -1);
+            if (C2VitaABName() != NULL) C2VitaAB = !C2VitaAB; /* in-run A/B: the next window runs the other variant */
             window_start = now;
             window_frames = window_world = 0;
             end0 = vgl_c2_swap_endscene_us; queue0 = vgl_c2_swap_queue_us; gc0 = vgl_c2_swap_gc_us;
@@ -465,9 +522,9 @@ void C2VitaGLFrameStats(unsigned int frame, int world, unsigned long long interv
         memset(frame_overlay_scope, 0, sizeof(frame_overlay_scope));
     }
     if (logged)
-        C2VitaLog("VITA VARIANT draws=%u fallbacks=%u switches=%u programs=%u\n",
-            variant_draws, variant_fallbacks, variant_switches, variant_program_count);
-    variant_draws = variant_fallbacks = variant_switches = 0;
+        C2VitaLog("VITA VARIANT draws=%u fallbacks=%u switches=%u programs=%u texture_only=%u (variant changed %u)\n",
+            variant_draws, variant_fallbacks, variant_switches, variant_program_count, fast_draws, fast_switches);
+    variant_draws = variant_fallbacks = variant_switches = fast_draws = fast_switches = 0;
     frame_overlay_checks = frame_overlay_empty = frame_overlay_rows = 0;
     frame_overlay_ns = 0;
     frame_draws = frame_vaos = frame_buffer_bytes = frame_upload_bytes = frame_gc_retries = 0;
@@ -643,7 +700,16 @@ static const char* const required[] = {
         "glViewport",
     };
 
+static void* vita_gl_lookup(const char* name);
+/* Every entry point goes through the GL command queue (vita_glqueue.c), which hands out its
+ * recording/waiting wrappers around the adapters below. */
 void* C2VitaGLGetProcAddress(const char* name) {
+    extern void* C2VitaGLQueueWrap(const char* pName, void* pOriginal);
+    void* function = vita_gl_lookup(name);
+    return function != NULL ? C2VitaGLQueueWrap(name, function) : NULL;
+}
+
+static void* vita_gl_lookup(const char* name) {
     unsigned int i;
 #define PROC(glname, function) if (strcmp(name, glname) == 0) return (void*)function
     PROC("glGenTextures", tracked_gen_textures);

@@ -144,6 +144,17 @@ void C2_HOOK_FASTCALL InitShadow(void) {
 
     gFancy_shadow = 1;
     gShadow_material = BrMaterialFind("SHADOW.MAT");
+#ifndef CARPOCALYPSE2_MATCHING
+    if (gShadow_material == NULL) {
+        /* SHADOW.MAT is not present in the retail data set; the fancy path
+         * uses the track materials instead, but keep a material around for
+         * the solid-shadow toggle. */
+        gShadow_material = BrMaterialAllocate(NULL);
+        gShadow_material->flags &= ~BR_MATF_LIGHT;
+        gShadow_material->flags |= BR_MATF_ALWAYS_VISIBLE;
+        BrMaterialAdd(gShadow_material);
+    }
+#endif
     BrVector3Set(&gShadow_light_ray, 0.f, -1.f, 0.f);
     BrVector3Set(&gShadow_light_z, 0.f, 0.f, -1.f);
     BrVector3Set(&gShadow_light_x, 1.f, 0.f, 0.f);
@@ -179,7 +190,19 @@ void C2_HOOK_FASTCALL DisposeSavedShadeTables(void) {
 
 // RenderLollipops
 
-// SetupDepthBuffer
+
+// FUNCTION: CARMA2_HW 0x004e4940
+void C2_HOOK_FASTCALL SetupDepthBuffer(void) {
+    if (gDepth_buffer != NULL) {
+        BrPixelmapFree(gDepth_buffer);
+        gDepth_buffer = NULL;
+    }
+    gDepth_buffer = BrPixelmapMatch(gBack_screen, BR_PMMATCH_DEPTH_16);
+    if (gDepth_buffer == NULL) {
+        FatalError(kFatalError_AllocateZBuffer);
+    }
+}
+
 
 // FUNCTION: CARMA2_HW 0x004e4980
 void C2_HOOK_FASTCALL SetBRenderScreenAndBuffers(int pX_offset, int pY_offset, int pWidth, int pHeight) {
@@ -340,6 +363,9 @@ void C2_HOOK_FASTCALL StopRenderingHeadups(void) {
     int i;
     br_actor* a;
 
+#ifdef __vita__
+    C2VitaPhasePush(C2VP_H_STOPPRE);
+#endif
     if (gCount_polyfont_glyph_actors != 0
 #if defined(__vita__) || defined(C2_GLYPH_BATCH)
             || C2VitaGlyphHasActors()
@@ -362,11 +388,13 @@ void C2_HOOK_FASTCALL StopRenderingHeadups(void) {
     gRender_screen->base_x = 0;
     gRender_screen->base_y = 0;
 #ifdef __vita__
+    C2VitaPhasePop();
     C2VitaPerfBegin(C2VP_HUD_GEOMETRY);
 #endif
     BrZbSceneRender(gHUD_root, gHUD_camera, gRender_screen, gDepth_buffer);
 #ifdef __vita__
     C2VitaPerfEnd(C2VP_HUD_GEOMETRY);
+    C2VitaPhasePush(C2VP_H_STOPPOST);
 #endif
     gRender_screen->origin_x = original_origin_x;
     gRender_screen->origin_y = original_origin_y;
@@ -384,6 +412,9 @@ void C2_HOOK_FASTCALL StopRenderingHeadups(void) {
     gHud_actor_storage_size = 0;
     CleanPolyFontDangler();
     gRender_poly_text = 1;
+#ifdef __vita__
+    C2VitaPhasePop();
+#endif
 #ifndef CARPOCALYPSE2_MATCHING
 #ifdef __vita__
     C2VitaPerfBegin(C2VP_HUD_REDRAW);
@@ -417,17 +448,48 @@ void C2_HOOK_FASTCALL DoTestHeadup(void) {
     static int do_headup_material;
 
     do_headup_material = !do_headup_material;
+#ifdef __vita__
+    {
+        static int logged;
+        if (!logged++) {
+            extern void C2VitaLog(const char* format, ...);
+            C2VitaLog("VITA HUD maps rev %s type %d %dx%d, damage %s type %d %dx%d\n",
+                gCurrent_rev->identifier ? gCurrent_rev->identifier : "?", gCurrent_rev->type, gCurrent_rev->width, gCurrent_rev->height,
+                gDamage_hud->identifier ? gDamage_hud->identifier : "?", gDamage_hud->type, gDamage_hud->width, gDamage_hud->height);
+        }
+    }
+#endif
     if (do_headup_material) {
+#ifdef __vita__
+        C2VitaPhasePush(C2VP_T_MAP);
+#endif
         BrMapUpdate(gCurrent_rev, BR_MAPU_ALL);
+#ifdef __vita__
+        C2VitaPhasePop();
+        C2VitaPhasePush(C2VP_T_MAT);
+#endif
         gStatbarHUD1_material->colour_map = gCurrent_rev;
         BrMaterialUpdate(gStatbarHUD1_material, BR_MATU_COLOURMAP);
+#ifdef __vita__
+        C2VitaPhasePop();
+#endif
         if (do_headup_material) {
             goto headup_material_done;
         }
     }
+#ifdef __vita__
+    C2VitaPhasePush(C2VP_T_MAP);
+#endif
     BrMapUpdate(gDamage_hud, BR_MAPU_ALL);
+#ifdef __vita__
+    C2VitaPhasePop();
+    C2VitaPhasePush(C2VP_T_MAT);
+#endif
     gStatbarHUD5_material->colour_map = gDamage_hud;
     BrMaterialUpdate(gStatbarHUD5_material, BR_MATU_COLOURMAP);
+#ifdef __vita__
+    C2VitaPhasePop();
+#endif
 headup_material_done:
     if (gNet_mode != eNet_mode_none) {
         if (gHeadup_detail_level % 3 > 0) {

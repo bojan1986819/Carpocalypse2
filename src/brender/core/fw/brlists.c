@@ -12,7 +12,6 @@ void C2_HOOK_CDECL BrNewList(br_list* list) {
     list->tail = (br_node*)list;
 }
 
-// C2PORT-NONMATCHING: best 10.53% | difftest PASS 2000 trials (spec difftest/specs/00529980_BrAddHead.json) | reason VC5 schedules list-link stores differently
 // FUNCTION: CARMA2_HW 0x00529980
 void C2_HOOK_CDECL BrAddHead(br_list* list, br_node* node) {
 
@@ -20,10 +19,9 @@ void C2_HOOK_CDECL BrAddHead(br_list* list, br_node* node) {
     assert(list != NULL);
     assert(list->head != NULL);
 
-    //node->prev = (br_node*)list;
-    node->prev = (br_node*)&(list->head);
+    node->prev = (br_node*)list;
     node->next = list->head;
-    list->head->prev = node;
+    node->next->prev = node;
     list->head = node;
 }
 

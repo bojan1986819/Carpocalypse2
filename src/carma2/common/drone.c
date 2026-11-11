@@ -651,7 +651,6 @@ void C2_HOOK_FASTCALL FreeThingForm(void* pData) {
     BrMemFree(pData);
 }
 
-// C2PORT-NONMATCHING: best 45.8% | difftest PASS 2000 trials (spec difftest/specs/0044fc10_DisposeDronesRaceStuff.json) | reason wrapper inlining and VC5 loop/register layout
 // FUNCTION: CARMA2_HW 0x0044fc10
 void C2_HOOK_FASTCALL DisposeDronesRaceStuff(void) {
     int i;
@@ -661,41 +660,39 @@ void C2_HOOK_FASTCALL DisposeDronesRaceStuff(void) {
     }
 
     for (i = 0; i < gCount_drones; i++) {
-        tDrone_spec* drone = &gDrone_specs[i];
 
-        if (drone->actor->parent != NULL) {
-            BrActorRemove(drone->actor);
+        if (gDrone_specs[i].actor->parent != NULL) {
+            BrActorRemove(gDrone_specs[i].actor);
         }
-        BrActorFree(drone->actor);
-        PHILRemoveObject(&drone->collision_info);
-        if (drone->field_0x46) {
-            FreeThingForm(drone->collision_info.shape);
-            drone->field_0x46 = 0;
+        BrActorFree(gDrone_specs[i].actor);
+        RemoveDroneFromPHIL(&gDrone_specs[i]);
+        if (gDrone_specs[i].field_0x46) {
+            FreeThingForm(gDrone_specs[i].collision_info.shape);
+            gDrone_specs[i].field_0x46 = 0;
         }
 
-        if (drone->funk_grooves != NULL) {
-            BrMemFree(drone->funk_grooves);
-            drone->funk_grooves = NULL;
+        if (gDrone_specs[i].funk_grooves != NULL) {
+            BrMemFree(gDrone_specs[i].funk_grooves);
+            gDrone_specs[i].funk_grooves = NULL;
         }
     }
 
     for (i = 0; i < gCount_drone_forms; i++) {
-        tDrone_form* form = &gDrone_forms[i];
 
-        if (form->field_0x80 != NULL) {
+        if (gDrone_forms[i].field_0x80 != NULL) {
             int j;
 
-            BrMemFree(form->field_0x80);
-            form->field_0x80 = NULL;
-            for (j = 0; j < form->count_models; j++) {
-                BrModelRemove(form->models[j]);
-                form->models[j]->nfaces = 0;
-                form->models[j]->faces = NULL;
-                BrModelFree(form->models[j]);
+            BrMemFree(gDrone_forms[i].field_0x80);
+            gDrone_forms[i].field_0x80 = NULL;
+            for (j = 0; j < gDrone_forms[i].count_models; j++) {
+                BrModelRemove(gDrone_forms[i].models[j]);
+                gDrone_forms[i].models[j]->nfaces = 0;
+                gDrone_forms[i].models[j]->faces = NULL;
+                BrModelFree(gDrone_forms[i].models[j]);
             }
-            if (form->models != NULL) {
-                BrMemFree(form->models);
-                form->models = NULL;
+            if (gDrone_forms[i].models != NULL) {
+                BrMemFree(gDrone_forms[i].models);
+                gDrone_forms[i].models = NULL;
             }
         }
     }
@@ -1946,31 +1943,29 @@ void C2_HOOK_FASTCALL CalcRenderBoundsCentre(void) {
 // FUNCTION: CARMA2_HW 0x0044cfd0
 void C2_HOOK_FASTCALL PipeDroneMatrix(tDrone_spec* pDrone) {
     tCompressed_matrix34 compressed_mat;
-    tS16 compressed_field_0x70;
-    tS16 compressed_field_0x48;
-    tS16 compressed_field_0x74;
+    br_scalar radius;
+    br_scalar speed;
 
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tDrone_spec, field_0x48, 0x48);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tDrone_spec, left_turn, 0xd8);
-    C2_HOOK_BUG_ON(sizeof(pDrone->left_turn) != 1);
+    BrVector3Set(&compressed_mat.m[0],
+        DRScalarToU16(pDrone->actor->t.t.mat.m[0][0], -1.f, 1.f),
+        DRScalarToU16(pDrone->actor->t.t.mat.m[0][1], -1.f, 1.f),
+        DRScalarToU16(pDrone->actor->t.t.mat.m[0][2], -1.f, 1.f));
+    BrVector3Set(&compressed_mat.m[1],
+        DRScalarToU16(pDrone->actor->t.t.mat.m[1][0], -1.f, 1.f),
+        DRScalarToU16(pDrone->actor->t.t.mat.m[1][1], -1.f, 1.f),
+        DRScalarToU16(pDrone->actor->t.t.mat.m[1][2], -1.f, 1.f));
+    BrVector3Set(&compressed_mat.m[2],
+        DRScalarToU16(pDrone->actor->t.t.mat.m[2][0], -1.f, 1.f),
+        DRScalarToU16(pDrone->actor->t.t.mat.m[2][1], -1.f, 1.f),
+        DRScalarToU16(pDrone->actor->t.t.mat.m[2][2], -1.f, 1.f));
+    BrVector3Set(&compressed_mat.m[3],
+        DRScalarToU16(pDrone->actor->t.t.mat.m[3][0], -1000.f, 1000.f),
+        DRScalarToU16(pDrone->actor->t.t.mat.m[3][1], -1000.f, 1000.f),
+        DRScalarToU16(pDrone->actor->t.t.mat.m[3][2], -1000.f, 1000.f));
 
-    compressed_mat.m[0].v[0] = DRScalarToU16(pDrone->actor->t.t.mat.m[0][0], -1.f, 1.f);
-    compressed_mat.m[0].v[1] = DRScalarToU16(pDrone->actor->t.t.mat.m[0][1], -1.f, 1.f);
-    compressed_mat.m[0].v[2] = DRScalarToU16(pDrone->actor->t.t.mat.m[0][2], -1.f, 1.f);
-    compressed_mat.m[1].v[0] = DRScalarToU16(pDrone->actor->t.t.mat.m[1][0], -1.f, 1.f);
-    compressed_mat.m[1].v[1] = DRScalarToU16(pDrone->actor->t.t.mat.m[1][1], -1.f, 1.f);
-    compressed_mat.m[1].v[2] = DRScalarToU16(pDrone->actor->t.t.mat.m[1][2], -1.f, 1.f);
-    compressed_mat.m[2].v[0] = DRScalarToU16(pDrone->actor->t.t.mat.m[2][0], -1.f, 1.f);
-    compressed_mat.m[2].v[1] = DRScalarToU16(pDrone->actor->t.t.mat.m[2][1], -1.f, 1.f);
-    compressed_mat.m[2].v[2] = DRScalarToU16(pDrone->actor->t.t.mat.m[2][2], -1.f, 1.f);
-    compressed_mat.m[3].v[0] = DRScalarToU16(pDrone->actor->t.t.mat.m[3][0], -1000.f, 1000.f);
-    compressed_mat.m[3].v[1] = DRScalarToU16(pDrone->actor->t.t.mat.m[3][1], -1000.f, 1000.f);
-    compressed_mat.m[3].v[2] = DRScalarToU16(pDrone->actor->t.t.mat.m[3][2], -1000.f, 1000.f);
-
-    compressed_field_0x70 = DRScalarToU16(MIN(100.f, pDrone->h_radius), 0.f, 100.f);
-    compressed_field_0x74 = DRScalarToU16(pDrone->field_0x74, 0.f, 1.f);
-    compressed_field_0x48 = DRScalarToU16(pDrone->left_turn ? pDrone->field_0x48 : -pDrone->field_0x48, -500.f, 500.f);
-    PipeSingleDroneCornerPos(pDrone, compressed_field_0x48, compressed_field_0x74, compressed_field_0x70, &compressed_mat);
+    radius = MIN(pDrone->h_radius, 100.f);
+    speed = pDrone->left_turn ? pDrone->field_0x48 : -pDrone->field_0x48;
+    PipeSingleDroneCornerPos(pDrone, DRScalarToU16(speed, -500.f, 500.f), DRScalarToU16(pDrone->field_0x74, 0.f, 1.f), DRScalarToU16(radius, 0.f, 100.f), &compressed_mat);
 }
 
 // FUNCTION: CARMA2_HW 0x004525c0
@@ -1988,6 +1983,21 @@ void C2_HOOK_FASTCALL SelectNextDrone(void) {
     sprintf(text, "Drone %d", gCurrent_selected_drone);
     NewTextHeadupSlot(4, 0, 3000, -1, text);
 }
+
+// FUNCTION: CARMA2_HW 0x00452620
+void C2_HOOK_FASTCALL SelectPreviousDrone(void) {
+    char text[64];
+
+    if (gCount_drones != 0) {
+        gCurrent_selected_drone--;
+        if (gCurrent_selected_drone < 0) {
+            gCurrent_selected_drone = gCount_drones - 1;
+        }
+    }
+    sprintf(text, "Drone %d", gCurrent_selected_drone);
+    NewTextHeadupSlot(4, 0, 3000, -1, text);
+}
+
 
 // FUNCTION: CARMA2_HW 0x004532e0
 void C2_HOOK_FASTCALL SelectNearestDrone(void) {
@@ -2128,7 +2138,7 @@ void C2_HOOK_FASTCALL StartRenderingThisDrone(tDrone_spec* pDrone) {
 br_vector3* C2_HOOK_FASTCALL GetCurrentViewDroneDirection(void) {
 
     StartRenderingThisDrone(&gDrone_specs[gCurrent_selected_drone]);
-    if (BrVector3LengthSquared(&gDrone_specs[gCurrent_selected_drone].field_0x18) > 0.f) {
+    if (BrVector3LengthSquared(&gDrone_specs[gCurrent_selected_drone].field_0x18) > gDrone_render_zero) {
         return &gDrone_specs[gCurrent_selected_drone].field_0x18;
     } else {
         return &gDefault_drone_direction;

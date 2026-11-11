@@ -65,6 +65,9 @@ extern int gNo_render_indent;
 extern int gNo_2d_effects;
 extern int gEnable_perspective_maps;
 extern int gDevious_2d;
+#ifndef CARPOCALYPSE2_MATCHING
+extern int gPort_blended_2d;
+#endif
 
 extern int gNumber_of_actors;
 extern br_actor* gActor_array[100];

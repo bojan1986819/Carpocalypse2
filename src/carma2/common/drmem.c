@@ -14,6 +14,7 @@
 #include "brender/brender.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include "c2_stdlib.h"
 #include "drmem.h"
 
@@ -373,6 +374,16 @@ static br_uint_32 C2_HOOK_CDECL C2CheckRegisteredItem(void* pItem, void* pName) 
 }
 
 static void C2CheckRegistries(const char* pTitle) {
+    /* test harness only (C2_TEST_REGISTRY): it walks every registry at each load scope and once a
+     * second in a race; the heap corruption it was added for (minimap blips) is fixed */
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        enabled = getenv("C2_TEST_REGISTRY") != NULL;
+    }
+    if (!enabled) {
+        return;
+    }
     gRegistry_check_title = pTitle != NULL ? pTitle : "";
     BrMaterialEnum(NULL, (br_material_enum_cbfn*)C2CheckRegisteredItem, "material");
     BrModelEnum(NULL, (br_model_enum_cbfn*)C2CheckRegisteredItem, "model");
@@ -390,6 +401,10 @@ void C2_HOOK_FASTCALL PrintMemoryDump(int pFlags, char* pTitle) {
 #ifdef __vita__
     /* These existing startup checkpoints are otherwise empty in the port. */
     C2VitaCheckpoint(pTitle);
+    {
+        extern void C2VitaMemTally(const char* pWhy);
+        C2VitaMemTally(pTitle);
+    }
 #endif
 #ifndef CARPOCALYPSE2_MATCHING
     C2CheckRegistries(pTitle);
@@ -414,6 +429,80 @@ void C2_HOOK_FASTCALL TouchMemoryPages(void* pMemory, br_size_t pSize) {
     (void)pSize;
 #endif
 }
+
+#ifdef __vita__
+#include <malloc.h>
+/* port diagnostics (playtest 00.70: out of memory after about 20 minutes of play): bytes in use per
+ * memory type, kept in a 16-byte header in front of every block; C2VitaMemTally logs them. */
+#define C2_MEM_HEADER 16
+#define C2_MEM_MAGIC 0xc2a110c8u
+static br_size_t gC2_mem_bytes[256];
+static unsigned gC2_mem_blocks[256];
+/* live bytes per (allocating caller, type) for a few types, set by BrResAllocate */
+void* gC2_mem_caller;
+#define C2_MEM_SITES 1024
+static struct { void* caller; unsigned type, blocks; br_size_t bytes; } gC2_mem_sites[C2_MEM_SITES];
+
+static int C2MemSite(void* pCaller, unsigned pType) {
+    unsigned h = (((unsigned)(uintptr_t)pCaller >> 1) * 2654435761u + pType) % C2_MEM_SITES;
+    unsigned n;
+
+    for (n = 0; n < C2_MEM_SITES; n++, h = (h + 1) % C2_MEM_SITES) {
+        if (gC2_mem_sites[h].caller == pCaller && gC2_mem_sites[h].type == pType) {
+            return (int)h;
+        }
+        if (gC2_mem_sites[h].caller == NULL) {
+            gC2_mem_sites[h].caller = pCaller;
+            gC2_mem_sites[h].type = pType;
+            return (int)h;
+        }
+    }
+    return -1;
+}
+
+void C2VitaMemTally(const char* pWhy) {
+    static br_size_t last_bytes[256];
+    struct mallinfo memory = mallinfo();
+    br_size_t total = 0;
+    int i;
+    int order[256];
+    int n = 0;
+
+    for (i = 0; i < 256; i++) {
+        total += gC2_mem_bytes[i];
+        if (gC2_mem_bytes[i] != 0 || last_bytes[i] != 0) {
+            order[n++] = i;
+        }
+    }
+    C2VitaLog("MEM TALLY %s: heap_used=%u game=%u other=%u\n", pWhy, (unsigned)memory.uordblks, (unsigned)total,
+        (unsigned)(memory.uordblks - total));
+    if (strstr(pWhy, "DISPOSING TRACK") != NULL) {
+        for (i = 0; i < C2_MEM_SITES; i++) {
+            if (gC2_mem_sites[i].caller != NULL && gC2_mem_sites[i].bytes >= 16384) {
+                C2VitaLog("MEM SITE caller=%p type=%u bytes=%u blocks=%u\n", gC2_mem_sites[i].caller,
+                    gC2_mem_sites[i].type, (unsigned)gC2_mem_sites[i].bytes, gC2_mem_sites[i].blocks);
+            }
+        }
+    }
+    for (i = 1; i < n; i++) {
+        int t = order[i], j = i;
+        while (j > 0 && gC2_mem_bytes[order[j - 1]] < gC2_mem_bytes[t]) {
+            order[j] = order[j - 1];
+            j--;
+        }
+        order[j] = t;
+    }
+    for (i = 0; i < n; i++) {
+        int t = order[i];
+        long delta = (long)gC2_mem_bytes[t] - (long)last_bytes[t];
+        if (i < 12 || delta > 32768 || delta < -32768) {
+            C2VitaLog("MEM TYPE %3d %-28s bytes=%u blocks=%u delta=%ld\n", t, gMem_names[t] ? gMem_names[t] : "?",
+                (unsigned)gC2_mem_bytes[t], gC2_mem_blocks[t], delta);
+        }
+        last_bytes[t] = gC2_mem_bytes[t];
+    }
+}
+#endif
 
 // FUNCTION: CARMA2_HW 0x0044c8c0
 void* C2_HOOK_CDECL DRStdlibAllocate(br_size_t size, br_uint_8 type) {
@@ -445,17 +534,35 @@ void* C2_HOOK_CDECL DRStdlibAllocate(br_size_t size, br_uint_8 type) {
     return NULL;
 #else
     if (size != 0) {
-        p = malloc(size);
 #ifdef __vita__
+        p = malloc(size + C2_MEM_HEADER);
         if (p == NULL) {
             C2VitaPackCacheClear();
-            p = malloc(size);
+            p = malloc(size + C2_MEM_HEADER);
         }
+        if (p != NULL) {
+            br_uint_32* header = p;
+            header[0] = C2_MEM_MAGIC;
+            header[1] = (br_uint_32)size;
+            header[2] = type;
+            header[3] = (br_uint_32)C2MemSite(gC2_mem_caller != NULL ? gC2_mem_caller : __builtin_return_address(0), type);
+            gC2_mem_caller = NULL;
+            if ((int)header[3] >= 0) {
+                gC2_mem_sites[header[3]].bytes += size;
+                gC2_mem_sites[header[3]].blocks++;
+            }
+            gC2_mem_bytes[type] += size;
+            gC2_mem_blocks[type]++;
+            p = (char*)p + C2_MEM_HEADER;
+        }
+#else
+        p = malloc(size);
 #endif
         if (p == NULL && !gNon_fatal_allocation_errors) {
 #ifdef __vita__
             C2VitaLog("ALLOCATION FAILED type=%u bytes=%u\n", (unsigned)type, (unsigned)size);
             C2VitaCheckpoint("allocation failure");
+            C2VitaMemTally("allocation failure");
 #endif
             sprintf(s, "%s/%d", gMem_names[type], size);
             FatalError(kFatalError_OOM_S, s);
@@ -474,6 +581,22 @@ void C2_HOOK_CDECL DRStdlibFree(void* mem) {
         FatalError(kFatalError_OOM_S, "NULL POINTER BEING FREED");
     }
     HeapFree(GetProcessHeap(), 0, mem);
+#elif defined(__vita__)
+    {
+        br_uint_32* header = (br_uint_32*)((char*)mem - C2_MEM_HEADER);
+        if (header[0] == C2_MEM_MAGIC) {
+            header[0] = 0;
+            gC2_mem_bytes[header[2] & 0xff] -= header[1];
+            gC2_mem_blocks[header[2] & 0xff]--;
+            if (header[3] < C2_MEM_SITES) {
+                gC2_mem_sites[header[3]].bytes -= header[1];
+                gC2_mem_sites[header[3]].blocks--;
+            }
+            free(header);
+        } else {
+            free(mem);
+        }
+    }
 #else
     free(mem);
 #endif

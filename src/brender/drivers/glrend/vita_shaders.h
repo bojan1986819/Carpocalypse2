@@ -80,6 +80,7 @@ static const char VITA_BRENDER_FRAG[] = VITA_CG_BUFFERS
  *   C2_CLIP  scene clip planes      C2_ENV  environment-mapped UVs (uv_source 1/2)
  *   C2_TEX   textured               C2_KEY  colour-key discard (texture has pure black texels)
  *   C2_ALPHA alpha-test discard     C2_FOG  fog         C2_MOD  vertex colour modulation
+ *   C2_CUTOUT an unblended cut-out texture: alpha test at one half (filtered edges stay sharp)
  * Without C2_KEY / C2_ALPHA the shader has no discard, which keeps the PowerVR hidden surface
  * removal working; they are dropped only when the texture has no texel that could be discarded. */
 #define VITA_CG_BUFFERS_VARIANT \
@@ -147,7 +148,7 @@ static const char VITA_BRENDER_VARIANT_FRAG[] = VITA_CG_BUFFERS_VARIANT
 "#if C2_TEX\n"
 " float4 t=tex2D(main_texture,uv);\n"
 "#if C2_KEY\n if(all(t.rgb==float3(0,0,0))) discard;\n#endif\n"
-"#if C2_ALPHA\n clip(t.a-0.004);\n#endif\n"
+"#if C2_ALPHA\n clip(t.a-(C2_CUTOUT ? 0.5 : 0.004));\n#endif\n"
 " float4 result=float4(t.rgb,br_model_state.alpha*t.a);\n"
 "#else\n"
 " float4 result=float4(br_model_state.surface_colour.rgb,br_model_state.alpha);\n"

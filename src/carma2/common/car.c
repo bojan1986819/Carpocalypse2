@@ -1615,7 +1615,31 @@ int C2_HOOK_FASTCALL IncidentCam(tCar_spec* c, tU32 pTime) {
 
 #pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004ff530
-void C2_HOOK_FASTCALL ResetCarSpecialVolume(tPhysics_object* pCollision_info) {
+void C2_HOOK_FASTCALL ResetCarSpecialVolume(tPhysics_object* pObject) {
+#ifdef CARPOCALYPSE2_MATCHING
+    br_vector3 direction;
+    br_vector3 normal;
+    br_scalar distance;
+    br_material* material;
+    tSpecial_volume* volume;
+    char* mat_id;
+
+    volume = NULL;
+    BrVector3Set(&direction, 0.f, 200.f, 0.f);
+    DisablePlingMaterials();
+    FindFace(&pObject->actor->t.t.translate.t, &direction, &normal, &distance, &material);
+    EnablePlingMaterials();
+    if (distance < 100.f && material != NULL) {
+        mat_id = material->identifier;
+        if (mat_id != NULL) {
+            if (strlen(mat_id) != 0 && (mat_id[0] == '!' || mat_id[0] == '#')) {
+                volume = gDefault_water_spec_vol_real;
+            }
+        }
+    }
+    pObject->auto_special_volume = volume;
+    pObject->water_depth_factor = 1.f;
+#else
     br_vector3 cast_v;
     br_vector3 norm;
     br_scalar t;
@@ -1627,7 +1651,7 @@ void C2_HOOK_FASTCALL ResetCarSpecialVolume(tPhysics_object* pCollision_info) {
     new_special_volume = NULL;
     BrVector3Set(&cast_v, 0.f, 200.f, 0.f);
     DisablePlingMaterials();
-    FindFace(&pCollision_info->actor->t.t.translate.t, &cast_v, &norm, &t, &material);
+    FindFace(&pObject->actor->t.t.translate.t, &cast_v, &norm, &t, &material);
     EnablePlingMaterials();
     if (t < 100.0f && material != NULL) {
         mat_id = material->identifier;
@@ -1638,8 +1662,9 @@ void C2_HOOK_FASTCALL ResetCarSpecialVolume(tPhysics_object* pCollision_info) {
             }
         }
     }
-    pCollision_info->auto_special_volume = new_special_volume;
-    pCollision_info->water_depth_factor = 1.0f;
+    pObject->auto_special_volume = new_special_volume;
+    pObject->water_depth_factor = 1.0f;
+#endif
 }
 #pragma auto_inline(on)
 
@@ -2134,6 +2159,162 @@ void C2_HOOK_FASTCALL InitialiseCar(tCar_spec* pCar) {
     InitialiseCar2(pCar, 1);
 }
 
+#ifndef CARPOCALYPSE2_MATCHING
+/* port: the chase camera's distance depends only on gCamera_zoom (sqrt(zoom) + 4 / WORLD_SCALE), so with a big
+ * vehicle the default view sits inside it and the player has to zoom out by hand each time. The zoom the player
+ * ends a race with is remembered per vehicle (CAMZOOM.CFG) and used at the next race start with that vehicle; a
+ * vehicle without one gets the normal-car zoom, raised for a vehicle longer than a normal car (playtest 00.75:
+ * the full proportional raise was a bit too far, so 60% of it). */
+#define C2PORT_CAMERA_REF_LENGTH 0.85f /* normal cars are 0.62-0.87 long (Funfair field, 00.75 log) */
+#define C2PORT_CAMERA_RAISE 0.6f
+#define C2PORT_CAMZOOM_SLOTS 64
+static struct { char name[32]; float zoom; } C2PortCamZoom[C2PORT_CAMZOOM_SLOTS];
+static int C2PortCamZoomCount = -1;
+static float C2PortNormalZoom = -1.f;
+static char C2PortCamCar[32];
+
+static void C2PortCamZoomLoad(void) {
+    tPath_name the_path;
+    FILE* f;
+    char line[96];
+
+    C2PortCamZoomCount = 0;
+    PathCat(the_path, gApplication_path, "CAMZOOM.CFG");
+    f = DRfopen(the_path, "rt");
+    if (f == NULL) {
+        return;
+    }
+    while (C2PortCamZoomCount < C2PORT_CAMZOOM_SLOTS && fgets(line, sizeof(line), f) != NULL) {
+        char name[32];
+        float zoom;
+
+        if (sscanf(line, "%31s %f", name, &zoom) == 2 && zoom > 0.f && zoom <= 2.f) {
+            if (strcmp(name, "*") == 0) {
+                C2PortNormalZoom = zoom;
+                continue;
+            }
+            strcpy(C2PortCamZoom[C2PortCamZoomCount].name, name);
+            C2PortCamZoom[C2PortCamZoomCount].zoom = zoom;
+            C2PortCamZoomCount++;
+        }
+    }
+    fclose(f);
+}
+
+static void C2PortCamZoomSave(void) {
+    tPath_name the_path;
+    FILE* f;
+    int i;
+
+    PathCat(the_path, gApplication_path, "CAMZOOM.CFG");
+    f = DRfopen(the_path, "wt");
+    if (f == NULL) {
+        return;
+    }
+    if (C2PortNormalZoom > 0.f) {
+        fprintf(f, "* %f\n", C2PortNormalZoom);
+    }
+    for (i = 0; i < C2PortCamZoomCount; i++) {
+        fprintf(f, "%s %f\n", C2PortCamZoom[i].name, C2PortCamZoom[i].zoom);
+    }
+    fclose(f);
+}
+
+static void C2PortCarKey(tCar_spec* pCar, char* pKey) {
+    int i;
+
+    /* the car file name without blanks, so the file stays "name zoom" per line */
+    for (i = 0; i < 31 && pCar->name[i] != '\0'; i++) {
+        pKey[i] = pCar->name[i] == ' ' ? '_' : pCar->name[i];
+    }
+    pKey[i] = '\0';
+}
+
+/* race end (mainloop.c): remember the zoom the race ended with for the vehicle it was driven with */
+void C2PortCameraRaceEnd(void) {
+    br_scalar length;
+    int i;
+
+    if (C2PortCamCar[0] == '\0' || gProgram_state.current_car.collision_info == NULL) {
+        return;
+    }
+    length = gProgram_state.current_car.collision_info->bb1.max.v[2] - gProgram_state.current_car.collision_info->bb1.min.v[2];
+    if (length <= C2PORT_CAMERA_REF_LENGTH) {
+        C2PortNormalZoom = gCamera_zoom;
+    }
+    for (i = 0; i < C2PortCamZoomCount && strcmp(C2PortCamZoom[i].name, C2PortCamCar) != 0; i++) {
+    }
+    if (i == C2PortCamZoomCount) {
+        if (C2PortCamZoomCount == C2PORT_CAMZOOM_SLOTS) {
+            return;
+        }
+        C2PortCamZoomCount++;
+        strcpy(C2PortCamZoom[i].name, C2PortCamCar);
+    }
+    C2PortCamZoom[i].zoom = gCamera_zoom;
+    dr_dprintf("CARSIZE camera zoom %.3f remembered for '%s' (length %.3f)", gCamera_zoom, C2PortCamCar, length);
+    C2PortCamZoomSave();
+}
+
+static void C2PortCarSizeCamera(void) {
+    int cat;
+    int i;
+    int count;
+    tCar_spec* car;
+    br_scalar length;
+    br_scalar d;
+    br_scalar need;
+
+    for (cat = eVehicle_self; cat <= eVehicle_opponent; cat++) {
+        count = cat == eVehicle_self ? 1 : GetCarCount(cat);
+        for (i = 0; i < count; i++) {
+            car = cat == eVehicle_self ? &gProgram_state.current_car : GetCarSpec(cat, i);
+            if (car == NULL || car->collision_info == NULL) {
+                continue;
+            }
+            dr_dprintf("CARSIZE '%s' '%s' bb1=(%.3f %.3f %.3f)", car->driver_name, car->name,
+                car->collision_info->bb1.max.v[0] - car->collision_info->bb1.min.v[0],
+                car->collision_info->bb1.max.v[1] - car->collision_info->bb1.min.v[1],
+                car->collision_info->bb1.max.v[2] - car->collision_info->bb1.min.v[2]);
+        }
+    }
+    car = &gProgram_state.current_car;
+    C2PortCamCar[0] = '\0';
+    if (car->collision_info == NULL || gNet_mode != eNet_mode_none) {
+        return;
+    }
+    if (C2PortCamZoomCount < 0) {
+        C2PortCamZoomLoad();
+    }
+    if (C2PortNormalZoom <= 0.f) {
+        C2PortNormalZoom = gCamera_zoom;
+    }
+    C2PortCarKey(car, C2PortCamCar);
+    for (i = 0; i < C2PortCamZoomCount; i++) {
+        if (strcmp(C2PortCamZoom[i].name, C2PortCamCar) == 0) {
+            gCamera_zoom = C2PortCamZoom[i].zoom;
+            dr_dprintf("CARSIZE camera zoom %.3f (remembered) for '%s'", gCamera_zoom, C2PortCamCar);
+            return;
+        }
+    }
+    gCamera_zoom = C2PortNormalZoom;
+    length = car->collision_info->bb1.max.v[2] - car->collision_info->bb1.min.v[2];
+    if (length <= C2PORT_CAMERA_REF_LENGTH) {
+        return;
+    }
+    d = (sqrtf(gCamera_zoom) + 4.f / WORLD_SCALE) * (1.f + C2PORT_CAMERA_RAISE * (length / C2PORT_CAMERA_REF_LENGTH - 1.f))
+        - 4.f / WORLD_SCALE;
+    need = d * d;
+    if (need > 2.f) {
+        need = 2.f;
+    }
+    if (need > gCamera_zoom) {
+        dr_dprintf("CARSIZE camera zoom %.3f -> %.3f for '%s' length %.3f", gCamera_zoom, need, C2PortCamCar, length);
+        gCamera_zoom = need;
+    }
+}
+#endif
+
 // FUNCTION: CARMA2_HW 0x00414410
 void C2_HOOK_FASTCALL InitialiseCarsEtc(tRace_info* pThe_race) {
     int i;
@@ -2174,6 +2355,9 @@ void C2_HOOK_FASTCALL InitialiseCarsEtc(tRace_info* pThe_race) {
     if (gUnknown_car_collision_info != NULL && gProgram_state.current_car.collision_info != gUnknown_car_collision_info->parent) {
         AddCollisionInfoChild(gProgram_state.current_car.collision_info, gUnknown_car_collision_info);
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    C2PortCarSizeCamera();
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004148d0
@@ -2631,7 +2815,26 @@ void C2_HOOK_FASTCALL MungeSomeOtherCarGraphics(void) {
 
 // FUNCTION: CARMA2_HW 0x00413780
 void C2_HOOK_FASTCALL GetAverageGridPosition(tRace_info* pThe_race) {
+#ifdef CARPOCALYPSE2_MATCHING
+    int i;
+    br_scalar total_cars;
+    tCar_spec* car;
 
+    total_cars = 0.0f;
+    BrVector3SetFloat(&gAverage_grid_position, 0.0f, 0.0f, 0.0f);
+    if (pThe_race->number_of_racers <= 2) {
+        BrVector3Copy(&gAverage_grid_position, &gProgram_state.current_car.pos);
+    } else {
+        for (i = 0; i < pThe_race->number_of_racers; i++) {
+            car = pThe_race->opponent_list[i].car_spec;
+            BrVector3Accumulate(&gAverage_grid_position, &car->pos);
+            total_cars += 1.0f;
+        }
+        gAverage_grid_position.v[0] /= total_cars;
+        gAverage_grid_position.v[1] /= total_cars;
+        gAverage_grid_position.v[2] /= total_cars;
+    }
+#else
     BrVector3SetFloat(&gAverage_grid_position, 0.0f, 0.0f, 0.0f);
     if (pThe_race->number_of_racers <= 2) {
         BrVector3Copy(&gAverage_grid_position, &gProgram_state.current_car.pos);
@@ -2649,6 +2852,7 @@ void C2_HOOK_FASTCALL GetAverageGridPosition(tRace_info* pThe_race) {
         }
         BrVector3InvScale(&gAverage_grid_position, &gAverage_grid_position, total_cars);
     }
+#endif
 }
 
 // C2PORT-NONMATCHING: best 45.73% | difftest PASS 2000 trials (spec difftest/specs/00413860_PickActionReplayManualCameraTarget.json) | reason x87-order, regalloc-loop
@@ -2777,19 +2981,39 @@ void C2_HOOK_FASTCALL PickActionReplayManualCameraTarget(int pCursor_x, int pCur
 }
 
 // FUNCTION: CARMA2_HW 0x00413d00
-void C2_HOOK_FASTCALL AddEngineDamage(int pAmount) {
-
-    if (pAmount > 0) {
-        gProgram_state.current_car.damage_units[eDamage_engine].damage_level += pAmount;
+void C2_HOOK_FASTCALL AddEngineDamage(int pDamage_amount) {
+#ifdef CARPOCALYPSE2_MATCHING
+    DamageUnit(&gProgram_state.current_car, eDamage_engine, pDamage_amount);
+    SortOutSmoke(&gProgram_state.current_car);
+#else
+    if (pDamage_amount > 0) {
+        gProgram_state.current_car.damage_units[eDamage_engine].damage_level += pDamage_amount;
         if (gProgram_state.current_car.damage_units[eDamage_engine].damage_level >= 100) {
             gProgram_state.current_car.damage_units[eDamage_engine].damage_level = 99;
         }
     }
     SortOutSmoke(&gProgram_state.current_car);
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004207e0
 void C2_HOOK_FASTCALL AdjustNonCar(br_actor* pActor, const br_matrix34* pMatrix) {
+#ifdef CARPOCALYPSE2_MATCHING
+    tU8 column_x;
+    tU8 column_z;
+    br_actor* parent;
+
+    BrMatrix34Copy(&pActor->t.t.mat, pMatrix);
+    if (pActor->parent == gNon_track_actor) {
+        return;
+    }
+    XZToColumnXZ(&column_x, &column_z, pActor->t.t.mat.m[3][0], pActor->t.t.mat.m[3][2], &gProgram_state.track_spec);
+    parent = gProgram_state.track_spec.columns[column_z][column_x].actor_0x0;
+    if (parent != pActor->parent && parent != NULL) {
+        BrActorRemove(pActor);
+        BrActorAdd(gProgram_state.track_spec.columns[column_z][column_x].actor_0x0, pActor);
+    }
+#else
     tU8 column_x;
     tU8 column_z;
 
@@ -2801,6 +3025,7 @@ void C2_HOOK_FASTCALL AdjustNonCar(br_actor* pActor, const br_matrix34* pMatrix)
             BrActorAdd(gProgram_state.track_spec.columns[column_z][column_x].actor_0x0, pActor);
         }
     }
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00420880
@@ -4016,6 +4241,15 @@ tNon_car_spec* C2_HOOK_FASTCALL PullActorFromWorld(br_actor* actor) {
 
 // FUNCTION: CARMA2_HW 0x004b5970
 float C2_HOOK_FASTCALL GetFrictionFromFace(void *arg1) {
+#ifdef CARPOCALYPSE2_MATCHING
+    tFace_ref* face = (tFace_ref*)arg1;
+    char gKev_code = face->material->identifier[0];
+    int idx = gKev_code - 0x2f;
+    if (idx < 0 || idx >= 11) {
+        idx = 0;
+    }
+    return gFriction_materials[idx].car_wall_friction;
+#else
     void *ptr = *(void **)arg1;
     char code = *(char *)*(void **)((char *)ptr + 4);
     int idx = code - 0x2f;
@@ -4023,6 +4257,7 @@ float C2_HOOK_FASTCALL GetFrictionFromFace(void *arg1) {
         idx = 0;
     }
     return gFriction_materials[idx].car_wall_friction;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00417de0
@@ -4443,6 +4678,30 @@ int C2_HOOK_FASTCALL RestorePixelmap(br_material* pMaterial) {
 
 // FUNCTION: CARMA2_HW 0x0040e700
 void C2_HOOK_FASTCALL MungeCarMaterials(tCar_spec* pCar, int pInternal_cam) {
+#ifdef CARPOCALYPSE2_MATCHING
+    int i;
+
+    for (i = 0; i < pCar->count_window_materials; i++) {
+        int internal_map_missing = pInternal_cam;
+
+        if (pInternal_cam) {
+            int j;
+
+            for (j = 0; j < pCar->window_materials[i].count_maps; j++) {
+                if (pCar->window_materials[i].material->colour_map == pCar->window_materials[i].maps[j]) {
+                    internal_map_missing = 0;
+                }
+            }
+            if (internal_map_missing) {
+                pCar->window_materials[i].material->flags &= ~BR_MATF_TWO_SIDED;
+            }
+        }
+        if (!internal_map_missing) {
+            pCar->window_materials[i].material->flags |= BR_MATF_TWO_SIDED;
+        }
+        BrMaterialUpdate(pCar->window_materials[i].material, BR_MATU_RENDERING);
+    }
+#else
     int i;
     tCarCockpitMaterial* cockpit_material;
 
@@ -4466,10 +4725,37 @@ void C2_HOOK_FASTCALL MungeCarMaterials(tCar_spec* pCar, int pInternal_cam) {
         }
         BrMaterialUpdate(cockpit_material->material, BR_MATU_RENDERING);
     }
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x0040f510
 void C2_HOOK_FASTCALL CheckDisablePlingMaterials(tCar_spec* pCar) {
+#ifdef CARPOCALYPSE2_MATCHING
+    br_matrix34* mat;
+    br_scalar height;
+    int i;
+
+    height = gFLOAT_00589418;
+    if (pCar->collision_info->water_d != 10000.f) {
+        mat = &pCar->car_master_actor->t.t.mat;
+        for (i = 0; i < 3; i++) {
+            if (mat->m[i][1] > gFLOAT_00589418) {
+                height += pCar->collision_info->bb2.max.v[i] * mat->m[i][1];
+            } else {
+                height += pCar->collision_info->bb2.min.v[i] * mat->m[i][1];
+            }
+        }
+        {
+            br_scalar d = mat->m[3][1] / WORLD_SCALE;
+
+            if (d + height < pCar->collision_info->water_d) {
+                DisablePlingMaterials();
+            }
+        }
+    } else {
+        DisablePlingMaterials();
+    }
+#else
     br_matrix34* mat;
     br_scalar height;
     int i;
@@ -4490,6 +4776,7 @@ void C2_HOOK_FASTCALL CheckDisablePlingMaterials(tCar_spec* pCar) {
     } else {
         DisablePlingMaterials();
     }
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x0040f590
@@ -5492,7 +5779,6 @@ __inline void C2_HOOK_FASTCALL StopSkid(tCar_spec* pC) {
     }
 }
 
-// FUNCTION: CARMA2_HW 0x00415890
 #ifdef __vita__
 /* pre-collision breakdown for the physics spike log */
 unsigned long long C2VitaPreFacesNS, C2VitaPreCarNS, C2VitaPreNonCarNS;
@@ -5502,6 +5788,127 @@ extern unsigned long long C2VitaGLTicksNS(void);
 #else
 #define C2_PRE_T(acc, cnt, stmt) stmt
 #endif
+#ifndef CARPOCALYPSE2_MATCHING
+/* port: finds where a NaN velocity comes from (playtests 00.73-00.75: a wasted opponent's physics object got
+ * v/omega = NaN every tick). At the start of the pre-collision pass every object is finite (physics.c repairs them
+ * after DoCollisions), so the first probe that sees a NaN names the stage that made it. */
+static int C2PortProbeLogs;
+static int C2PortProbeBad(tPhysics_object* pObject) {
+    const float* f[4];
+    int i;
+    int k;
+
+    f[0] = pObject->v.v; f[1] = pObject->omega.v; f[2] = pObject->pos.v; f[3] = &pObject->transform_matrix.m[3][0];
+    for (k = 0; k < 4; k++) {
+        for (i = 0; i < 3; i++) {
+            if (f[k][i] != f[k][i] || f[k][i] - f[k][i] != 0.f) {
+                return 1;
+            }
+        }
+    }
+    return pObject->M != pObject->M;
+}
+static void C2PortProbe(const char* pStage, tPhysics_object* pObject, const char* pWho, int* pSeen) {
+    if (*pSeen || C2PortProbeLogs >= 60 || pObject == NULL || !C2PortProbeBad(pObject)) {
+        return;
+    }
+    *pSeen = 1;
+    C2PortProbeLogs++;
+    dr_dprintf("NANPROBE %s obj=%p who='%s' v=(%g,%g,%g) omega=(%g,%g,%g) M=%g I=(%g,%g,%g)", pStage, (void*)pObject,
+        pWho != NULL ? pWho : "-", pObject->v.v[0], pObject->v.v[1], pObject->v.v[2], pObject->omega.v[0],
+        pObject->omega.v[1], pObject->omega.v[2], pObject->M, pObject->I.v[0], pObject->I.v[1], pObject->I.v[2]);
+}
+static void C2PortProbeAll(const char* pStage, int* pSeen) {
+    tPhysics_object* o;
+
+    for (o = gList_collision_infos; o != NULL && !*pSeen; o = o->next) {
+        C2PortProbe(pStage, o, "list", pSeen);
+    }
+}
+/* port: the NaN that keeps coming back (playtest 00.75: wasted 'VLAD' every tick after physics.c had repaired its
+ * v/omega) lives in the car spec itself. Each car's words that already look like NaN on first sight are remembered;
+ * when MoveAndCollideCar leaves the car's physics object NaN, every other NaN/inf float of the car spec is logged by
+ * offset and zeroed, so the next tick starts from finite numbers. */
+#define C2PORT_SPEC_CARS 32
+#define C2PORT_SPEC_WORDS ((sizeof(tCar_spec) + 3) / 4)
+static struct {
+    tCar_spec* car;
+    unsigned char seen_bad[(C2PORT_SPEC_WORDS + 7) / 8];
+} C2PortSpecBase[C2PORT_SPEC_CARS];
+static int C2PortSpecLogs;
+static int C2PortWordBad(tU32 w) {
+    return (w & 0x7f800000u) == 0x7f800000u && w != 0xffffffffu;
+}
+static int C2PortSpecSlot(tCar_spec* pCar) {
+    int i;
+    size_t k;
+    const tU32* w = (const tU32*)pCar;
+
+    for (i = 0; i < C2PORT_SPEC_CARS; i++) {
+        if (C2PortSpecBase[i].car == pCar) {
+            return i;
+        }
+    }
+    for (i = 0; i < C2PORT_SPEC_CARS; i++) {
+        if (C2PortSpecBase[i].car == NULL) {
+            break;
+        }
+    }
+    if (i == C2PORT_SPEC_CARS) {
+        i = (int)(((size_t)pCar >> 4) % C2PORT_SPEC_CARS);
+    }
+    C2PortSpecBase[i].car = pCar;
+    memset(C2PortSpecBase[i].seen_bad, 0, sizeof(C2PortSpecBase[i].seen_bad));
+    for (k = 0; k < sizeof(tCar_spec) / 4; k++) {
+        if (C2PortWordBad(w[k])) {
+            C2PortSpecBase[i].seen_bad[k / 8] |= 1 << (k % 8);
+        }
+    }
+    return i;
+}
+static void C2PortSpecBaseline(tCar_spec* pCar) {
+    if (pCar != NULL && pCar->collision_info != NULL && !C2PortProbeBad(pCar->collision_info)) {
+        C2PortSpecSlot(pCar);
+    }
+}
+static void C2PortSpecRepair(tCar_spec* pCar) {
+    int i;
+    size_t k;
+    int n = 0;
+    tU32* w = (tU32*)pCar;
+    char line[200];
+    int len = 0;
+
+    if (pCar == NULL || pCar->collision_info == NULL || !C2PortProbeBad(pCar->collision_info)) {
+        return;
+    }
+    i = C2PortSpecSlot(pCar);
+    line[0] = '\0';
+    for (k = 0; k < sizeof(tCar_spec) / 4; k++) {
+        if (C2PortWordBad(w[k]) && !(C2PortSpecBase[i].seen_bad[k / 8] & (1 << (k % 8)))) {
+            if (len < (int)sizeof(line) - 12) {
+                len += sprintf(line + len, " %x", (unsigned)(k * 4));
+            }
+            w[k] = 0;
+            n++;
+        }
+    }
+    if (C2PortSpecLogs < 40) {
+        C2PortSpecLogs++;
+        dr_dprintf("NANSPEC '%s' size=0x%x zeroed=%d offsets:%s", pCar->driver_name, (unsigned)sizeof(tCar_spec), n, line);
+    }
+}
+#define C2_NANSPEC_BASE(car) C2PortSpecBaseline(car)
+#define C2_NANSPEC_FIX(car) C2PortSpecRepair(car)
+#define C2_NANPROBE(stage, obj, who) C2PortProbe(stage, obj, who, &c2_nan_seen)
+#define C2_NANPROBE_ALL(stage) C2PortProbeAll(stage, &c2_nan_seen)
+#else
+#define C2_NANPROBE(stage, obj, who) ((void)0)
+#define C2_NANPROBE_ALL(stage) ((void)0)
+#define C2_NANSPEC_BASE(car) ((void)0)
+#define C2_NANSPEC_FIX(car) ((void)0)
+#endif
+// FUNCTION: CARMA2_HW 0x00415890
 void C2_HOOK_FASTCALL APTCPreCollision(void) {
     tPhysics_object* obj;
     tCar_spec* car;
@@ -5511,8 +5918,12 @@ void C2_HOOK_FASTCALL APTCPreCollision(void) {
     int i;
     float x;
     float f;
+#ifndef CARPOCALYPSE2_MATCHING
+    int c2_nan_seen = 0;
+#endif
 
     gDrivable_on_count = 0;
+    C2_NANPROBE_ALL("start");
     for (obj = gList_collision_infos; obj != NULL && gDrivable_on_count < 50; obj = obj->next) {
         if (obj->drivable_on) {
             gDrivable_on_list[gDrivable_on_count] = obj;
@@ -5552,9 +5963,13 @@ void C2_HOOK_FASTCALL APTCPreCollision(void) {
                                     || car->collision_info->box_face_start <= gFace_count)) {
                             C2_PRE_T(C2VitaPreFacesNS, C2VitaPreFacesCalls, GetFacesInBox(car->collision_info, &gWorld_callbacks));
                         }
+                        C2_NANPROBE("car-faces", car->collision_info, car->driver_name);
+                        C2_NANSPEC_BASE(car);
                         if (car->dt != 0.f) {
                             C2_PRE_T(C2VitaPreCarNS, C2VitaPreCarCalls, MoveAndCollideCar(car, 0.04f));
                         }
+                        C2_NANPROBE("MoveAndCollideCar", car->collision_info, car->driver_name);
+                        C2_NANSPEC_FIX(car);
                         if (car->collision_info->child != NULL) {
                             PhysicsObjectMoveVelocityList(car->collision_info->child);
                             for (node = car->collision_info->child; node != NULL; node = node->next) {
@@ -5565,6 +5980,7 @@ void C2_HOOK_FASTCALL APTCPreCollision(void) {
                             }
                             PositionChildren(car->collision_info);
                         }
+                        C2_NANPROBE("car-children", car->collision_info, car->driver_name);
                     }
                 }
             }
@@ -5596,6 +6012,7 @@ void C2_HOOK_FASTCALL APTCPreCollision(void) {
                 if (non_car->dt != 0.f) {
                     C2_PRE_T(C2VitaPreNonCarNS, C2VitaPreNonCarCalls, MoveAndCollideNonCar(non_car, 0.04f));
                 }
+                C2_NANPROBE("MoveAndCollideNonCar", non_car->collision_info, "non-car");
                 if (non_car->collision_info->child != NULL) {
                     PhysicsObjectMoveVelocityList(non_car->collision_info->child);
                     PositionChildren(non_car->collision_info);
@@ -5632,9 +6049,13 @@ void C2_HOOK_FASTCALL APTCPreCollision(void) {
         PositionChildren(c->collision_info);
         SetCollisionInfoChildsDoNothing(c->collision_info, 1);
     }
+    C2_NANPROBE_ALL("cars+noncars done");
     MinePreCollisionStuff();
+    C2_NANPROBE_ALL("MinePreCollisionStuff");
     PedPreCollisionStuff();
+    C2_NANPROBE_ALL("PedPreCollisionStuff");
     DronePreCollisionStuff();
+    C2_NANPROBE_ALL("DronePreCollisionStuff");
 }
 
 #pragma auto_inline(off)
@@ -6409,6 +6830,12 @@ void C2_HOOK_FASTCALL ApplyPhysicsToCars(tU32 pLast_tick_time, tU32 pFrame_perio
     C2VitaPreFacesCalls = C2VitaPreCarCalls = C2VitaPreNonCarCalls = 0;
     }
     C2VitaPhysIterations = C2VitaModelUpdateCount = 0;
+    {
+        extern unsigned long long C2VitaPhysBoxNS, C2VitaPhysFaceCollNS, C2VitaPhysObjCollNS;
+        extern unsigned C2VitaPhysBoxFaces, C2VitaPhysDetects, C2VitaPhysPairs, C2VitaPhysHinges, C2VitaPhysPasses;
+        C2VitaPhysBoxNS = C2VitaPhysFaceCollNS = C2VitaPhysObjCollNS = 0;
+        C2VitaPhysBoxFaces = C2VitaPhysDetects = C2VitaPhysPairs = C2VitaPhysHinges = C2VitaPhysPasses = 0;
+    }
 #endif
 
     if (gFreeze_mechanics) {
@@ -6480,8 +6907,15 @@ static void C2VitaPhysicsSpike(unsigned long long start, unsigned long long fini
     extern unsigned long long C2VitaPhysPreNS, C2VitaPhysMungeNS, C2VitaPhysPostNS, C2VitaPhysFlushNS;
     static unsigned logged;
     unsigned long long end = C2VitaGLTicksNS();
-    if (end - start < 25000000ull || logged >= 400) return;
+    if (end - start < 15000000ull || logged >= 400) return;
     ++logged;
+    {
+        extern unsigned long long C2VitaPhysBoxNS, C2VitaPhysFaceCollNS, C2VitaPhysObjCollNS;
+        extern unsigned C2VitaPhysBoxFaces, C2VitaPhysDetects, C2VitaPhysPairs, C2VitaPhysHinges, C2VitaPhysPasses;
+        C2VitaLog("VITA PHYS DETECT box_us=%llu box_faces=%u detects=%u facecoll_us=%llu objcoll_us=%llu pairs=%u hinges=%u passes=%u\n",
+            C2VitaPhysBoxNS / 1000, C2VitaPhysBoxFaces, C2VitaPhysDetects, C2VitaPhysFaceCollNS / 1000,
+            C2VitaPhysObjCollNS / 1000, C2VitaPhysPairs, C2VitaPhysHinges, C2VitaPhysPasses);
+    }
     extern unsigned long long C2VitaPreFacesNS, C2VitaPreCarNS, C2VitaPreNonCarNS;
     extern unsigned C2VitaPreFacesCalls, C2VitaPreCarCalls, C2VitaPreNonCarCalls;
     C2VitaLog("VITA PHYS PRE faces_us=%llu faces=%u carcollide_us=%llu carcollides=%u noncarcollide_us=%llu noncarcollides=%u active_noncars=%d\n",
@@ -6614,6 +7048,16 @@ void C2_HOOK_FASTCALL DamageUnit(tCar_spec* pCar, tDamage_type pDamage_type, int
         if (damage_unit->damage_level >= 100) {
             damage_unit->damage_level = 99;
         }
+#ifndef CARPOCALYPSE2_MATCHING
+        {
+            extern void C2_HOOK_FASTCALL C2LogDamageEvent(tCar_spec* pCar, char pKind, int pUnit, int pAmount, void* pCaller);
+#ifdef __GNUC__
+            C2LogDamageEvent(pCar, 'U', pDamage_type, pMagnitude, __builtin_return_address(0));
+#else
+            C2LogDamageEvent(pCar, 'U', pDamage_type, pMagnitude, NULL);
+#endif
+        }
+#endif
     }
 }
 

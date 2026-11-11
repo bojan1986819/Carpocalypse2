@@ -177,7 +177,9 @@ tPowerup_respawn_spec* gPowerup_respawn_specs;
 void* gDrug_trip_data;
 
 // GLOBAL: CARMA2_HW 0x0075d33c
-int gPowerup_net_state[56];
+/* Indexed by powerup number: POWERUP.TXT defines 98 (the 56 entries declared before let the
+ * game zero the globals after it, e.g. the repulse ray actors). */
+int gPowerup_net_state[128];
 
 static void C2_HOOK_FASTCALL PaletteFuckedUpByDrugs(br_pixelmap* pPixelmap, int pOffset) {
     int i;
@@ -564,16 +566,20 @@ void C2_HOOK_FASTCALL ResetPowerups(void) {
     C2_HOOK_BUG_ON(CARPOCALYPSE2_ASIZE(gRespawn_powerups) != 100);
     C2_HOOK_BUG_ON(sizeof(gRespawn_powerups[0]) != 0xc);
 
-    gRace_powerup_respawn_bools = gPowerup_respawn_specs[gNet_mode == eNet_mode_none ? 0 : 1].bools;
+    i = (gNet_mode == eNet_mode_none) ? 0 : 1;
+    gRace_powerup_respawn_bools = gPowerup_respawn_specs[i].bools;
 
-    for (i = 0; i < gNumber_of_powerups; i++) {
-        gPowerup_array[i].got_time = 0;
-        gPowerup_array[i].current_value = -1;
+    {
+        tPowerup* powerup;
+        for (i = 0, powerup = gPowerup_array; i < gNumber_of_powerups; i++, powerup++) {
+            powerup->got_time = 0;
+            powerup->current_value = -1;
+        }
     }
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gRespawn_powerups); i++) {
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gRespawn_powerups); i++) {
         gRespawn_powerups[i].actor = NULL;
     }
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gPickedup_powerups); i++) {
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gPickedup_powerups); i++) {
         if (gPickedup_powerups[i].icon_actor != NULL) {
             gPickedup_powerups[i].icon_actor->render_style = BR_RSTYLE_NONE;
         }
@@ -818,8 +824,8 @@ void C2_HOOK_FASTCALL FUN_004d9d00(tPhysics_object* pObject, int pMode) {
         if (!IsItReallyOKThatWeDontMakeAnyEffortToProtectAnySadFuckersOutThereThatDontWishToSeeInnocentPeopleBlownToBitsByHighExplosiveMinesAndShells()) {
             return;
         }
-        if ((*(tU8*)&(*(tPedestrian**)((tU8*)pObject->owner + 0xe4))->character->field_0x14 & 4) == 0 && gCrush_deferred == 0) {
-            FUN_004d35e0(*(tPedestrian**)((tU8*)pObject->owner + 0xe4));
+        if ((((tPed_character_instance*)pObject->owner)->ped->character->field_0x14 & 4) == 0 && gCrush_deferred == 0) {
+            FUN_004d35e0(((tPed_character_instance*)pObject->owner)->ped);
         }
         if (pMode != 0xe) {
             pObject->v.v[0] = 0.0f;
@@ -831,7 +837,7 @@ void C2_HOOK_FASTCALL FUN_004d9d00(tPhysics_object* pObject, int pMode) {
         pObject->disable_move_rotate = 0;
         pObject->omega.v[0] = (float)((double)FRandomPosNeg(0.5f) * gDouble_0058abe8 / pObject->M + pObject->omega.v[0]);
         previous_dismemberfest = gPed_dismemberfest;
-        SetPedFall((tPedestrian*)(gPed_dismemberfest = 1, *(tPedestrian**)((tU8*)pObject->owner + 0xe4)),
+        SetPedFall((tPedestrian*)(gPed_dismemberfest = 1, ((tPed_character_instance*)pObject->owner)->ped),
                 500, 0x61, 0x61, gProgram_state.current_car.collision_info);
         gPed_dismemberfest = previous_dismemberfest;
         return;
@@ -981,9 +987,31 @@ void C2_HOOK_FASTCALL InitPowerups(void) {
     InitMineShit();
 }
 
-// C2PORT-NONMATCHING: best 96.30% | difftest PASS 2000 trials (spec 004e06a0_RemoveTail.json) | reason VC5 loop null-check ordering
 // FUNCTION: CARMA2_HW 0x004e06a0
 void C2_HOOK_FASTCALL RemoveTail(void) {
+#ifdef CARPOCALYPSE2_MATCHING
+    tPhysics_object* node;
+
+    if (gMutant_tail_state == 0) {
+        return;
+    }
+    node = gMutant_tail_first_collision_info;
+    if (gMutant_tail_first_collision_info == NULL) {
+        goto skip;
+    }
+    do {
+        BrActorRemove(node->actor);
+        node = node->child;
+    } while (node != NULL);
+skip:
+    if (gMutant_tail_state == 2) {
+        PHILRemoveFromParentChain(gMutant_tail_first_collision_info);
+    } else {
+        PHILRemoveObject(gMutant_tail_first_collision_info);
+    }
+    gMutant_tail_first_collision_info->physics_joint1 = gMutant_tail_first_joint;
+    gMutant_tail_state = 0;
+#else
     tPhysics_object* node;
 
     if (gMutant_tail_state == 0) {
@@ -1001,11 +1029,56 @@ void C2_HOOK_FASTCALL RemoveTail(void) {
     }
     gMutant_tail_first_collision_info->physics_joint1 = gMutant_tail_first_joint;
     gMutant_tail_state = 0;
+#endif
 }
 
-// C2PORT-NONMATCHING: best 32.50% | difftest PASS 2000 trials (spec difftest/specs/004da730_CloseDownPowerUps.json) | reason regalloc-loop
 // FUNCTION: CARMA2_HW 0x004da730
 void C2_HOOK_FASTCALL CloseDownPowerUps(void) {
+#ifdef CARPOCALYPSE2_MATCHING
+    volatile int i;
+    int j;
+    tPowerup* powerup;
+
+    C2_HOOK_BUG_ON(sizeof(tPowerup) != 172);
+
+    i = 0;
+    if (gNumber_of_powerups > 0) {
+        powerup = gPowerup_array;
+        do {
+            if (powerup->got_time != 0) {
+                if (powerup->lose_proc != NULL) {
+                    powerup->lose_proc(powerup, powerup->car);
+                }
+                if (powerup->net_type & 0x80) {
+                    ARPowerupLose(powerup, powerup->car);
+                }
+                if (gNet_mode != eNet_mode_none) {
+                    tNet_message* message;
+
+                    message = NetBuildGuaranteedMessage(0x16, 0);
+                    *(int*)((tU8*)message + 0x28) = 2;
+                    *(tPlayer_ID*)((tU8*)message + 0x1c) = gLocal_net_ID;
+                    *(int*)((tU8*)message + 0x20) = powerup - gPowerup_array;
+                    NetGuaranteedSendMessageToAllPlayers(gCurrent_net_game, message, NULL);
+                }
+                gProgram_state.current_car.powerups[powerup - gPowerup_array] = 0;
+                if (powerup->initial_value == 0) {
+                    for (j = 0; j < gNumber_of_icons; j++) {
+                        if (powerup == gPickedup_powerups[j].powerup) {
+                            gPickedup_powerups[j].fizzle_stage = 3;
+                            gPickedup_powerups[j].fizzle_direction = -1;
+                            gPickedup_powerups[j].fizzle_start = GetTotalTime();
+                            break;
+                        }
+                    }
+                }
+                powerup->got_time = 0;
+            }
+            i++;
+            powerup++;
+        } while (i < gNumber_of_powerups);
+    }
+#else
     int i;
     int j;
     tLose_proc** lose_proc;
@@ -1051,6 +1124,7 @@ void C2_HOOK_FASTCALL CloseDownPowerUps(void) {
         i++;
         lose_proc += sizeof(tPowerup) / sizeof(*lose_proc);
     } while (i < gNumber_of_powerups);
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004def00
@@ -1414,8 +1488,8 @@ void C2_HOOK_FASTCALL FUN_004ddc10(unsigned int* pFlags) {
 void C2_HOOK_FASTCALL CollideShitMine(tPhysics_object* pObject1, tPhysics_object* pObject2, float pCollision_speed) {
     tShit_mine* mine;
     tPhysics_object* other_object;
-    tCar_spec* car;
     void* other_owner;
+    tCar_spec* car;
     tNet_game_player_info* net_player;
 
     mine = NULL;
@@ -1438,40 +1512,51 @@ void C2_HOOK_FASTCALL CollideShitMine(tPhysics_object* pObject1, tPhysics_object
     }
     if (mine != NULL && other_object != NULL) {
         other_owner = other_object->owner;
-        car = (tCar_spec*)other_owner;
-        if (other_owner == NULL || other_object->flags_0x238 != 1) {
+        if (other_owner != NULL && other_object->flags_0x238 == 1) {
+            car = (tCar_spec*)other_owner;
+        } else {
             car = NULL;
         }
-        if (car == NULL || car->driver == 0 || (car->driver != 4 && car->driver != 2 && car->driver != 3)
-                || (*(tU32*)((tU8*)car + 0x100) & 0x10000) == 0) {
-            if (other_object->flags_0x238 == '@') {
-                ((tShit_mine*)other_owner)->flags |= 0x20;
-                return;
+        if (car != NULL && car->driver != 0
+                && (car->driver == 4 || car->driver == 2 || car->driver == 3)
+                && (*(tU32*)((tU8*)car + 0x100) & 0x10000) != 0) {
+            goto collision;
+        }
+        if (other_object->flags_0x238 == '@') {
+            ((tShit_mine*)other_owner)->flags |= 0x20;
+            return;
+        }
+        car = (tCar_spec*)other_object->owner;
+        if (car != NULL && other_object->flags_0x238 == 1) {
+            if (car->driver != 0
+                    && (car->driver == 2 || car->driver == 3)) {
+                goto bad;
             }
-            if (other_owner == NULL || other_object->flags_0x238 != 1
-                    || ((((tCar_spec*)other_owner)->driver != 0
-                            && (((tCar_spec*)other_owner)->driver == 2 || ((tCar_spec*)other_owner)->driver == 3))
-                        || ((tCar_spec*)other_owner)->driver <= 5)) {
-                FUN_004d9d00(other_object, 0);
-                mine->flags |= 0x20;
-                return;
+            if (car->driver <= 5) {
+                goto bad;
             }
             if (car->field_0x4c8 <= gDOUBLE_0058ac18
                     && (gNet_mode == 0 || (net_player = NetPlayerFromCar(car)) == NULL
                         || (net_player = NetPlayerFromCar(car), net_player->field_0x80 == 0))) {
+                tU32 flags = mine->flags | 0x80;
                 mine->car = car;
-                mine->flags |= 0x80;
+                mine->flags = flags;
                 mine->max_damage = (float)(car->softness_factor * gDOUBLE_0058ac48);
-                mine->flags |= 0x20;
+                mine->flags = flags | 0x20;
                 return;
             }
             mine->flags |= 0x20;
             return;
         }
+    bad:
+        FUN_004d9d00(other_object, 0);
+        mine->flags |= 0x20;
+        return;
     }
+collision:
     if (pCollision_speed <= mine->field_0x1c || gPinball_factor != gFLOAT_0058ac0c) {
         if (pCollision_speed > gFLOAT_0058ac88) {
-            DRS3StartSound3D(gCar_outlet, 0x151b, &mine->collision_info->actor->t.t.translate.t,
+            DRS3StartSound3D(gXXX_outlet, 0x151b, &mine->collision_info->actor->t.t.translate.t,
                     &gZero_v__car, 1, 0xff, 0x10000, 0x10000);
         }
         return;
@@ -1498,60 +1583,41 @@ void C2_HOOK_FASTCALL FUN_004ddde0(tCar_spec* pCar) {
     } while ((int)p < (int)((tU8*)gShit_mines + sizeof(gShit_mines) + offsetof(tShit_mine, field_0x30)));
 }
 
-// C2PORT-NONMATCHING: best 51.03% | difftest PASS 2000 trials (spec difftest/specs/004dde20_ProcessShitMines.json) | reason regalloc-loop,x87-order
 // FUNCTION: CARMA2_HW 0x004dde20
 void C2_HOOK_FASTCALL ProcessShitMines(tU32 pTime) {
     int i;
 
     C2_HOOK_BUG_ON(CARPOCALYPSE2_ASIZE(gShit_mines) != 20);
 
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gShit_mines); i++) {
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gShit_mines); i++) {
         tShit_mine* mine = &gShit_mines[i];
-        tU32 flags = mine->flags;
 
-        if (flags & 0x1) {
-        if (flags & 0x80) {
+        if (!(mine->flags & 0x1)) {
+            continue;
+        }
+        if (mine->flags & 0x80) {
             tCar_spec *car = mine->car;
 
             if (car != NULL) {
                 int car_vulnerable;
 
-                flags &= ~0x80;
-                mine->flags = flags;
-                car_vulnerable = 1;
-                if (car->field_0x4c8 > gDOUBLE_0058ac18) {
-                    car_vulnerable = 0;
-                } else if (gNet_mode != eNet_mode_none) {
-                    tNet_game_player_info *net_player;
-
-                    net_player = NetPlayerFromCar(car);
-                    if (net_player != NULL) {
-                        net_player = NetPlayerFromCar(car);
-                        if (net_player->field_0x80 != 0) {
-                            car_vulnerable = 0;
-                        }
-                    }
-                }
-                if (car->invulnerable_no_crushage) {
-                    car_vulnerable = 0;
-                }
+                mine->flags &= ~0x80;
+                car_vulnerable = CarVulnerableByMine(car);
                 if (car_vulnerable) {
                     TotallySpamTheModel(car, mine->max_damage * gFLOAT_0058ac40);
                 }
                 if (car_vulnerable && (gNet_mode == eNet_mode_none || gNet_mode == eNet_mode_host)) {
-                    car->collision_info->v.v[1] = BR_ADD(car->collision_info->v.v[1], FRandomBetween(mine->field3_0xc, mine->initial_y_speed_factor) / BR_MUL(car->collision_info->M, gDouble_0058abe0));
-                    car->collision_info->omega.v[2] = BR_ADD(car->collision_info->omega.v[2], BR_MUL(FRandomPosNeg(mine->initial_z_omega_factor), gDouble_0058abe8) / car->collision_info->M);
-                    car->collision_info->omega.v[0] = BR_ADD(car->collision_info->omega.v[0], BR_MUL(FRandomPosNeg(mine->initial_x_omega_factor), gDouble_0058abe8) / car->collision_info->M);
+                    car->collision_info->v.v[1] += FRandomBetween(mine->field3_0xc, mine->initial_y_speed_factor) / (car->collision_info->M * gDouble_0058abe0);
+                    car->collision_info->omega.v[2] += FRandomPosNeg(mine->initial_z_omega_factor) * gDouble_0058abe8 / car->collision_info->M;
+                    car->collision_info->omega.v[0] += FRandomPosNeg(mine->initial_x_omega_factor) * gDouble_0058abe8 / car->collision_info->M;
                     car->collision_info->disable_move_rotate = 0;
 
                     C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tPhysics_object, field_0x49c, 0x49c);
                     car->collision_info->field_0x49c = 40 + gPHIL_last_physics_tick;
                     if (!car->invulnerable_no_damage) {
-                        int j;
-
                         C2_HOOK_BUG_ON(CARPOCALYPSE2_ASIZE(car->damage_units) != 12);
-                        for (j = 0; j < CARPOCALYPSE2_ASIZE(car->damage_units); j++) {
-                            DoDamage(car, j, IRandomBetween(0, (int)(25.f * mine->max_damage)));
+                        for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(car->damage_units); i++) {
+                            DoDamage(car, i, IRandomBetween(0, (int)(mine->max_damage * gFLOAT_0058ac8c)));
                         }
                         if (car != mine->field_0x30) {
                             car->last_hit_by = mine->field_0x30;
@@ -1562,21 +1628,15 @@ void C2_HOOK_FASTCALL ProcessShitMines(tU32 pTime) {
                 }
             }
         }
-        flags = mine->flags;
-        if (flags & 0x20) {
-            flags &= ~0x20;
-            mine->flags = flags;
+        if (mine->flags & 0x20) {
+            mine->flags &= ~0x20;
             MineExplode(mine);
-        } else if (flags & 0x2) {
+        } else if (mine->flags & 0x2) {
             if (mine->next_think_time < pTime) {
-                flags &= ~0x3;
-                mine->flags = flags;
+                mine->flags &= ~0x3;
             }
-        } else {
-            if ((flags & 0x4) && mine->next_think_time < pTime) {
-                MineExplode(mine);
-            }
-        }
+        } else if ((mine->flags & 0x4) && mine->next_think_time < pTime) {
+            MineExplode(mine);
         }
     }
 }
@@ -1852,18 +1912,50 @@ void C2_HOOK_CDECL RenderSpinningPowerup(br_actor* actor, br_model* model, br_ma
     } else {
         tU32 prev;
         tU32 now;
+        tU32 diff;
 
         now = GetTotalTime();
         prev = (tU32)(uintptr_t)actor->user;
+        diff = (now - prev) / 16;
         actor->user = (void*)(uintptr_t)now;
-        BrMatrix34PreRotateY(&actor->t.t.mat, BR_ANGLE_DEG((now - prev) / 16));
+        BrMatrix34PreRotateY(&actor->t.t.mat, BR_ANGLE_DEG(diff));
     }
     BrZsModelRender(actor, model, material, order_table, style, on_screen, 0);
 }
 
-// C2PORT-NONMATCHING: best 40.7% | difftest PASS 2000 trials (spec 004df570_SetSpinningPowerup.json) | reason logic matches; VC5 loop and register allocation differ
 // FUNCTION: CARMA2_HW 0x004df570
 void C2_HOOK_FASTCALL SetSpinningPowerup(br_actor* pActor, int pOpacity) {
+#ifdef CARPOCALYPSE2_MATCHING
+    // GLOBAL: CARMA2_HW 0x0065ebc0
+    static br_token_value spinning_powerup_extra_prim[] = {
+        { BRT_BLEND_B, { 1 } },
+        { BRT_OPACITY_X, { BrScalarToFixed(75) } },
+    };
+    unsigned int i;
+
+    if (pActor == NULL) {
+        return;
+    }
+    BrMatrix34PreTranslate(&pActor->t.t.mat, 0.f, .1f, 0.f);
+    pActor->model->flags |= BR_MODF_CUSTOM;
+    pActor->model->custom = RenderSpinningPowerup;
+    if (pOpacity == 0 || pOpacity == 255) {
+        return;
+    }
+    if (pActor->material != NULL) {
+        pActor->material->extra_prim = spinning_powerup_extra_prim;
+        pActor->material->extra_prim[1].v.x = pOpacity << 16;
+        BrMaterialUpdate(pActor->material, BR_MATU_EXTRA_PRIM);
+        return;
+    }
+    for (i = 0; i < pActor->model->nfaces; i++) {
+        if (pActor->model->faces[i].material != NULL) {
+            pActor->model->faces[i].material->extra_prim = spinning_powerup_extra_prim;
+            pActor->model->faces[i].material->extra_prim[1].v.x = pOpacity << 16;
+            BrMaterialUpdate(pActor->model->faces[i].material, BR_MATU_EXTRA_PRIM);
+        }
+    }
+#else
     // GLOBAL: CARMA2_HW 0x0065ebc0
     static br_token_value spinning_powerup_extra_prim[] = {
         { BRT_BLEND_B, { 1 } },
@@ -1896,6 +1988,7 @@ void C2_HOOK_FASTCALL SetSpinningPowerup(br_actor* pActor, int pOpacity) {
             BrMaterialUpdate(material, BR_MATU_EXTRA_PRIM);
         }
     }
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004dfe10
@@ -1911,7 +2004,7 @@ void C2_HOOK_CDECL RenderChangingPowerup(br_actor* actor, br_model* model, br_ma
 
         now = GetTotalTime();
         prev = (tU32)(uintptr_t)actor->user;
-        diff = (prev - now) / 16;
+        diff = (now - prev) / 16;
         if (diff > 15) {
             if (actor->model == gModel_powerup_armor) {
                 actor->model = gModel_powerup_power;
@@ -1947,6 +2040,9 @@ br_model* C2_HOOK_FASTCALL DuplicateModel(br_model* pModel, const char* pName) {
 
 // FUNCTION: CARMA2_HW 0x004df6c0
 void C2_HOOK_FASTCALL SetChangingPowerup(br_actor* pActor) {
+    tPath_name path;
+    char errmsg[256];
+    char s[256];
 
     if (pActor == NULL) {
         return;
@@ -1970,17 +2066,16 @@ void C2_HOOK_FASTCALL SetChangingPowerup(br_actor* pActor) {
     }
 
     if (gModel_powerup_armor == NULL) {
-        tPath_name path;
-        char s[256];
         FILE* f;
         int i;
         br_actor* actor;
 
+        BrModelFind("&77powerup.ACT");
         PathCat(path, gApplication_path, "POWRSHIT.TXT");
         f = DRfopen(path, "rt");
         if (f == NULL) {
-            sprintf(s, "Cant open %s", "POWRSHIT.TXT");
-            PDFatalError(s);
+            sprintf(errmsg, "Cant open %s", "POWRSHIT.TXT");
+            PDFatalError(errmsg);
         }
         for (i = 0; i < 67; i++) {
             GetAString(f, s);
@@ -1997,8 +2092,6 @@ void C2_HOOK_FASTCALL SetChangingPowerup(br_actor* pActor) {
     }
 
     if (gModel_powerup_power == NULL) {
-        tPath_name path;
-        char s[256];
         FILE* f;
         int i;
         br_actor* actor;
@@ -2006,8 +2099,8 @@ void C2_HOOK_FASTCALL SetChangingPowerup(br_actor* pActor) {
         PathCat(path, gApplication_path, "POWRSHIT.TXT");
         f = DRfopen(path, "rt");
         if (f == NULL) {
-            sprintf(s, "Cant open %s", "POWRSHIT.TXT");
-            PDFatalError(s);
+            sprintf(errmsg, "Cant open %s", "POWRSHIT.TXT");
+            PDFatalError(errmsg);
         }
         for (i = 0; i < 68; i++) {
             GetAString(f, s);
@@ -2024,8 +2117,6 @@ void C2_HOOK_FASTCALL SetChangingPowerup(br_actor* pActor) {
     }
 
     if (gModel_powerup_offence == NULL) {
-        tPath_name path;
-        char s[256];
         FILE* f;
         int i;
         br_actor* actor;
@@ -2033,8 +2124,8 @@ void C2_HOOK_FASTCALL SetChangingPowerup(br_actor* pActor) {
         PathCat(path, gApplication_path, "POWRSHIT.TXT");
         f = DRfopen(path, "rt");
         if (f == NULL) {
-            sprintf(s, "Cant open %s", "POWRSHIT.TXT");
-            PDFatalError(s);
+            sprintf(errmsg, "Cant open %s", "POWRSHIT.TXT");
+            PDFatalError(errmsg);
         }
         for (i = 0; i < 69; i++) {
             GetAString(f, s);
@@ -2106,11 +2197,9 @@ int C2_HOOK_FASTCALL SetPedExplode(tPowerup* powerup, tCar_spec* car) {
 
 // FUNCTION: CARMA2_HW 0x004de7a0
 int C2_HOOK_FASTCALL PickAtRandom(tPowerup* powerup, tCar_spec* car) {
-    int idx;
     int pIndex;
 
-    idx = IRandomBetween(0, powerup->number_of_integer_params - 1);
-    pIndex = powerup->integer_params[idx];
+    pIndex = powerup->integer_params[IRandomBetween(0, powerup->number_of_integer_params - 1)];
     GotPowerupEarwig(car, pIndex, 1, 1);
     return -1;
 }
@@ -2152,13 +2241,23 @@ int C2_HOOK_FASTCALL FreezeTimer(tPowerup* powerup, tCar_spec* car) {
 
 // FUNCTION: CARMA2_HW 0x004dca30
 int C2_HOOK_FASTCALL SetEngineFactor(tPowerup* powerup, tCar_spec* car) {
+    float f2;
+    float f3;
+    float f4;
+    float f5;
+    float f6;
+
     if (powerup->initial_value > 0) {
         TriggerPedestrianReaction("Afterburner", 1);
     }
     car->field_0x4d4 = powerup->float_params[0];
     car->grip_multiplier = powerup->float_params[1];
-    SetCarSuspGiveAndHeight(car, powerup->float_params[2], powerup->float_params[3],
-        powerup->float_params[6], powerup->float_params[4], powerup->float_params[5]);
+    f2 = powerup->float_params[2];
+    f3 = powerup->float_params[3];
+    f6 = powerup->float_params[6];
+    f4 = powerup->float_params[4];
+    f5 = powerup->float_params[5];
+    SetCarSuspGiveAndHeight(car, f2, f3, f6, f4, f5);
     return powerup - gPowerup_array;
 }
 
@@ -2184,7 +2283,7 @@ int C2_HOOK_FASTCALL GotTimeOrPower(tPowerup* powerup, tCar_spec* car) {
 // FUNCTION: CARMA2_HW 0x004dcae0
 int C2_HOOK_FASTCALL TrashBodywork(tPowerup* powerup, tCar_spec* car) {
 
-    TotallySpamTheModel(car, (float)(*(float*)((unsigned char*)car + 0x18d0) * 0.1f * (10.0 / 7.0)));
+    TotallySpamTheModel(car, (float)(*(float*)((unsigned char*)car + 0x18d0) * gFLOAT_0058ac40 * gDOUBLE_0058ac48));
     if (car != NULL && car->driver == eDriver_local_human) {
         DRS3StartSound2(gXXX_outlet, 0x1388, 1, 0xff, 0xff, -1, -1);
         DRS3StartSound2(gXXX_outlet, 0x1389, 1, 0xff, 0xff, -1, -1);
@@ -2339,43 +2438,38 @@ int C2_HOOK_FASTCALL ShowPedestrians(tPowerup* powerup, tCar_spec* car) {
     return powerup - gPowerup_array;
 }
 
-// C2PORT-NONMATCHING: best 83.18% | difftest PASS 2000 trials (spec difftest/specs/004dea40_HitMine.json) | reason x87-codegen
 // FUNCTION: CARMA2_HW 0x004dea40
 int C2_HOOK_FASTCALL HitMine(tPowerup* powerup, tCar_spec* car) {
     int j;
-    volatile float damage;
-    int damage_limit;
+    int max_damage;
+    float f;
 
-    if (car->field_0x4c8 <= gDOUBLE_0058ac18) {
-        if (gNet_mode != 0) {
-            if (NetPlayerFromCar(car) != NULL && NetPlayerFromCar(car)->field_0x80 != 0) {
-                goto hit_mine_done;
-            }
-        }
-
-        car->collision_info->v.v[1] = (float)((double)FRandomBetween(powerup->float_params[0], powerup->float_params[1])
-            / ((double)car->collision_info->M * gDouble_0058abe0) + car->collision_info->v.v[1]);
-        car->collision_info->omega.v[2] = (float)((double)FRandomPosNeg(powerup->float_params[2]) * gDouble_0058abe8
-            / car->collision_info->M + car->collision_info->omega.v[2]);
-        car->collision_info->omega.v[0] = (float)((double)FRandomPosNeg(powerup->float_params[3]) * gDouble_0058abe8
-            / car->collision_info->M + car->collision_info->omega.v[0]);
-
-        if (car != NULL && car->driver > 5) {
-            damage = (float)(car->softness_factor * gDOUBLE_0058ac48);
-            if (!car->invulnerable_no_damage) {
-                damage_limit = (int)(damage * gFLOAT_0058ac8c);
-                for (j = 0; j < 12; j++) {
-                    DamageUnit(car, j, IRandomBetween(0, damage_limit));
-                }
-            }
-            if (!car->invulnerable_no_crushage) {
-                TotallySpamTheModel(car, damage * gFLOAT_0058ac40);
-            }
-        }
-        car->collision_info->disable_move_rotate = 0;
+    if (car->field_0x4c8 > gDOUBLE_0058ac18
+            || (gNet_mode != eNet_mode_none
+                && NetPlayerFromCar(car) != NULL
+                && NetPlayerFromCar(car)->field_0x80 != 0)) {
+        return powerup - gPowerup_array;
     }
-
-hit_mine_done:
+    car->collision_info->v.v[1] += FRandomBetween(powerup->float_params[0], powerup->float_params[1])
+        / (car->collision_info->M * gDouble_0058abe0);
+    car->collision_info->omega.v[2] += FRandomPosNeg(powerup->float_params[2]) * gDouble_0058abe8 / car->collision_info->M;
+    car->collision_info->omega.v[0] += FRandomPosNeg(powerup->float_params[3]) * gDouble_0058abe8 / car->collision_info->M;
+    if (car != NULL) {
+      if (car->driver > 5) {
+        f = *(float*)((unsigned char*)car + 0x18d0) * gDOUBLE_0058ac48;
+        if (!car->invulnerable_no_damage) {
+            j = 0;
+            max_damage = (int)(f * gFLOAT_0058ac8c);
+            for (; j < (int)CARPOCALYPSE2_ASIZE(car->damage_units); j++) {
+                DamageUnit(car, j, IRandomBetween(0, max_damage));
+            }
+        }
+        if (!car->invulnerable_no_crushage) {
+            TotallySpamTheModel(car, f * gFLOAT_0058ac40);
+        }
+      }
+    }
+    car->collision_info->disable_move_rotate = 0;
     return powerup - gPowerup_array;
 }
 
@@ -2463,9 +2557,16 @@ void C2_HOOK_FASTCALL InitializeMineMotion(tShit_mine* pMine, tCar_spec* pCar) {
     BrMatrix34Post(&pMine->collision_info->actor->t.t.mat, &car_transform);
     BrMatrix34Copy(&pMine->collision_info->transform_matrix, &pMine->collision_info->actor->t.t.mat);
 
-    impulse.v[0] = 0.f;
-    impulse.v[1] = pMine->field_0x20;
-    impulse.v[2] = pMine->field_0x24;
+    {
+        float vy;
+        float vz;
+
+        vy = pMine->field_0x20;
+        vz = pMine->field_0x24;
+        impulse.v[0] = 0.f;
+        impulse.v[1] = vy;
+        impulse.v[2] = vz;
+    }
     BrMatrix34ApplyV(&pMine->collision_info->v, &impulse, &car_transform);
 
     pMine->collision_info->v.v[0] = pCar->collision_info->v.v[0] + pMine->collision_info->v.v[0];
@@ -2732,9 +2833,94 @@ int C2_HOOK_FASTCALL AnnihilatePeds(tPowerup* powerup, tCar_spec* car) {
 }
 
 #pragma auto_inline(off)
-// C2PORT-NONMATCHING: best 63.05% | difftest PASS 2000 trials (spec difftest/specs/004de1f0_RepulseOpponents2.json) | reason x87-order, stack-layout
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004de1f0
 static int C2_HOOK_FASTCALL RepulseOpponents2(tPowerup* powerup, tCar_spec* car, int pTell_net) {
+#ifdef CARPOCALYPSE2_MATCHING
+    int count;
+    int i;
+    int hits;
+    float length;
+    float dist;
+    int j;
+    tU32 time;
+    tCar_spec* other;
+    br_vector3* other_pos;
+    br_vector3 delta;
+    br_vector3 dir;
+    br_vector3 spin;
+    float inverse_distance;
+    float scale;
+    float impulse;
+    tNet_message* message;
+
+    hits = 0;
+    time = GetTotalTime();
+    for (i = eVehicle_self; i <= eVehicle_drone; i++) {
+        count = (i == eVehicle_self) ? 1 : GetCarCount(i);
+        for (j = 0; j < count; j++) {
+            other = (i == eVehicle_self) ? &gProgram_state.current_car : GetCarSpec(i, j);
+            if (other == car) {
+                continue;
+            }
+            other_pos = &other->pos;
+            delta.v[0] = other->pos.v[0] - car->pos.v[0];
+            delta.v[1] = other->pos.v[1] - car->pos.v[1];
+            delta.v[2] = other->pos.v[2] - car->pos.v[2];
+            length = BrVector3Length(&delta);
+            dist = length;
+            if (dist >= powerup->float_params[3]) {
+                continue;
+            }
+            hits++;
+            if (gNet_mode != eNet_mode_client) {
+                scale = (powerup->float_params[3] - dist) / powerup->float_params[3] / other->field_0x4c8;
+                if (dist > gFLOAT_0058ac10) {
+                    inverse_distance = gDOUBLE_0058ac18 / dist;
+                    dir.v[0] = delta.v[0] * inverse_distance;
+                    dir.v[1] = delta.v[1] * inverse_distance;
+                    dir.v[2] = delta.v[2] * inverse_distance;
+                } else {
+                    dir.v[0] = gFLOAT_0058ac20;
+                    dir.v[1] = 0.0f;
+                    dir.v[2] = 0.0f;
+                }
+                if (fabs((double)dir.v[1]) < gDOUBLE_0058ac80) {
+                    dir.v[1] = powerup->float_params[1];
+                }
+                impulse = scale * powerup->float_params[0];
+                other->collision_info->v.v[0] += dir.v[0] * impulse;
+                other->collision_info->v.v[1] += dir.v[1] * impulse;
+                other->collision_info->v.v[2] += dir.v[2] * impulse;
+                impulse = scale * powerup->float_params[2];
+                spin.v[0] = FRandomPosNeg(impulse);
+                spin.v[1] = FRandomPosNeg(impulse);
+                spin.v[2] = FRandomPosNeg(impulse);
+                other->collision_info->omega.v[0] += spin.v[0];
+                other->collision_info->omega.v[1] += spin.v[1];
+                other->collision_info->omega.v[2] += spin.v[2];
+                other->collision_info->disable_move_rotate = 0;
+                other->collision_info->field_0x49c = gPHIL_last_physics_tick + 0x28;
+                other->time_last_hit = PDGetTotalTime();
+                other->last_hit_by = car;
+            }
+            AddRepulseLink(time, car, other, &car->pos, other_pos, 0.06f, 0.12f);
+        }
+    }
+    if (gNet_mode != eNet_mode_none && pTell_net) {
+        message = NetBuildGuaranteedMessage(0x23, 0);
+        message->contents.powerup.player_id = gLocal_net_ID;
+        message->contents.powerup.powerup_index = powerup - gPowerup_array;
+        NetGuaranteedSendMessageToAllPlayers(gCurrent_net_game, message, 0);
+    }
+    if (hits != 0 && car != NULL && car->driver == eDriver_local_human) {
+        DRS3StartSound3D(gXXX_outlet, 0x1324, &car->pos, &gZero_v__car, 1, 255, BR_FIXED_INT(1), BR_FIXED_INT(1));
+    }
+    if (hits != 0) {
+        return powerup - gPowerup_array;
+    }
+    return -1;
+#else
     tU32 now;
     int found_count;
     int category;
@@ -2833,6 +3019,7 @@ static int C2_HOOK_FASTCALL RepulseOpponents2(tPowerup* powerup, tCar_spec* car,
         }
     }
     return -1;
+#endif
 }
 #pragma auto_inline(on)
 
@@ -2908,11 +3095,12 @@ int C2_HOOK_FASTCALL ReceivedRepulseOpponents(tNet_message_chunk_powerup* pMessa
 }
 
 #pragma auto_inline(off)
+#pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004dc3e0
 static int C2_HOOK_FASTCALL GainAPO2(tCar_spec* car, int index, int amount) {
     int old;
 
-    if (amount < 0) {
+    while (amount < 0) {
         int slots = car->power_up_slots[index];
         int levels = car->power_up_levels[index];
         if (levels >= slots) {
@@ -2934,13 +3122,10 @@ static int C2_HOOK_FASTCALL GainAPO2(tCar_spec* car, int index, int amount) {
 }
 #pragma auto_inline(on)
 
-// C2PORT-NONMATCHING: best 46.04% | difftest PASS 2000 trials (spec difftest/specs/004dc240_GainAPO.json) | reason equivalent APO selection and updates use different register and branch layout
 // FUNCTION: CARMA2_HW 0x004dc240
 int C2_HOOK_FASTCALL GainAPO(tPowerup* powerup, tCar_spec* car) {
     int powerup_index;
     int old0, old1, old2;
-    int* params;
-    int a0, a1, a2;
     int idx;
     int amount;
     int orig_idx;
@@ -2950,24 +3135,22 @@ int C2_HOOK_FASTCALL GainAPO(tPowerup* powerup, tCar_spec* car) {
     old0 = car->power_up_levels[0];
     old1 = car->power_up_levels[1];
     old2 = car->power_up_levels[2];
-    params = powerup->integer_params;
-    a0 = params[0];
-    a1 = params[1];
-    a2 = params[2];
-    if (a0 != 0 && a1 != 0 && a2 != 0) {
-        GainAPO2(car, 0, a0);
-        GainAPO2(car, 1, a1);
-        GainAPO2(car, 2, a2);
+    if (powerup->integer_params[0] != 0
+        && powerup->integer_params[1] != 0
+        && powerup->integer_params[2] != 0) {
+        GainAPO2(car, 0, powerup->integer_params[0]);
+        GainAPO2(car, 1, powerup->integer_params[1]);
+        GainAPO2(car, 2, powerup->integer_params[2]);
     } else {
-        if (a0 != 0) {
+        if (powerup->integer_params[0] != 0) {
             idx = 0;
-            amount = a0;
-        } else if (a1 != 0) {
+            amount = powerup->integer_params[0];
+        } else if (powerup->integer_params[1] != 0) {
             idx = 1;
-            amount = a1;
+            amount = powerup->integer_params[1];
         } else {
             idx = 2;
-            amount = a2;
+            amount = powerup->integer_params[2];
         }
         if (GainAPO2(car, idx, amount) == 0) {
             orig_idx = idx;
@@ -3183,15 +3366,13 @@ int C2_HOOK_FASTCALL PowerupCancel(tPowerup* powerup, tCar_spec* car) {
     tPowerup* saved = powerup;
 
     if (car == NULL) {
-        return -1;
+        goto fail;
     }
     if (car->driver != eDriver_local_human) {
-        return -1;
+        goto fail;
     }
     for (i = 0, p = gPowerup_array; i < gNumber_of_powerups; i++, p++) {
-        if (p->got_time == 0) {
-            continue;
-        }
+        if (p->got_time != 0) {
         if (p->lose_proc != NULL) {
             p->lose_proc(p, p->car);
         }
@@ -3205,7 +3386,7 @@ int C2_HOOK_FASTCALL PowerupCancel(tPowerup* powerup, tCar_spec* car) {
             *(int*)((tU8*)msg + 0x20) = p - gPowerup_array;
             NetGuaranteedSendMessageToAllPlayers(gCurrent_net_game, msg, NULL);
         }
-        gPowerup_net_state[p - gPowerup_array] = 0;
+        gProgram_state.current_car.powerups[p - gPowerup_array] = 0;
         if (p->initial_value == 0) {
             for (j = 0; j < gNumber_of_icons; j++) {
                 if (gPickedup_powerups[j].powerup == p) {
@@ -3218,6 +3399,7 @@ int C2_HOOK_FASTCALL PowerupCancel(tPowerup* powerup, tCar_spec* car) {
         }
         p->got_time = 0;
         any = 1;
+        }
     }
     if (gMutant_tail_state == 2) {
         for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gInventory); i++) {
@@ -3247,7 +3429,7 @@ int C2_HOOK_FASTCALL PowerupCancel(tPowerup* powerup, tCar_spec* car) {
                 *(int*)((tU8*)msg + 0x20) = tailp - gPowerup_array;
                 NetGuaranteedSendMessageToAllPlayers(gCurrent_net_game, msg, NULL);
             }
-            gPowerup_net_state[tailp - gPowerup_array] = 0;
+            gProgram_state.current_car.powerups[tailp - gPowerup_array] = 0;
             if (tailp->initial_value == 0) {
                 for (j = 0; j < gNumber_of_icons; j++) {
                     if (gPickedup_powerups[j].powerup == tailp) {
@@ -3265,17 +3447,18 @@ int C2_HOOK_FASTCALL PowerupCancel(tPowerup* powerup, tCar_spec* car) {
         any = 1;
     }
     if (!any) {
-        return -1;
+        goto fail;
     }
     NewTextHeadupSlot(4, 0, 0xbb8, -4, GetMiscString(0x113));
     DRS3StartSound2(gXXX_outlet, 0xeda, 1, 0xff, 0xff, -1, -1);
     return saved - gPowerup_array;
+fail:
+    return -1;
 }
 
 // FUNCTION: CARMA2_HW 0x004e02b0
 int C2_HOOK_FASTCALL GrowATail(tPowerup* powerup, tCar_spec* car) {
     tPhysics_object* node;
-    tPhysics_joint* joint;
     br_matrix34 tmp;
     br_vector3 tmp_v;
 
@@ -3290,33 +3473,32 @@ int C2_HOOK_FASTCALL GrowATail(tPowerup* powerup, tCar_spec* car) {
     }
     BrVector3SetFloat(&gMutant_tail_first_collision_info->physics_joint1->field_0x14,
         0.0f,
-        (car->collision_info->bb1.max.v[1] - car->collision_info->bb1.min.v[1]) * 0.5f,
-        car->collision_info->bb1.max.v[2] * 0.95f);
+        (car->collision_info->bb1.max.v[1] - car->collision_info->bb1.min.v[1]) * gFLOAT_0058ac00,
+        car->collision_info->bb1.max.v[2] * 0.95);
     PhysicsAddObject(car->collision_info, gMutant_tail_first_collision_info);
     node = gMutant_tail_first_collision_info;
     while (node != NULL) {
-        joint = node->physics_joint1;
         if (node->actor->parent == NULL) {
             BrActorAdd(gNon_track_actor, node->actor);
         }
         node->owner = (void*)car;
         BrMatrix34Translate(&node->actor->t.t.mat,
-            -joint->field_0x08.v[0],
-            -joint->field_0x08.v[1],
-            -joint->field_0x08.v[2]);
+            -node->physics_joint1->field_0x08.v[0],
+            -node->physics_joint1->field_0x08.v[1],
+            -node->physics_joint1->field_0x08.v[2]);
         BrMatrix34Copy(&tmp, &car->collision_info->actor->t.t.mat);
         BrMatrix34Post(&node->actor->t.t.mat, &tmp);
         BrMatrix34Rotate(&tmp, (br_angle)0xf8d4, (br_vector3*)&node->actor->t.t.mat);
         BrMatrix34Post(&node->actor->t.t.mat, &tmp);
-        BrMatrix34ApplyP(&tmp_v, &joint->field_0x14, &node->parent->actor->t.t.mat);
+        BrMatrix34ApplyP(&tmp_v, &node->physics_joint1->field_0x14, &node->parent->actor->t.t.mat);
         BrMatrix34PostTranslate(&node->actor->t.t.mat, tmp_v.v[0], tmp_v.v[1], tmp_v.v[2]);
         BrMatrix34Copy(&node->transform_matrix, &node->actor->t.t.mat);
         node->field_0xed = 1;
         node = node->child;
     }
     GotPowerupEarwig(car, 0x5f, 0, 1);
-    DRS3StartSound2(gXXX_outlet, 0xf3d, 1, 0xff, 0xff, -1, -1);
     gMutant_tail_state = 2;
+    DRS3StartSound2(gXXX_outlet, 0xf3d, 1, 0xff, 0xff, -1, -1);
     return powerup - gPowerup_array;
 }
 
@@ -3328,7 +3510,7 @@ int C2_HOOK_FASTCALL CutOffTail(tPowerup* powerup, tCar_spec* car) {
 
     (void)car;
     if (gMutant_tail_state != 2) {
-        return powerup - gPowerup_array;
+        goto done;
     }
     PHILRemoveFromParentChain(gMutant_tail_first_collision_info);
     gMutant_tail_first_collision_info->physics_joint1 = NULL;
@@ -3351,10 +3533,10 @@ int C2_HOOK_FASTCALL CutOffTail(tPowerup* powerup, tCar_spec* car) {
         *(int*)((tU8*)msg + 0x20) = tailp - gPowerup_array;
         NetGuaranteedSendMessageToAllPlayers(gCurrent_net_game, msg, NULL);
     }
-    gPowerup_net_state[tailp - gPowerup_array] = 0;
+    gProgram_state.current_car.powerups[tailp - gPowerup_array] = 0;
     if (tailp->initial_value == 0) {
         for (i = 0; i < gNumber_of_icons; i++) {
-            if (gPickedup_powerups[i].powerup == tailp) {
+            if (tailp == gPickedup_powerups[i].powerup) {
                 gPickedup_powerups[i].fizzle_stage = 3;
                 gPickedup_powerups[i].fizzle_direction = -1;
                 gPickedup_powerups[i].fizzle_start = GetTotalTime();
@@ -3363,9 +3545,10 @@ int C2_HOOK_FASTCALL CutOffTail(tPowerup* powerup, tCar_spec* car) {
         }
     }
     tailp->got_time = 0;
-    DRS3StartSound2(gXXX_outlet, 0xf3e, 1, 0xff, 0xff, -1, -1);
     gMutant_tail_state = 1;
+    DRS3StartSound2(gXXX_outlet, 0xf3e, 1, 0xff, 0xff, -1, -1);
     gINT_00705b70 = GetTotalTime();
+done:
     return powerup - gPowerup_array;
 }
 
@@ -3693,17 +3876,16 @@ void C2_HOOK_FASTCALL TheEffectsOfDrugs(tPowerup* powerup, tU32 time) {
 
 // FUNCTION: CARMA2_HW 0x004de9b0
 void C2_HOOK_FASTCALL DoBouncey(tPowerup* powerup, tU32 time) {
-    double elapsed;
 
-    elapsed = (double)(GetTotalTime() - gProgram_state.current_car.last_bounce);
-    if (elapsed < gProgram_state.current_car.bounce_rate
+    if (GetTotalTime() - gProgram_state.current_car.last_bounce < gProgram_state.current_car.bounce_rate
         || gProgram_state.current_car.number_of_wheels_on_ground <= 2) {
         return;
     }
     PratcamEvent(0x2a);
     gProgram_state.current_car.last_bounce = GetTotalTime();
     gProgram_state.current_car.collision_info->v.v[1] =
-        gProgram_state.current_car.collision_info->v.v[1] + gProgram_state.current_car.bounce_amount * 0.144928;
+        gProgram_state.current_car.bounce_amount * gConst_kangeroo_force_factor
+        + gProgram_state.current_car.collision_info->v.v[1];
     DRS3StartSound(gXXX_outlet, 0x2332);
     gProgram_state.current_car.collision_info->disable_move_rotate = 0;
 }
@@ -3712,7 +3894,7 @@ void C2_HOOK_FASTCALL DoBouncey(tPowerup* powerup, tU32 time) {
 void C2_HOOK_FASTCALL MungeVouchers(tPowerup* powerup, tU32 time) {
 
     (void)time;
-    powerup->current_value = GetRecoverVoucherCount();
+    powerup->current_value = FUN_004446f0();
 }
 
 // FUNCTION: CARMA2_HW 0x004df3b0
@@ -3884,7 +4066,6 @@ void C2_HOOK_FASTCALL LosePowerupX(tPowerup* pPowerup, undefined4 pArg2) {
 // FUNCTION: CARMA2_HW 0x004db730
 void C2_HOOK_FASTCALL KeyboardPowerupFinished(tPowerup* pPowerup, int pSelect_new) {
     int i;
-    tNet_message* msg;
 
     if (pPowerup->initial_value < 0 || gINT_006a0a6c != 0) {
         if (pPowerup->got_time != 0 && pPowerup->lose_proc != NULL) {
@@ -3894,16 +4075,16 @@ void C2_HOOK_FASTCALL KeyboardPowerupFinished(tPowerup* pPowerup, int pSelect_ne
             ARPowerupLose(pPowerup, pPowerup->car);
         }
         if (gNet_mode != eNet_mode_none) {
-            msg = NetBuildGuaranteedMessage(0x16, 0);
+            tNet_message* msg = NetBuildGuaranteedMessage(0x16, 0);
             *(int*)((tU8*)msg + 0x28) = 2;
             *(tPlayer_ID*)((tU8*)msg + 0x1c) = gLocal_net_ID;
             *(int*)((tU8*)msg + 0x20) = pPowerup - gPowerup_array;
             NetGuaranteedSendMessageToAllPlayers(gCurrent_net_game, msg, NULL);
         }
-        gPowerup_net_state[pPowerup - gPowerup_array] = 0;
+        gProgram_state.current_car.powerups[pPowerup - gPowerup_array] = 0;
         if (pPowerup->initial_value == 0) {
             for (i = 0; i < gNumber_of_icons; i++) {
-                if (gPickedup_powerups[i].powerup == pPowerup) {
+                if (pPowerup == gPickedup_powerups[i].powerup) {
                     gPickedup_powerups[i].fizzle_stage = 3;
                     gPickedup_powerups[i].fizzle_direction = -1;
                     gPickedup_powerups[i].fizzle_start = GetTotalTime();
@@ -3918,8 +4099,7 @@ void C2_HOOK_FASTCALL KeyboardPowerupFinished(tPowerup* pPowerup, int pSelect_ne
         return;
     }
     i = gInventory_selected;
-    gInventory_selected = -1;
-    gInventory[i] = -1;
+    gInventory[i] = gInventory_selected = -1;
     for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gInventory); i++) {
         if (gInventory[i] >= 0) {
             gInventory_selected = i;
@@ -4124,6 +4304,16 @@ void C2_HOOK_FASTCALL DrawPowerups(tU32 pTime) {
     C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGraf_data, keyboard_powerup_bg_x, 0x2b4);
     C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGraf_data, keyboard_powerup_spacing_x, 0x2b8);
 
+#ifndef CARPOCALYPSE2_MATCHING
+    /* port: the counts, timers and names next to the power-up icons use the 8 px TINYFONT, too
+     * small on the Vita's screen; drawn (and measured, so the icon spacing follows) with the 16 px
+     * head-up font instead */
+    extern int gDRFont_to_polyfont_mapping[24];
+    int saved_font_1 = gDRFont_to_polyfont_mapping[gFonts[1].id];
+    int saved_font_2 = gDRFont_to_polyfont_mapping[gFonts[2].id];
+    gDRFont_to_polyfont_mapping[gFonts[1].id] = kPolyfont_ingame_medium_orange;
+    gDRFont_to_polyfont_mapping[gFonts[2].id] = kPolyfont_ingame_medium_blue;
+#endif
     y = gCurrent_graf_data->power_up_icon_y;
     for (i = 0; i < gNumber_of_icons && i < 5; i++) {
         the_icon = &gPickedup_powerups[i];
@@ -4192,6 +4382,10 @@ void C2_HOOK_FASTCALL DrawPowerups(tU32 pTime) {
         DrawSinglePowerupIcon(1, pTime, gPowerup_array + gInventory[gInventory_selected], NULL,
             gCurrent_graf_data->keyboard_powerup_x, gCurrent_graf_data->keyboard_powerup_y, 0);
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    gDRFont_to_polyfont_mapping[gFonts[1].id] = saved_font_1;
+    gDRFont_to_polyfont_mapping[gFonts[2].id] = saved_font_2;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004e0710
@@ -4218,7 +4412,7 @@ void C2_HOOK_FASTCALL MayQueuePowerupRespawn(int pPowerup_index, br_actor* actor
 
     if (actor != NULL && gRace_powerup_respawn_bools[pPowerup_index] && (gNet_mode == eNet_mode_none || gCurrent_net_game->options.powerup_respawn)) {
 for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gRespawn_powerups); i++) {
-            if (gRespawn_powerups[i].actor != NULL) {
+            if (gRespawn_powerups[i].actor == NULL) {
                 gRespawn_powerups[i].actor = actor;
                 gRespawn_powerups[i].index = pPowerup_index;;
                 gRespawn_powerups[i].respawn_time = GetTotalTime() + gPickup_respawn_max_extra_time_ms / 2 + gPickup_respawn_min_time_ms;

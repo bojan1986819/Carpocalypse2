@@ -378,7 +378,7 @@ br_error C2_HOOK_CDECL _M_br_device_pixelmap_mem_copyTo(br_device_pixelmap* self
                 self->pm_pixels_qualifier,
                 (br_uint_8*)src->pm_pixels + src->pm_base_y * src->pm_row_bytes + src->pm_base_x * bytes,
                 src->pm_pixels_qualifier,
-                self->pm_width * self->pm_height,
+                self->pm_height * self->pm_width,
                 bytes);
         } else {
             pm_mem_copy_colour(
@@ -432,7 +432,7 @@ br_error C2_HOOK_CDECL _M_br_device_pixelmap_mem_copyFrom(br_device_pixelmap* se
                     dest->pm_pixels_qualifier,
                     (br_uint_8*)self->pm_pixels + self->pm_base_y * self->pm_row_bytes + self->pm_base_x * bytes,
                     self->pm_pixels_qualifier,
-                    self->pm_width * self->pm_height,
+                    self->pm_height * self->pm_width,
                     bytes);
         } else {
             pm_mem_copy_colour(
@@ -606,7 +606,6 @@ br_error C2_HOOK_CDECL _M_br_device_pixelmap_mem_rectangleCopyTo(br_device_pixel
     return 0;
 }
 
-// C2PORT-NONMATCHING: best 15.32% | difftest PASS 2000 trials (spec difftest/specs/0053a3f0_M_br_device_pixelmap_mem_rectangleCopyFrom.json) | reason pointer arithmetic and compiler stack layout
 // FUNCTION: CARMA2_HW 0x0053a3f0
 br_error C2_HOOK_CDECL _M_br_device_pixelmap_mem_rectangleCopyFrom(br_device_pixelmap* self, br_point* p, br_device_pixelmap* dest, br_rectangle* r) {
     int bytes;
@@ -796,9 +795,13 @@ br_error C2_HOOK_CDECL _M_br_device_pixelmap_mem_line(br_device_pixelmap* self, 
     sx = as.x < ae.x ? 1 : -1;
     dx = (ae.x - as.x) * sx;
     sy = as.y < ae.y ? 1 : -1;
-    /* Bresenham: dy is the negative absolute delta (a positive one broke every sloped line,
+#ifdef CARPOCALYPSE2_MATCHING
+    dy = (ae.y - as.y) * sy;
+#else
+    /* port: Bresenham needs dy as the negative absolute delta (a positive one broke every sloped line,
      * e.g. the mini map's checkpoint/opponent direction lines) */
     dy = -(ae.y - as.y) * sy;
+#endif
     err = dx + dy;
 
     p.x = as.x;

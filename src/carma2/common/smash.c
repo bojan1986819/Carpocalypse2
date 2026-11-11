@@ -262,22 +262,27 @@ void C2_HOOK_FASTCALL InitSmashing(void) {
 // FUNCTION: CARMA2_HW 0x004f02b0
 void C2_HOOK_FASTCALL CleanUpSmashStuff(void) {
     int i;
+    tDecal* decal;
+    tExplosion* explosion;
 
     MungeGlassFragments2(1);
-    i = CARPOCALYPSE2_ASIZE(gDecals);
+    i = (int)CARPOCALYPSE2_ASIZE(gDecals);
+    decal = gDecals;
     do {
-        tDecal* decal = &gDecals[CARPOCALYPSE2_ASIZE(gDecals) - i];
         if (decal->time != 0) {
             BrActorRemove(decal->actor);
         }
         decal->time = 0;
+        decal++;
         i--;
     } while (i != 0);
-    i = CARPOCALYPSE2_ASIZE(gExplosions);
+    i = (int)CARPOCALYPSE2_ASIZE(gExplosions);
+    explosion = gExplosions;
     do {
-        if (gExplosions[CARPOCALYPSE2_ASIZE(gExplosions) - i].actor->parent != NULL) {
-            BrActorRemove(gExplosions[CARPOCALYPSE2_ASIZE(gExplosions) - i].actor);
+        if (explosion->actor->parent != NULL) {
+            BrActorRemove(explosion->actor);
         }
+        explosion++;
         i--;
     } while (i != 0);
 }

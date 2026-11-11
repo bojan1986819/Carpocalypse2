@@ -223,6 +223,15 @@ int main(int argc, char *argv[]) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "SDL_Init failed", SDL_GetError(), NULL);
         return 1;
     }
+#ifdef __vita__
+    {
+        extern void C2VitaSoundPrefetchStart(void);
+        extern void C2VitaBootMark(const char* pStage);
+        C2VitaBootMark("SDL initialised");
+        C2VitaSoundPrefetchStart(); /* read the sound bank on a second core while the boot continues */
+        C2VitaBootMark("sound prefetch started");
+    }
+#endif
 
 #if defined(SDL_PLATFORM_ANDROID)
     if (!carpocalypse2_EnterAndroidDataDir()) {
@@ -238,7 +247,10 @@ int main(int argc, char *argv[]) {
     {
         extern int C2VitaPrepareData(void);
         extern const char* C2VitaDataHint(void);
-        if (!C2VitaPrepareData()) {
+        extern void C2VitaBootMark(const char* pStage);
+        int prepared = C2VitaPrepareData();
+        C2VitaBootMark("game data checked");
+        if (!prepared) {
             SDL_Window* window=SDL_CreateWindow("Carmageddon 2",960,544,0);
             SDL_Renderer* renderer=window ? SDL_CreateRenderer(window,NULL) : NULL;
             if (renderer) {
@@ -282,6 +294,10 @@ int main(int argc, char *argv[]) {
     }
 #ifdef __vita__
     C2VitaLog("Game window created: 960x544\n");
+    {
+        extern void C2VitaBootMark(const char* pStage);
+        C2VitaBootMark("window created");
+    }
     if (!C2VitaVideoInit(g_SDL_Window)) {
         C2VitaLog("VIDEO renderer startup failed: %s\n", SDL_GetError());
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vita video startup failed", SDL_GetError(), g_SDL_Window);
@@ -296,6 +312,10 @@ int main(int argc, char *argv[]) {
 
 #ifdef __vita__
     C2VitaLog("Entering GameMain\n");
+    {
+        extern void C2VitaBootMark(const char* pStage);
+        C2VitaBootMark("video ready, entering GameMain");
+    }
 #endif
     GameMain(1, args);
 

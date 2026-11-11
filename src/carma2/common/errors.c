@@ -307,6 +307,10 @@ void C2_HOOK_FASTCALL OpenDiagnostics(void) {
     if (gDiagnostic_file == NULL) {
         return;
     }
+#ifdef __vita__
+    /* a stdio buffer fill is a synchronous card write (~8 ms): fill rarely; dr_dprintf flushes */
+    setvbuf(gDiagnostic_file, NULL, _IOFBF, 64 * 1024);
+#endif
     fputs("DIAGNOSTIC OUTPUT\n", gDiagnostic_file);
     // todo: generate a real date
     fprintf(gDiagnostic_file, "Date / time : %s\n\n\n", __DATE__ " : " __TIME__);

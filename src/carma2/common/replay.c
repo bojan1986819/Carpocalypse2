@@ -565,6 +565,7 @@ void C2_HOOK_FASTCALL InitialiseActionReplay(void) {
         return;
     }
     gCrush_space = NULL;
+    gSmudge_space = NULL;
 }
 
 // FUNCTION: CARMA2_HW 0x004c6c60
@@ -785,7 +786,7 @@ void C2_HOOK_FASTCALL PollActionReplayControls(tU32 *pFrame_period, tU32* pAvera
 // FUNCTION: CARMA2_HW 0x00402360
 int C2_HOOK_FASTCALL ARReplayIsReallyPaused(void) {
 
-    return gReplay_rate == 0.f;
+    return gReplay_rate == gFLOAT_00589330;
 }
 
 // FUNCTION: CARMA2_HW 0x004c80b0

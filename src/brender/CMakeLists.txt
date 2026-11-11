@@ -307,6 +307,11 @@ endif()
 
 add_library(BRender::BRender ALIAS brender-static)
 
+# Vita test: C2_RENDER_OPT in the configure environment adds compile options for BRender (e.g. -Os)
+if(VITA AND DEFINED ENV{C2_RENDER_OPT})
+    target_compile_options(brender-static PRIVATE $ENV{C2_RENDER_OPT})
+endif()
+
 if(CARPOCALYPSE2_MATCHING)
     set(CMAKE_CXX_FLAGS "/W3 /GX /DWIN32 /D_WINDOWS")
     set(CMAKE_CXX_FLAGS_DEBUG "/Gm /Od /D_DEBUG")

@@ -264,10 +264,27 @@ int C2_HOOK_FASTCALL NetOptions_Outfunc(tFrontend_spec* pFrontend) {
     return 0;
 }
 
-// C2PORT-NONMATCHING: best 44.19% | difftest PASS 2000 trials (spec difftest/specs/00473220_NetOptions_CreditsRoller.json) | reason signed elapsed-time compare and codegen
 // FUNCTION: CARMA2_HW 0x00473220
 int C2_HOOK_FASTCALL NetOptions_CreditsRoller(tFrontend_spec* pFrontend) {
-
+#ifdef CARPOCALYPSE2_MATCHING
+    gFrontend_net_current_roll = PDGetTotalTime();
+    if ((int)(gFrontend_net_current_roll - gFrontend_net_last_roll) >= 300) {
+        gFrontend_net_last_roll = gFrontend_net_current_roll;
+        if (gFrontend_selected_item_index == 28) {
+            gFrontend_net_options.starting_credits += 1000;
+        } else if (gFrontend_selected_item_index == 27) {
+            gFrontend_net_options.starting_credits -= 1000;
+        }
+        if (gFrontend_net_options.starting_credits < 0) {
+            gFrontend_net_options.starting_credits = 0;
+        } else if (gFrontend_net_options.starting_credits > 500000) {
+            gFrontend_net_options.starting_credits = 500000;
+        }
+        sprintf(pFrontend->items[24].text, "%i", gFrontend_net_options.starting_credits);
+        FuckWithWidths(pFrontend);
+    }
+    return 0;
+#else
     gFrontend_net_current_roll = PDGetTotalTime();
     if ((int)(gFrontend_net_current_roll - gFrontend_net_last_roll) < 300) {
         return 0;
@@ -286,6 +303,7 @@ int C2_HOOK_FASTCALL NetOptions_CreditsRoller(tFrontend_spec* pFrontend) {
     sprintf(pFrontend->items[24].text, "%i", gFrontend_net_options.starting_credits);
     FuckWithWidths(pFrontend);
     return 0;
+#endif
 }
 
 // C2PORT-NONMATCHING: best 45.66% | difftest PASS 2000 trials (spec difftest/specs/004732b0_NetOptions_TargetRoller.json) | reason switch and formatting codegen differs after signed-timer fix

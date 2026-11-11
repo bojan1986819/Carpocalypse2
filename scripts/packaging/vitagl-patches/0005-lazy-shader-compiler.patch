@@ -1,0 +1,70 @@
+diff --git a/source/custom_shaders.c b/source/custom_shaders.c
+index 67d863e..4a60812 100644
+--- a/source/custom_shaders.c
++++ b/source/custom_shaders.c
+@@ -766,6 +766,8 @@ static inline __attribute__((always_inline)) void compile_shader(shader *s, GLbo
+ static inline __attribute__((always_inline)) void compile_shader(shader *s, GLboolean save_bindings) {
+ #endif
+ 	// Compiling shader source
++	if (!is_shark_online)
++		start_shader_compiler(); // C2 port: started lazily
+ 	s->prog = shark_compile_shader_extended((const char *)s->source, &s->size, s->type == GL_FRAGMENT_SHADER ? SHARK_FRAGMENT_SHADER : SHARK_VERTEX_SHADER, compiler_opts, compiler_fastmath, compiler_fastprecision, compiler_fastint);
+ 	if (s->prog) {
+ 		vgl_free(s->source);
+@@ -2022,11 +2024,6 @@ void glShaderBinary(GLsizei count, const GLuint *handles, GLenum binaryFormat, c
+ void glCompileShader(GLuint handle) {
+ 	THREAD_SAFE()
+ 
+-	// If vitaShaRK is not enabled, we try to initialize it
+-	if (!is_shark_online && !start_shader_compiler()) {
+-		SET_GL_ERROR(GL_INVALID_OPERATION)
+-	}
+-	
+ 	// Grabbing passed shader
+ 	shader *s = shaders[handle - 1];
+ 	
+@@ -2054,6 +2051,11 @@ void glCompileShader(GLuint handle) {
+ 	}
+ #endif
+ 
++	// If vitaShaRK is not enabled, we try to initialize it (C2 port: only when the cache has no copy)
++	if (!is_shark_online && !start_shader_compiler()) {
++		SET_GL_ERROR(GL_INVALID_OPERATION)
++	}
++
+ 	if (s->is_glsl) {
+ 		glsl_translator_process(s);
+ 	}
+diff --git a/source/gxm.c b/source/gxm.c
+index ff8cd5a..3e92bf0 100644
+--- a/source/gxm.c
++++ b/source/gxm.c
+@@ -321,6 +321,12 @@ GLboolean start_shader_compiler(void) {
+ 			vgl_log("%s:%d Fatal error: SceShaccCg not found.\n", __FILE__, __LINE__);
+ #endif
+ 	}
++#if defined(HAVE_SHARK_LOG) || defined(LOG_ERRORS)
++	if (is_shark_online) {
++		shark_install_log_cb(shark_log_cb);
++		shark_set_warnings_level(SHARK_WARN_HIGH);
++	}
++#endif
+ 
+ 	return is_shark_online;
+ }
+@@ -346,13 +352,8 @@ void init_gxm(void) {
+ 	sceRazorGpuCaptureEnableSalvage("ux0:data/vitagl_gpucrash.sgx");
+ #endif
+ 
+-	// Initializing runtime shader compiler
+-	if (start_shader_compiler()) {
+-#if defined(HAVE_SHARK_LOG) || defined(LOG_ERRORS)
+-		shark_install_log_cb(shark_log_cb);
+-		shark_set_warnings_level(SHARK_WARN_HIGH);
+-#endif
+-	}
++	// C2 port: the runtime shader compiler (loading libshacccg.suprx, ~1.5 s of the boot) starts on
++	// the first shader that is not in the shader cache (glCompileShader, vgl_compile_shader, ffp)
+ 
+ #ifndef HAVE_SINGLE_THREADED_GC
+ 	// Initializing garbage collector

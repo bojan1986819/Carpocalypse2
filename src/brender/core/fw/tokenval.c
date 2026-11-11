@@ -665,9 +665,52 @@ br_error C2_HOOK_CDECL BrTokenValueQueryManySize(br_size_t* psize, br_token_valu
     return 0;
 }
 
-// C2PORT-NONMATCHING: best 48.1% | difftest PASS 2000 trials (spec 0052e430_BrTokenValueQueryAll.json) | reason resolved all entries; VC5 loop and register allocation differ
 // FUNCTION: CARMA2_HW 0x0052e430
 br_error C2_HOOK_CDECL BrTokenValueQueryAll(br_token_value* buffer, br_size_t buffer_size, void* block, br_tv_template* template) {
+#ifdef CARPOCALYPSE2_MATCHING
+    br_tv_template_entry* tp;
+    int n;
+    int e;
+    br_token_value* tv;
+    char* extra;
+    br_size_t extra_size;
+    br_error r;
+
+    if (!template->names_resolved) {
+        templateResolveNames(template);
+    }
+
+    n = 1;
+    for (e = 0; e < template->n_entries; e++) {
+        tp = &template->entries[e];
+        if (tp->token != BR_NULL_TOKEN && (tp->flags & 0x4)) {
+            n++;
+        }
+    }
+    extra = (char *)(buffer + n);
+    if (buffer_size < sizeof(*buffer) * n) {
+        return 0x1004;
+    }
+    tv = buffer;
+    extra_size = buffer_size - sizeof(*buffer) * n;
+    for (e = 0; e < template->n_entries; e++) {
+        tp = &template->entries[e];
+        if (tp->token == BR_NULL_TOKEN) {
+            continue;
+        }
+        if ((tp->flags & 4) == 0) {
+            continue;
+        }
+        tv->t = tp->token;
+        r = ValueQuery(tv, (void*)&extra, &extra_size, block, tp);
+        if (r != 0) {
+            return r;
+        }
+        tv++;
+    }
+    tv->t = BR_NULL_TOKEN;
+    return 0;
+#else
     br_tv_template_entry* tp;
     int n;
     int e;
@@ -715,6 +758,7 @@ br_error C2_HOOK_CDECL BrTokenValueQueryAll(br_token_value* buffer, br_size_t bu
     }
     tv->t = BR_NULL_TOKEN;
     return 0;
+#endif
 }
 
 // C2PORT-NONMATCHING: best 27.35% | difftest PASS 2000 trials (spec difftest/specs/0052e510_BrTokenValueQueryAllSize.json) | reason token template resolution and VC5 size accumulation layout

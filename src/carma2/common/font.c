@@ -1168,9 +1168,50 @@ void C2_HOOK_FASTCALL InitPolyFontMaterials(void) {
     }
 }
 
-// C2PORT-NONMATCHING: best 47.25% | difftest PASS 2000 trials (spec difftest/specs/00465250_GetPolyFontMaterial.json) | reason material slot/texture handling codegen (register and stack order), logic checked
 // FUNCTION: CARMA2_HW 0x00465250
 br_material* C2_HOOK_FASTCALL GetPolyFontMaterial(int pFont_index, char pChar) {
+#ifdef CARPOCALYPSE2_MATCHING
+    tU8 uchar;
+    br_material* material;
+    float f_size;
+    tU32 packed_font_character;
+
+    // GLOBAL: CARMA2 0x00686480
+    static int poly_font_material_index;
+
+    // GLOBAL: CARMA2 0x00686498
+    static tU16 poly_font_material_generation;
+
+    C2_HOOK_BUG_ON(sizeof(tPolyFont) != 0x1c68);
+    C2_HOOK_BUG_ON(sizeof(tPolyFontGlyph) != 0x1c);
+
+    uchar = pChar;
+    material = gPoly_fonts[pFont_index].glyphs[uchar].material;
+    packed_font_character = POLYFONT_FONT_CHARACTER(pFont_index, uchar);
+    if (material != NULL && POLYFONT_MATERIAL_GET_FONT_CHARACTER(material) == packed_font_character) {
+        material->user = POLYFONT_PACK_USER(packed_font_character, poly_font_material_generation);
+        return material;
+    }
+    // Find "oldest" material, and re-use
+    do {
+        poly_font_material_index += 1;
+        poly_font_material_generation += 1;
+        if (poly_font_material_index >= (int)CARPOCALYPSE2_ASIZE(gPoly_font_materials)) {
+            poly_font_material_index = 0;
+        }
+    } while ((poly_font_material_generation - POLYFONT_MATERIAL_GET_GENERATION(gPoly_font_materials[poly_font_material_index])) < (int)CARPOCALYPSE2_ASIZE(gPoly_font_materials));
+    material = gPoly_font_materials[poly_font_material_index];
+    gPoly_fonts[pFont_index].glyphs[uchar].material = material;
+    material->colour_map = gTexture_maps[gPoly_fonts[pFont_index].glyphs[uchar].index];
+    material->user = POLYFONT_PACK_USER(packed_font_character, poly_font_material_generation);;
+    f_size = (float)gPoly_fonts[pFont_index].fontSize;
+    BrMatrix23Scale(&material->map_transform, f_size / 64.0f, f_size / 64.0f);
+    material->map_transform.m[2][0] = gPoly_fonts[pFont_index].glyphs[uchar].texCoord.v[0];
+    material->map_transform.m[2][1] = gPoly_fonts[pFont_index].glyphs[uchar].texCoord.v[1];
+    material->extra_prim = NULL;
+    BrMaterialUpdate(material, BR_MATU_ALL);
+    return material;
+#else
     br_material* material;
     br_scalar factor;
     tU8 uchar;
@@ -1211,6 +1252,7 @@ br_material* C2_HOOK_FASTCALL GetPolyFontMaterial(int pFont_index, char pChar) {
     material->extra_prim = NULL;
     BrMaterialUpdate(material, BR_MATU_ALL);
     return material;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00464e40
@@ -1524,14 +1566,73 @@ void C2_HOOK_FASTCALL LoadFont(int pFont_ID) {
     PathCat(the_path, the_path, "FONTS");
     PathCat(the_path, the_path, gFont_names[pFont_ID]);
 
-    /* Retail uses polyfonts for glyphs; this function only reads TXT metrics. */
+#ifndef CARPOCALYPSE2_MATCHING
+    /* Load font from TWT archive: mount <name>.TWT then load PIXIES.P16 */
+    {
+        tPath_name pix_path;
+        tTWTVFS twt;
+        extern tTWTVFS C2_HOOK_FASTCALL OpenPackFileAndSetTiffLoading(const char* path);
+        extern void C2_HOOK_FASTCALL ClosePackFileAndSetTiffLoading(tTWTVFS twt);
+        br_pixelmap* maps[100];
+        int count;
+        int biggest = -1;
+        int bigsz = 0;
+
+        twt = OpenPackFileAndSetTiffLoading(the_path);
+        if (twt >= 0) {
+            PathCat(pix_path, the_path, "PIXIES.P16");
+            count = BrPixelmapLoadMany(pix_path, maps, 100);
+            ClosePackFileAndSetTiffLoading(twt);
+
+            for (i = 0; i < count; i++) {
+                if (maps[i] != NULL && maps[i]->width * maps[i]->height > bigsz) {
+                    bigsz = maps[i]->width * maps[i]->height;
+                    biggest = i;
+                }
+            }
+            if (biggest >= 0) {
+                gFonts[pFont_ID].images = maps[biggest];
+            }
+        }
+    }
+    if (gFonts[pFont_ID].images == NULL) {
+        /* Try TIFF from FONTS/tiffrgb/ */
+        tPath_name tif_path;
+        tPath_name base_path;
+        int tif_err;
+
+        strcpy(base_path, the_path);
+        the_path[strlen(the_path) - (int)strlen(gFont_names[pFont_ID]) - 1] = '\0';
+        PathCat(tif_path, the_path, "tiffrgb");
+        PathCat(tif_path, tif_path, gFont_names[pFont_ID]);
+        strcat(tif_path, ".tif");
+        gFonts[pFont_ID].images = LoadTiff16bit(tif_path, 0, &tif_err);
+        if (gFonts[pFont_ID].images != NULL) {
+            strcpy(the_path, base_path);
+            strcat(the_path, ".PIX");
+        }
+    }
+    if (gFonts[pFont_ID].images == NULL) {
+        /* Fallback: try direct .PIX load */
+        strcat(the_path, ".PIX");
+        gFonts[pFont_ID].images = BrPixelmapLoad(the_path);
+    }
+    if (gFonts[pFont_ID].images == NULL) {
+        FatalError(kFatalError_CannotLoadFontImage_S, gFont_names[pFont_ID]);
+    }
+    gFonts[pFont_ID].images->row_bytes = (gFonts[pFont_ID].images->row_bytes + 3) & ~3;
+    if (the_path[strlen(the_path) - 4] != '.') {
+        strcat(the_path, ".PIX");
+    }
+#else
     strcat(the_path, ".PIX");
+#endif
 
     if (gFonts[pFont_ID].file_read_once) {
         return;
     }
-    the_path[strlen(the_path) - 4] = '\0';
-    strcat(the_path, ".TXT");
+    the_path[strlen(the_path) - 3] = '\0';
+    strcat(the_path, "TXT");
     file = DRfopen(the_path, "rt");
     if (file == NULL) {
         FatalError(kFatalError_CannotLoadFontWidthTable_S, gFont_names[pFont_ID]);
@@ -1617,7 +1718,6 @@ void C2_HOOK_FASTCALL DRPixelmapText(br_pixelmap* pPixelmap, int pX, int pY, con
     PolyFontText(pText, pX, pY, GetPolyFontIndexToReplaceDRfontWith(pFont), eJust_left, gRender_poly_text);
 }
 
-// C2PORT-NONMATCHING: best 48.21% | difftest PASS 2000 trials (spec difftest/specs/00465aa0_DRPixelmapCleverText.json) | reason VC5 loop codegen and register allocation
 // FUNCTION: CARMA2_HW 0x00465aa0
 void C2_HOOK_FASTCALL DRPixelmapCleverText(br_pixelmap* pPixelmap, int pX, int pY, tDR_font* pFont, const char* pText, int pRight_edge) {
     int i;
@@ -1654,64 +1754,30 @@ void C2_HOOK_FASTCALL DRPixelmapCleverText(br_pixelmap* pPixelmap, int pX, int p
     }
 }
 
-// C2PORT-NONMATCHING: best 41.74% | difftest PASS 2000 trials (spec difftest/specs/00465ca0_PolyFontTextWidth.json) | reason string-scan-loop
 // FUNCTION: CARMA2_HW 0x00465ca0
 int C2_HOOK_FASTCALL PolyFontTextWidth(int pFont, const char* pText) {
     int len;
     int i;
-    int result;
-    tU8 c;
+    int text_width;
+    int spacing;
 
-    if (!gPoly_fonts[pFont].available) {
-        LoadInterfaceFonts();
-    }
+    text_width = 0;
+    spacing = 0;
+    CheckAvailabilityOfThisFont(pFont);
     len = (int)strlen(pText);
-    result = 0;
     for (i = 0; i < len; i++) {
-        c = pText[i];
-        if (c >= 'a' && c <= 'z') {
-            c = c - 'a' + 'A';
-        }
-        if (gPoly_fonts[pFont].glyphs[c].used) {
-            result += gPoly_fonts[pFont].glyphs[c].glyph_width;
-        } else {
-            result += gPoly_fonts[pFont].widthOfBlank;
-        }
+        text_width += CharacterWidth(pFont, pText[i]);
     }
     if (len > 1) {
-        result += (len - 1) * gPoly_fonts[pFont].interCharacterSpacing;
+        spacing = (len - 1) * gPoly_fonts[pFont].interCharacterSpacing;
     }
-    return result;
+    return text_width + spacing;
 }
 
-// C2PORT-NONMATCHING: best 43.70% | difftest PASS 2000 trials (spec difftest/specs/00465d50_DRTextWidth.json) | reason VC5 string-scan and register allocation
 // FUNCTION: CARMA2_HW 0x00465d50
 int C2_HOOK_FASTCALL DRTextWidth(const tDR_font* pFont, const char* pText) {
-    int polyfont;
-    int len;
-    int i;
-    int result;
-    tU8 c;
 
-    polyfont = gDRFont_to_polyfont_mapping[pFont->id];
-    CheckAvailabilityOfThisFont(polyfont);
-    len = (int)strlen(pText);
-    result = 0;
-    for (i = 0; i < len; i++) {
-        c = pText[i];
-        if (c >= 'a' && c <= 'z') {
-            c = c - 'a' + 'A';
-        }
-        if (gPoly_fonts[polyfont].glyphs[c].used) {
-            result += gPoly_fonts[polyfont].glyphs[c].glyph_width;
-        } else {
-            result += gPoly_fonts[polyfont].widthOfBlank;
-        }
-    }
-    if (len > 1) {
-        result += (len - 1) * gPoly_fonts[polyfont].interCharacterSpacing;
-    }
-    return result;
+    return PolyFontTextWidth(GetPolyFontIndexToReplaceDRfontWith(pFont), pText);
 }
 
 // C2PORT-NONMATCHING: best 34.12% | difftest PASS 2000 trials (spec difftest/specs/00465e10_DRTextCleverWidth.json) | reason string-scan and register allocation
@@ -1752,13 +1818,12 @@ int C2_HOOK_FASTCALL DRTextCleverWidth(const tDR_font* pFont, const char* pText)
 
 static __inline int IntLineWidth(const tDR_font* pFont, const char* pText);
 
-// C2PORT-NONMATCHING: best 38.71% | difftest PASS 2000 trials (spec difftest/specs/00465f10_DRPixelmapCentredText.json) | reason VC5 inlines width scan and rearranges render call
 // FUNCTION: CARMA2_HW 0x00465f10
 void C2_HOOK_FASTCALL DRPixelmapCentredText(br_pixelmap* pPixelmap, int pX, int pY, const tDR_font* pFont, const char* pText) {
     int width_over_2;
 
-    width_over_2 = IntLineWidth(pFont, pText) / 2;
-    DRPixelmapText(pPixelmap, pX - width_over_2, pY, pFont, pText, width_over_2 + pX);
+    width_over_2 = DRTextWidth(pFont, pText) / 2;
+    DRPixelmapText(pPixelmap, pX - width_over_2, pY, pFont, pText, pX + width_over_2);
 }
 
 static __inline int IntLineWidth(const tDR_font* pFont, const char* pText) {

@@ -9,8 +9,8 @@
 #endif
 #if defined(__vita__) && defined(BREND_DRIVER_GL)
 #include "../../../carma2/platform/sdl3/vita_perf.h"
-#define VPB(x) do { if (C2VitaPerfDetail) C2VitaPerfBegin(x); } while (0)
-#define VPE(x) do { if (C2VitaPerfDetail) C2VitaPerfEnd(x); } while (0)
+#define VPB(x) do { if (C2VitaPerfDetail) C2VitaPerfBegin(x); else C2VitaPhasePush(x); } while (0)
+#define VPE(x) do { if (C2VitaPerfDetail) C2VitaPerfEnd(x); else C2VitaPhasePop(); } while (0)
 #else
 #define VPB(x) ((void)0)
 #define VPE(x) ((void)0)

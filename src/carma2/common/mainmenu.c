@@ -153,6 +153,13 @@ int C2_HOOK_FASTCALL DoMainScreen(void) {
     {
         /* port test harness: C2_TEST_RACE=1 skips the frontend once and starts the current race */
         static int test_race_done;
+        if (test_race_done && getenv("C2_TEST_RACES") != NULL && test_race_done < atoi(getenv("C2_TEST_RACES"))) {
+            /* C2_TEST_RACES=<n>,<s> (mainloop.c TestRaces): the next of <n> races */
+            test_race_done++;
+            dr_dprintf("TEST RACES race %d", test_race_done);
+            gProgram_state.prog_status = eProg_game_starting;
+            return 1;
+        }
         if (!test_race_done && getenv("C2_TEST_RACE") != NULL) {
             const char* index = getenv("C2_TEST_RACE_INDEX");
             if (index != NULL) {
@@ -165,6 +172,13 @@ int C2_HOOK_FASTCALL DoMainScreen(void) {
                 }
             }
             test_race_done = 1;
+#ifdef __vita__
+            if (getenv("C2_TEST_RACE_DELAY") != NULL) {
+                /* time a player spends in the menus (background loading gets it) */
+                extern int sceKernelDelayThread(unsigned int delay);
+                sceKernelDelayThread((unsigned int)atoi(getenv("C2_TEST_RACE_DELAY")) * 1000u);
+            }
+#endif
             gProgram_state.prog_status = eProg_game_starting;
             return 1;
         }

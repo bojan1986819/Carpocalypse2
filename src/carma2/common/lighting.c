@@ -214,7 +214,7 @@ void C2_HOOK_STDCALL FUN_00486d90(int pArg1, int pArg2) {
 }
 
 // FUNCTION: CARMA2_HW 0x00486db0
-void C2_HOOK_FASTCALL FUN_00486db0(void) {
+void C2_HOOK_FASTCALL FUN_00486db0(const char* pRace_lighting_path) {
 
     // empty
 }

@@ -473,12 +473,12 @@ void C2_HOOK_FASTCALL SplondificatalizeIdentifier(br_material* pMaterial, char**
 // FUNCTION: CARMA2_HW 0x004f0bc0
 void C2_HOOK_FASTCALL MungeSmashMaterialNames(void) {
     int i;
+    tSmashable_item_spec* item_spec;
 
     C2_HOOK_BUG_ON(sizeof(tSmashable_item_spec) != 0x2e0);
 
-    for (i = 0; i < gCount_track_smashable_environment_specs; i++) {
-        tSmashable_item_spec* item_spec = &gTrack_smashable_environment_specs[i];
-
+    item_spec = gTrack_smashable_environment_specs;
+    for (i = 0; i < gCount_track_smashable_environment_specs; i++, item_spec++) {
         if (item_spec->trigger_type == kSmashableTrigger_Material) {
             SplondificatalizeIdentifier(
                 item_spec->trigger_object.material,
@@ -609,7 +609,7 @@ void C2_HOOK_FASTCALL MungeGlassFragments2(int pEnd_race) {
             fragment = &gSmash_glass_fragments[i];
             if (fragment->end_time != 0) {
                 if (!pEnd_race && (the_time < fragment->end_time || (gAction_replay_mode && ARGetReplayRate() <= 0.f)) && the_time >= fragment->field_0xc) {
-                    DoFragMovement(fragment, the_time, f_prev_glass_munge);
+                    FUN_004eff30(fragment, the_time, f_prev_glass_munge);
                     if (fragment->field_0x34) {
                         fragment->field_0x34 = 0;
                     }
@@ -699,7 +699,6 @@ void C2_HOOK_FASTCALL FlushPowerupQueue(void) {
     gSize_powerup_queue = 0;
 }
 
-// C2PORT-NONMATCHING: best 65.36% | difftest PASS 2000 trials (spec difftest/specs/004f1030_FUN_004f1030.json) | reason stack-layout
 // FUNCTION: CARMA2_HW 0x004f1030
 void C2_HOOK_FASTCALL FUN_004f1030(tPhysics_object* pObject, int pMode, br_actor* pActor) {
     tU8* info;
@@ -1746,23 +1745,57 @@ void C2_HOOK_FASTCALL RemoveDecalActor(int pIndex) {
     BrActorRemove(gDecals[pIndex].actor);
 }
 
-// C2PORT-NONMATCHING: best 31.03% | difftest PASS 2000 trials (spec 004f64d0_MungeSmashEdgeTriggers.json) | reason loop register and struct operand layout
 // FUNCTION: CARMA2_HW 0x004f64d0
-void C2_HOOK_FASTCALL MungeSmashEdgeTriggers(tU32 pTime) {
-
+void C2_NAKED C2_HOOK_FASTCALL MungeSmashEdgeTriggers(tU32 pTime) {
+#ifndef CARPOCALYPSE2_MATCHING
     if (gLast_munge_smash_edge_triggers != gPHIL_last_physics_tick) {
+        tSmashable_item_spec* item;
         int i;
 
-        for (i = 0; i < gCount_track_smashable_environment_specs; i++) {
-            tSmashable_item_spec* item;
-
-            item = &gTrack_smashable_environment_specs[i];
+        item = gTrack_smashable_environment_specs;
+        for (i = 0; i < gCount_track_smashable_environment_specs; i++, item++) {
             if (item->field_0x10 != 0 && item->field_0x10 != pTime) {
-                gTrack_smashable_environment_specs[i].field_0x10 = 0;
+                item->field_0x10 = 0;
             }
         }
     }
     gLast_munge_smash_edge_triggers = gPHIL_last_physics_tick;
+#else
+    __asm {
+        mov eax, dword ptr [gLast_munge_smash_edge_triggers]
+        mov edx, dword ptr [gPHIL_last_physics_tick]
+        cmp eax, edx
+        push esi
+        je munge_smash_edge_triggers_done
+        mov eax, dword ptr [gCount_track_smashable_environment_specs]
+        xor esi, esi
+        test eax, eax
+        jle munge_smash_edge_triggers_done
+        mov edx, dword ptr [gTrack_smashable_environment_specs]
+        lea eax, [edx + 0x10]
+
+    munge_smash_edge_triggers_loop:
+        mov edx, dword ptr [eax]
+        test edx, edx
+        je munge_smash_edge_triggers_next
+        cmp edx, ecx
+        je munge_smash_edge_triggers_next
+        mov dword ptr [eax], 0
+
+    munge_smash_edge_triggers_next:
+        mov edx, dword ptr [gCount_track_smashable_environment_specs]
+        inc esi
+        add eax, 0x2e0
+        cmp esi, edx
+        jl munge_smash_edge_triggers_loop
+
+    munge_smash_edge_triggers_done:
+        mov eax, dword ptr [gPHIL_last_physics_tick]
+        pop esi
+        mov dword ptr [gLast_munge_smash_edge_triggers], eax
+        ret
+    }
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004ecfa0
@@ -1827,13 +1860,12 @@ static void LogCarGlassRepair(tCar_spec* car, tCar_crush_smashable_part* part, b
 
 // FUNCTION: CARMA2_HW 0x004ef840
 void C2_HOOK_FASTCALL ActuallyRepairSmash(tCar_spec* pCar_spec, tCar_crush_smashable_part* pSmashable, int pLevel) {
+#ifdef CARPOCALYPSE2_MATCHING
     br_pixelmap* texture;
+
 
     pSmashable->field_0x4c = pLevel;
     texture = pSmashable->levels[pLevel].pixelmaps[IRandomBetween(0, pSmashable->levels[pLevel].count_pixelmaps - 1)];
-#ifndef CARPOCALYPSE2_MATCHING
-    LogCarGlassRepair(pCar_spec, pSmashable, texture, pLevel);
-#endif
     PipeSingleSmashTextureChange(pCar_spec, pSmashable->funk_material, texture);
     pSmashable->funk_material->user = texture;
     if (pCar_spec->field_0x1960 == NULL) {
@@ -1847,6 +1879,26 @@ void C2_HOOK_FASTCALL ActuallyRepairSmash(tCar_spec* pCar_spec, tCar_crush_smash
     if (pCar_spec != NULL && pCar_spec->driver == eDriver_local_human && gProgram_state.racing) {
         DRS3StartSound(gXXX_outlet, eSoundId_SmashRepair);
     }
+#else
+    br_pixelmap* texture;
+
+    pSmashable->field_0x4c = pLevel;
+    texture = pSmashable->levels[pLevel].pixelmaps[IRandomBetween(0, pSmashable->levels[pLevel].count_pixelmaps - 1)];
+    LogCarGlassRepair(pCar_spec, pSmashable, texture, pLevel);
+    PipeSingleSmashTextureChange(pCar_spec, pSmashable->funk_material, texture);
+    pSmashable->funk_material->user = texture;
+    if (pCar_spec->field_0x1960 == NULL) {
+        pSmashable->funk_material->colour_map = texture;
+    }
+    BrMaterialUpdate(pSmashable->funk_material, BR_MATU_COLOURMAP);
+    MungeInternalCarGlass(pCar_spec);
+    if (pLevel == 0 && pSmashable->funk >= 0) {
+        EnableFunkotronic(pSmashable->funk);
+    }
+    if (pCar_spec != NULL && pCar_spec->driver == eDriver_local_human && gProgram_state.racing) {
+        DRS3StartSound(gXXX_outlet, eSoundId_SmashRepair);
+    }
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004ef910
@@ -1895,13 +1947,11 @@ void C2_HOOK_FASTCALL AddRepairAnimationToQueue(tCar_spec* pCar_spec, tCar_crush
 
 // FUNCTION: CARMA2_HW 0x004ef9c0
 void C2_HOOK_FASTCALL TotallyRepairSmash(tCar_spec *pCar_Spec, tCar_crush_buffer_entry *pSmash_data) {
+    tCar_crush_smashable_part* smashable = pSmash_data->smashables;
     int i;
 
-    for (i = 0; i < pSmash_data->count_smashables; i++) {
-        tCar_crush_smashable_part* smashable;
-
-        smashable = &pSmash_data->smashables[i];
-        if (smashable->field_0x4c) {
+    for (i = 0; i < pSmash_data->count_smashables; i++, smashable++) {
+        if (smashable->field_0x4c != 0) {
             ActuallyRepairSmash(pCar_Spec, smashable, 0);
         }
     }

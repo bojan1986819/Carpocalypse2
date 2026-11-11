@@ -146,7 +146,7 @@ void C2_HOOK_FASTCALL LessDepthFactor(void) {
     char s[256];
 
     if (gProgram_state.current_depth_effect.start > 3) {
-        gProgram_state.current_depth_effect.start = gProgram_state.current_depth_effect.start - 1;
+        gProgram_state.current_depth_effect.start--;
     }
     sprintf(s, "Depth start reduced to %d", gProgram_state.current_depth_effect.start);
     NewTextHeadupSlot(4, 0, 500, -1, s);
@@ -482,21 +482,39 @@ void C2_HOOK_FASTCALL AssertYons(void) {
 }
 
 // FUNCTION: CARMA2_HW 0x00446bc0
-void C2_HOOK_FASTCALL IncreaseAngle(void) {
+void C2_HOOK_STDCALL IncreaseAngle(void) {
     br_camera* camera_ptr;
     int i;
     char s[256];
 
     for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gCamera_list); i++) {
         camera_ptr = gCamera_list[i]->type_data;
-        camera_ptr->field_of_view += 0x1c7;
-        if (camera_ptr->field_of_view > 0x78e3) {
-            camera_ptr->field_of_view = 0x78e3;
+        camera_ptr->field_of_view += BrDegreeToAngle(2.5);
+        if (camera_ptr->field_of_view > BrDegreeToAngle(170)) {
+            camera_ptr->field_of_view = BrDegreeToAngle(170);
         }
         sprintf(s, "Camera angle increased to %d", gProgram_state.current_depth_effect.end);
         NewTextHeadupSlot(4, 0, 500, -1, s);
     }
 }
+
+// FUNCTION: CARMA2_HW 0x00446c40
+void C2_HOOK_STDCALL DecreaseAngle(void) {
+    br_camera* camera_ptr;
+    int i;
+    char s[256];
+
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gCamera_list); i++) {
+        camera_ptr = gCamera_list[i]->type_data;
+        camera_ptr->field_of_view -= BrDegreeToAngle(2.5);
+        if (camera_ptr->field_of_view < BrDegreeToAngle(10)) {
+            camera_ptr->field_of_view = BrDegreeToAngle(10);
+        }
+        sprintf(s, "Camera angle decreased to %d", gProgram_state.current_depth_effect.end);
+        NewTextHeadupSlot(4, 0, 500, -1, s);
+    }
+}
+
 
 // FUNCTION: CARMA2_HW 0x00447280
 void C2_HOOK_FASTCALL MungeRearviewSky(void) {
@@ -1109,9 +1127,9 @@ void C2_HOOK_FASTCALL ToggleSkyQuietly(void) {
     br_pixelmap* temp;
 
     temp = gProgram_state.current_depth_effect.sky_texture;
-    gProgram_state.default_depth_effect.sky_texture = gSwap_sky_texture;
+    gProgram_state.current_depth_effect.sky_texture = gSwap_sky_texture;
     gSwap_sky_texture = temp;
-    gProgram_state.current_depth_effect.sky_texture = gProgram_state.default_depth_effect.sky_texture;
+    gProgram_state.default_depth_effect.sky_texture = gProgram_state.current_depth_effect.sky_texture;
     if (gHorizon_material != NULL && gProgram_state.default_depth_effect.sky_texture != NULL) {
         gHorizon_material->colour_map = gProgram_state.current_depth_effect.sky_texture;
         BrMaterialUpdate(gHorizon_material, BR_MATU_ALL);
@@ -1145,6 +1163,7 @@ void C2_HOOK_FASTCALL ToggleDepthCueingQuietly(void) {
     int temp_green;
     int temp_blue;
 
+#pragma inline_depth(0)
     temp_type = gProgram_state.current_depth_effect.type;
     temp_start = gProgram_state.current_depth_effect.start;
     temp_end = gProgram_state.current_depth_effect.end;
@@ -1160,9 +1179,10 @@ void C2_HOOK_FASTCALL ToggleDepthCueingQuietly(void) {
         gSwap_depth_effect_colour_green,
         gSwap_depth_effect_colour_blue,
         gProgram_state.racing);
+#pragma inline_depth()
+    gSwap_depth_effect_type = temp_type;
     gSwap_depth_effect_start = temp_start;
     gSwap_depth_effect_end = temp_end;
-    gSwap_depth_effect_type = temp_type;
     gSwap_depth_effect_colour_red = temp_red;
     gSwap_depth_effect_colour_green = temp_green;
     gSwap_depth_effect_colour_blue = temp_blue;

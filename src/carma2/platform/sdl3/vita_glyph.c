@@ -32,6 +32,8 @@ typedef struct glyph_slot {
      * positions); the prepared block is re-stamped only when it changes, so the geometry
      * cache can trust an unchanged string instead of comparing ~18 KB every frame */
     unsigned long long input_hash, built_hash;
+    unsigned changes; /* test log: content changes since the last log */
+    float first_x, first_y; /* test log: position of the run's first glyph */
 } glyph_slot;
 #ifdef __vita__
 extern void C2VitaStampPrepared(v11model* m);
@@ -155,6 +157,7 @@ void C2VitaGlyphStringEnd(void) {
         for (v = 0; v < 3; ++v)
             run->group.faces[f].vertices[v] -= base;
     if (run->input_hash != run->built_hash || run->built_hash == 0) {
+        run->changes++;
         run->built_hash = run->input_hash;
         C2VitaStampPrepared(&run->prepared);
     }
@@ -185,6 +188,10 @@ void C2VitaGlyphSubmit(br_actor* root, const br_model* model,
     if (!run) run = NewRun(root, material);
     /* Fill backwards to preserve the legacy reverse actor traversal WITHIN
      * each page run too. Overlapping glyphs must retain their painter order. */
+    if (run->group.nvertices == 0) {
+        run->first_x = x;
+        run->first_y = y;
+    }
     vb = GLYPH_VERTICES - run->group.nvertices - source->nvertices;
     fb = GLYPH_FACES - run->group.nfaces - source->nfaces;
     for (i = 0; i < source->nvertices; ++i) {
@@ -231,12 +238,31 @@ int C2VitaGlyphHasActors(void) {
     return 0;
 }
 
+/* The HUD draws its text in two batches per frame. Releasing the slots after the first batch let the
+ * second one reuse them, so six slots alternated between two strings and were rebuilt and re-uploaded
+ * twice a frame (~170 KB). Held until the frame swap, every batch keeps its own slots and their
+ * geometry stays unchanged from frame to frame. */
+static int HoldUntilFrameEnd(void) {
+#ifdef __vita__
+    extern int C2VitaABFeature(const char* pFeature, int pDefault);
+    return C2VitaABFeature("glyphhold", 1);
+#else
+    return 0;
+#endif
+}
+
+void C2VitaGlyphFrameEnd(void) {
+    glyph_slot* slot;
+    for (slot = slots; slot; slot = slot->next)
+        if (!slot->actor->parent) slot->held = 0;
+}
+
 void C2VitaGlyphClean(void) {
     glyph_slot* slot;
     C2VitaGlyphStringEnd();
     for (slot = slots; slot; slot = slot->next) {
         if (slot->actor->parent) BrActorRemove(slot->actor);
-        if (!C2VitaTextSceneIsOpen()) slot->held = 0;
+        if (!C2VitaTextSceneIsOpen() && !HoldUntilFrameEnd()) slot->held = 0;
     }
 }
 
@@ -244,6 +270,21 @@ void C2VitaGlyphSceneEnded(void) {
     glyph_slot* slot;
     for (slot = slots; slot; slot = slot->next)
         if (!slot->actor->parent) slot->held = 0;
+}
+
+/* test log (C2_TEST_GLYPHLOG): per slot, content changes over the last 600 frames */
+void C2VitaGlyphLog(unsigned pFrames) {
+    static int on = -1;
+    glyph_slot* slot;
+    int i = 0;
+    extern void C2VitaLog(const char* format, ...);
+    if (on < 0) on = getenv("C2_TEST_GLYPHLOG") != NULL;
+    if (!on) return;
+    for (slot = slots; slot; slot = slot->next, i++) {
+        C2VitaLog("VITA GLYPH slot=%d changes=%u/%u vertices=%u first=%.1f,%.1f\n", i, slot->changes, pFrames,
+            (unsigned)slot->group.nvertices, (double)slot->first_x, (double)slot->first_y);
+        slot->changes = 0;
+    }
 }
 
 void C2VitaGlyphStats(unsigned* glyphs, unsigned* batches) {

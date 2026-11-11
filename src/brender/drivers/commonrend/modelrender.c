@@ -9,14 +9,25 @@
 #include <string.h>
 #if defined(__vita__) && defined(BREND_DRIVER_GL)
 #include "../../../carma2/platform/sdl3/vita_perf.h"
-#define VPB(x) do { if (C2VitaPerfDetail) C2VitaPerfBegin(x); } while (0)
-#define VPE(x) do { if (C2VitaPerfDetail) C2VitaPerfEnd(x); } while (0)
+#define VPB(x) do { if (C2VitaPerfDetail) C2VitaPerfBegin(x); else C2VitaPhasePush(x); } while (0)
+#define VPE(x) do { if (C2VitaPerfDetail) C2VitaPerfEnd(x); else C2VitaPhasePop(); } while (0)
 #else
 #define VPB(x) ((void)0)
 #define VPE(x) ((void)0)
 #endif
 #if defined(BREND_DRIVER_GL)
 #include "transparency.h"
+
+#ifdef __vita__
+/* The bytes last uploaded to the model uniform block. Anything else writing that block (the
+ * transparent pass) and every frame swap (vitaGL recycles its transient memory) clears
+ * gGLModelUboValid. */
+static shader_data_model gGLModelUboLast;
+int gGLModelUboValid;
+/* whether the last StoredGLRenderGroup drew its group itself, as the last GL draw (gstored.c reuses
+ * that draw's state for a following group that differs only in its texture) */
+int gGLGroupDrawnDirect;
+#endif
 
 /* BRender front faces in GL window space (determined on the desktop port). */
 #define C2_GL_FRONT GL_CW
@@ -67,7 +78,13 @@ void StoredSDL3GPURENDRenderGroup(br_geometry_stored* self, br_renderer* rendere
     shader_data_model model = {0};
 
 #if defined(__vita__) && defined(BREND_DRIVER_GL)
+    gGLGroupDrawnDirect = 0;
     C2VitaPerfCount(C2VPC_GROUPS);
+    {
+        extern const char* gDebug_render_model_name;
+        extern void C2VitaDrawProfile(const char* pModel_name);
+        C2VitaDrawProfile(gDebug_render_model_name);
+    }
 #endif
     /* 1. Update the per-model cache (matrices and lights). */
     VPB(C2VP_G_UPDATEMODEL);
@@ -160,11 +177,29 @@ void StoredSDL3GPURENDRenderGroup(br_geometry_stored* self, br_renderer* rendere
 #endif
         /* A forced foreground draw must remain after the pending alpha surfaces. */
         if (renderer->state.current->surface.force_front) GLFlushTransparent(renderer);
-        if (self->gl_primitive != GL_TRIANGLES || !GLQueueTransparent(renderer, groupinfo->group, &model)) {
+        br_boolean queued = BR_FALSE;
+        if (self->gl_primitive == GL_TRIANGLES) {
+            VPB(C2VP_G_TRANSP);
+            queued = GLQueueTransparent(renderer, groupinfo->group, &model);
+            VPE(C2VP_G_TRANSP);
+        }
+        if (!queued) {
 #ifdef __vita__
-            /* Per-draw uniforms are transient, not long-lived GPU geometry. */
+            if (self->vita_pending_refresh) { /* changed model, first draw from its buffers */
+                StoredGLApplyRefresh(self);
+                glBindVertexArray(self->gl_vao);
+            }
+            /* Per-draw uniforms are transient, not long-lived GPU geometry. Consecutive groups of
+             * one model (the merged track has ~160) mostly upload identical bytes: then the model
+             * block already holds them. */
             VPB(C2VP_G_UBO);
-            glBufferData(GL_UNIFORM_BUFFER, sizeof(model), &model, GL_STREAM_DRAW);
+            static int ubo_skip = -1; /* test: C2_TEST_NOUBOSKIP uploads every time */
+            if (ubo_skip < 0) ubo_skip = getenv("C2_TEST_NOUBOSKIP") == NULL;
+            if (!C2VitaABFeature("uboskip", ubo_skip) || !gGLModelUboValid || memcmp(&gGLModelUboLast, &model, sizeof(model)) != 0) {
+                glBufferData(GL_UNIFORM_BUFFER, sizeof(model), &model, GL_STREAM_DRAW);
+                gGLModelUboLast = model;
+                gGLModelUboValid = 1;
+            }
             VPE(C2VP_G_UBO);
 #else
             glBufferData(GL_UNIFORM_BUFFER, sizeof(model), &model, GL_STATIC_DRAW);
@@ -172,6 +207,9 @@ void StoredSDL3GPURENDRenderGroup(br_geometry_stored* self, br_renderer* rendere
             VPB(C2VP_G_DRAW);
             glDrawElements(self->gl_primitive, groupinfo->count, GL_UNSIGNED_SHORT, groupinfo->offset);
             VPE(C2VP_G_DRAW);
+#ifdef __vita__
+            gGLGroupDrawnDirect = self->gl_primitive == GL_TRIANGLES;
+#endif
         }
         GL_CHECK_ERROR();
     }

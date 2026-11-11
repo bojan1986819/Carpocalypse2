@@ -255,7 +255,6 @@ void C2_HOOK_FASTCALL FUN_0049d420(void) {
     gIn_net_service = 1;
 }
 
-// C2PORT-NONMATCHING: best 7.14% | difftest PASS 2000 trials (spec difftest/specs/0049d430_NetSendHeadupToAllPlayers.json) | reason inline-network-buffer-codegen
 // FUNCTION: CARMA2_HW 0x0049d430
 void C2_HOOK_FASTCALL NetSendHeadupToAllPlayers(char* pMessage) {
     tNet_message_chunk* chunk;
@@ -608,9 +607,9 @@ void C2_HOOK_FASTCALL FillInThisPlayer(tNet_game_details* pGame, tNet_game_playe
     int car_choice;
 
     pPlayer->host = pHost;
-    pPlayer->ID = ((tPlayer_ID (C2_HOOK_FASTCALL *)(void))PDNetExtractPlayerID)();
+    pPlayer->ID = PDNetExtractPlayerID(pGame);
     strcpy(pPlayer->player_name, gProgram_state.player_name);
-    pPlayer->this_players_time_stamp = PDGetTotalTime();
+    pPlayer->last_heard_from_him = PDGetTotalTime();
     pPlayer->car_index = pCar_index;
     pPlayer->reposition_time = 0;
     pPlayer->last_waste_message = 0;
@@ -753,12 +752,12 @@ int C2_HOOK_FASTCALL NetJoinGame(tNet_game_details *pGame_details,char *pPlayer_
 // FUNCTION: CARMA2_HW 0x0049dbd0
 void C2_HOOK_FASTCALL NetStartProducingJoinList(tAddToJoinListProc *pAdd_proc) {
 
+    gAdd_proc = pAdd_proc;
     gJoin_list_mode = 1;
     gBastard_has_answered = 0;
     gTime_for_next_one = 1;
     gJoin_poll_index = 0;
     gCurrent_join_poll_game = NULL;
-    gAdd_proc = pAdd_proc;
     PDNetStartProducingJoinList();
 }
 
@@ -3060,12 +3059,10 @@ int C2_HOOK_FASTCALL NetReallySendMessageToPlayer(tNet_game_details* pNet_game, 
     int i;
 
     if (gNet_mode == eNet_mode_none) {
-        return -1;
+        return -3;
     }
-
     pMessage->header.field_0x8 = gLocal_net_ID;
     pMessage->header.field_0x10 = PDGetTotalTime();
-
     for (i = 0; i < gNumber_of_net_players; i++) {
         if (gNet_players[i].ID == pPlayer_id) {
             return PDNetSendMessageToAddress(pNet_game, pMessage, &gNet_players[i].pd_net_info);
@@ -3155,7 +3152,6 @@ int C2_HOOK_FASTCALL FUN_0049f0d0(tNet_game_details* pNet_game, tNet_message* pM
     return -3;
 }
 
-// C2PORT-NONMATCHING: best 89.08% | difftest PASS 2000 trials (spec difftest/specs/0049f2c0_NetSendMessageToAllPlayers.json) | reason vc5-player-pointer-bias-regalloc
 // FUNCTION: CARMA2_HW 0x0049f2c0
 int C2_HOOK_FASTCALL NetSendMessageToAllPlayers(tNet_game_details* pNet_game, tNet_message* pMessage) {
     int i;

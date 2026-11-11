@@ -784,9 +784,39 @@ tPhysics_object* C2_HOOK_FASTCALL SemiDetachBit(tCar_spec* pCar, br_actor* pActo
 	return collision_info;
 }
 
-// C2PORT-NONMATCHING: best 78.21% | difftest PASS 2000 trials (spec difftest/specs/00433b90_FUN_00433b90.json) | reason x87-scheduling
 // FUNCTION: CARMA2_HW 0x00433b90
 void C2_HOOK_FASTCALL FUN_00433b90(br_model* pModel, const br_vector3* pOffset) {
+#ifdef CARPOCALYPSE2_MATCHING
+    volatile br_scalar center_x;
+    volatile br_scalar center_y;
+    volatile br_scalar center_z;
+    volatile br_vector3 offset;
+    volatile br_scalar delta_x;
+    volatile br_scalar delta_y;
+    volatile br_scalar delta_z;
+    tU16 i;
+
+    center_x = (pModel->bounds.max.v[0] + pModel->bounds.min.v[0]) * gFLOAT_00589a2c;
+    center_y = (pModel->bounds.max.v[1] + pModel->bounds.min.v[1]) * gFLOAT_00589a2c;
+    center_z = (pModel->bounds.max.v[2] + pModel->bounds.min.v[2]) * gFLOAT_00589a2c;
+    offset.v[0] = pOffset->v[0];
+    offset.v[1] = pOffset->v[1];
+    offset.v[2] = pOffset->v[2];
+    delta_x = offset.v[0] - center_x;
+    delta_y = offset.v[1] - center_y;
+    delta_z = offset.v[2] - center_z;
+    for (i = 0; i < pModel->nvertices; i++) {
+        pModel->vertices[i].p.v[0] = delta_x + pModel->vertices[i].p.v[0];
+        pModel->vertices[i].p.v[1] = delta_y + pModel->vertices[i].p.v[1];
+        pModel->vertices[i].p.v[2] = delta_z + pModel->vertices[i].p.v[2];
+    }
+    if ((pModel->flags & BR_MODF_CUSTOM) != 0 && pModel->user != NULL) {
+        *(int*)pModel->user = 1;
+        return;
+    }
+    pModel->custom = JitModelUpdate;
+    pModel->flags |= BR_MODF_CUSTOM;
+#else
 	volatile br_scalar center_x;
 	volatile br_scalar center_y;
 	volatile br_scalar center_z;
@@ -816,6 +846,7 @@ void C2_HOOK_FASTCALL FUN_00433b90(br_model* pModel, const br_vector3* pOffset) 
 	}
 	pModel->custom = JitModelUpdate;
 	pModel->flags |= BR_MODF_CUSTOM;
+#endif
 }
 
 // C2PORT-NONMATCHING: best 37.21% | difftest PASS 2000 trials (spec difftest/specs/00437480_FUN_00437480.json) | reason x87-order and register allocation
@@ -1735,6 +1766,21 @@ void C2_HOOK_FASTCALL DoFlapping(void) {
 
 // FUNCTION: CARMA2_HW 0x00434910
 int C2_HOOK_FASTCALL BitObjectIsSufficientlyOutsideCarObjectToDetach(tPhysics_object* pObject) {
+#ifdef CARPOCALYPSE2_MATCHING
+    int i;
+
+    for (i = 0; i < pObject->physics_joint1->count_limits; i++) {
+        br_vector3 tv;
+        br_vector3 tv2;
+
+        BrMatrix34ApplyV(&tv, &pObject->physics_joint1->limits[i].child, &pObject->actor->t.t.mat);
+        BrMatrix34TApplyV(&tv2, &tv, &pObject->parent->actor->t.t.mat);
+        if (BrVector3Dot(&pObject->physics_joint1->limits[i].parent, &tv2) > gCrushSqrtHalf) {
+            return 1;
+        }
+    }
+    return 0;
+#else
     tPhysics_joint* joint = pObject->physics_joint1;
     int i;
 
@@ -1749,6 +1795,7 @@ int C2_HOOK_FASTCALL BitObjectIsSufficientlyOutsideCarObjectToDetach(tPhysics_ob
         }
     }
     return 0;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x0042f4e0

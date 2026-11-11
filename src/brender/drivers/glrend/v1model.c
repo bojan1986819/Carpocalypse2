@@ -7,6 +7,14 @@
 #include "commonrend.h"
 #include "pixconv.h"
 #include <string.h>
+#ifdef __vita__
+#include "../../../carma2/platform/sdl3/vita_perf.h"
+#define PHASE(x) C2VitaPhasePush(x)
+#define PHASE_END() C2VitaPhasePop()
+#else
+#define PHASE(x) ((void)0)
+#define PHASE_END() ((void)0)
+#endif
 
 static void apply_blend_mode(state_stack* self) {
     /* C_result = (C_source * F_Source) + (C_dest * F_dest) */
@@ -146,8 +154,11 @@ void StoredGLApplyProperties(HVIDEO hVideo, state_stack* state, uint32_t states,
     /* Only use the states we want (if valid). */
     states = state->valid & states;
 
+    PHASE(C2VP_P_FILL);
     BREND_FN(State, FillModel)(state, states, model);
     BREND_FN(State, FillModelTexture)(state, states, model, &colour_map, &filter_linear, &palette_dirty, &palette_entries);
+    PHASE_END();
+    PHASE(C2VP_P_CULL);
 
     if (states & MASK_STATE_CULL) {
         /*
@@ -180,6 +191,8 @@ void StoredGLApplyProperties(HVIDEO hVideo, state_stack* state, uint32_t states,
         }
     }
 
+    PHASE_END();
+    PHASE(C2VP_P_TEX);
     if (states & MASK_STATE_SURFACE) {
         glActiveTexture(GL_TEXTURE0);
     }
@@ -209,6 +222,8 @@ void StoredGLApplyProperties(HVIDEO hVideo, state_stack* state, uint32_t states,
 
         GLenum minFilter, magFilter;
         GLfloat maxAnisotropy;
+        PHASE_END();
+        PHASE(C2VP_P_TEXPARAM);
         extern int gAnisotropy_level;
         /* Font/UI atlases requesting nearest sampling must keep crisp texel edges. */
         if (filter_linear && gAnisotropy_level > 0 && GLAD_GL_EXT_texture_filter_anisotropic) {
@@ -240,6 +255,8 @@ void StoredGLApplyProperties(HVIDEO hVideo, state_stack* state, uint32_t states,
         if (GLAD_GL_EXT_texture_filter_anisotropic)
             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, maxAnisotropy);
 
+        PHASE_END();
+        PHASE(C2VP_P_BLEND);
         blending_on = (state->prim.flags & PRIMF_BLEND) || (colour_map != NULL && colour_map->blended);
         if (blending_on) {
             glEnable(GL_BLEND);
@@ -248,6 +265,9 @@ void StoredGLApplyProperties(HVIDEO hVideo, state_stack* state, uint32_t states,
             glDisable(GL_BLEND);
         }
     }
+    PHASE_END();
+    PHASE(C2VP_P_DEPTH);
     apply_depth_properties(state, states);
+    PHASE_END();
     GL_CHECK_ERROR();
 }

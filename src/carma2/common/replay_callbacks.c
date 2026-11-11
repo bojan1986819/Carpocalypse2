@@ -724,15 +724,15 @@ void C2_HOOK_FASTCALL UndoCrush(tPipe_chunk** pChunk, tPipe_chunk* pPrev_chunk) 
 
 // FUNCTION: CARMA2_HW 0x004c9490
 void C2_HOOK_FASTCALL ApplyCar(tPipe_chunk** pChunk) {
-    tU32 code = *(tU32*)*pChunk;
+    tU32 gKev_code = *(tU32*)*pChunk;
     tCar_spec* car;
     br_vector3 scaled;
     br_vector4 out4;
 
-    if ((code & 0xffffff00u) == 0) {
+    if ((gKev_code & 0xffffff00u) == 0) {
         car = &gProgram_state.current_car;
     } else {
-        car = GetCarSpec(code >> 8, code & 0xffu);
+        car = GetCarSpec(gKev_code >> 8, gKev_code & 0xffu);
     }
 
     *(br_matrix34*)((tU8*)car->car_master_actor + 0x2c) = *(br_matrix34*)((tU8*)*pChunk + 4);
@@ -781,12 +781,12 @@ void C2_HOOK_FASTCALL ApplyCar(tPipe_chunk** pChunk) {
 // FUNCTION: CARMA2_HW 0x004c96c0
 void C2_HOOK_FASTCALL ApplyGWS(tPipe_chunk** pChunk) {
     tCar_spec* car;
-    tU32 code = ((tPipe_chunk_graphpical_wheel_stuff*)*pChunk)->field_0x0;
+    tU32 gKev_code = ((tPipe_chunk_graphpical_wheel_stuff*)*pChunk)->field_0x0;
 
-    if ((code & 0xffffff00u) == 0) {
+    if ((gKev_code & 0xffffff00u) == 0) {
         car = &gProgram_state.current_car;
     } else {
-        car = GetCarSpec(code >> 8, code & 0xffu);
+        car = GetCarSpec(gKev_code >> 8, gKev_code & 0xffu);
     }
 
     *(float*)((tU8*)car + 0x4a8) = (float)((double)(int)((tPipe_chunk_graphpical_wheel_stuff*)*pChunk)->field_0x6 * 0.001181102362);
@@ -799,14 +799,14 @@ void C2_HOOK_FASTCALL ApplyGWS(tPipe_chunk** pChunk) {
 // FUNCTION: CARMA2_HW 0x004c9770
 void C2_HOOK_FASTCALL ApplyDamage(tPipe_chunk** pChunk) {
     tCar_spec* car;
-    tU32 code = ((tPipe_chunk_damage*)*pChunk)->field_0x0;
+    tU32 gKev_code = ((tPipe_chunk_damage*)*pChunk)->field_0x0;
     int* p;
     int i;
 
-    if ((code & 0xffffff00u) == 0) {
+    if ((gKev_code & 0xffffff00u) == 0) {
         car = &gProgram_state.current_car;
     } else {
-        car = GetCarSpec(code >> 8, code & 0xffu);
+        car = GetCarSpec(gKev_code >> 8, gKev_code & 0xffu);
     }
 
     p = (int*)((tU8*)car + 0x4e0);
@@ -820,14 +820,14 @@ void C2_HOOK_FASTCALL ApplyDamage(tPipe_chunk** pChunk) {
 // FUNCTION: CARMA2_HW 0x004c9dd0
 void C2_HOOK_FASTCALL UndoDamage(tPipe_chunk** pChunk, tPipe_chunk* pPrev_chunk) {
     tCar_spec* car;
-    tU32 code = ((tPipe_chunk_damage*)*pChunk)->field_0x0;
+    tU32 gKev_code = ((tPipe_chunk_damage*)*pChunk)->field_0x0;
     int* p;
     int i;
 
-    if ((code & 0xffffff00u) == 0) {
+    if ((gKev_code & 0xffffff00u) == 0) {
         car = &gProgram_state.current_car;
     } else {
-        car = GetCarSpec(code >> 8, code & 0xffu);
+        car = GetCarSpec(gKev_code >> 8, gKev_code & 0xffu);
     }
 
     p = (int*)((tU8*)car + 0x4e0);
@@ -878,23 +878,17 @@ void C2_HOOK_FASTCALL ApplySpark(tPipe_chunk** pChunk) {
 
 // FUNCTION: CARMA2_HW 0x004f87b0
 void C2_HOOK_FASTCALL ResetShrapnel(void) {
-    tShrapnel* rec;
-    tU32 i = 0;
+    int i;
 
-    if (gShrapnel_flags != 0) {
-        rec = gShrapnel;
-        do {
-            if ((1 << i) & gShrapnel_flags) {
-                br_actor* elem = rec->actor;
-                if (*(void**)((tU8*)elem + 0xc) != 0) {
-                    BrActorRemove(elem);
-                }
-            }
-            rec++;
-            i++;
-        } while ((tS32)(tU32)(tU8*)rec < (tS32)(tU32)(tU8*)(gShrapnel + CARPOCALYPSE2_ASIZE(gShrapnel)));
-        gShrapnel_flags = 0;
+    if (gShrapnel_flags == 0) {
+        return;
     }
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gShrapnel); i++) {
+        if (((1 << i) & gShrapnel_flags) != 0 && gShrapnel[i].actor->parent != NULL) {
+            BrActorRemove(gShrapnel[i].actor);
+        }
+    }
+    gShrapnel_flags = 0;
 }
 
 // FUNCTION: CARMA2_HW 0x004c9160
@@ -1049,6 +1043,7 @@ void C2_HOOK_FASTCALL UndoSplash(tPipe_chunk** pChunk, tPipe_chunk* pPrev_chunk)
     ClearPipeUndoFlag();
 }
 
+#pragma auto_inline(off)
 #pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004d6180
 void C2_HOOK_FASTCALL AdjustProxRay(int pRay_index, tU16 pCar_ID, tU16 pPed_index, tU32 pTime) {
@@ -1386,7 +1381,7 @@ void C2_HOOK_FASTCALL ResetRepulseRay(void) {
         }
         link->time = 0;
         i++;
-    } while ((int)&gRepulse_links[i].actor < (int)((tU8*)gRepulse_links + sizeof(gRepulse_links) + offsetof(tRepulse_link, actor)));
+    } while ((int)&gRepulse_links[i].actor < (int)&gINT_006a0a5c);
 }
 
 // FUNCTION: CARMA2_HW 0x004c9a50
@@ -1476,7 +1471,7 @@ void C2_HOOK_FASTCALL ApplyPedDismember(tPipe_chunk** pChunk) {
 void C2_HOOK_FASTCALL UndoPedDismember(tPipe_chunk** pChunk, tPipe_chunk* pPrev_chunk) {
     tPipe_chunk_ped_dismember* chunk = (tPipe_chunk_ped_dismember*)*pChunk;
 
-    return WorkerPedDismemberUndo((tPedestrian*)chunk->field_0x0, (int)chunk->field_0x4, *(tS8*)((tU8*)chunk + 6));
+    return WorkerPedDismemberUndo(chunk->field_0x0, (int)chunk->field_0x4, (int)(*(tS8*)((tU8*)chunk + 6)));
 }
 
 // FUNCTION: CARMA2_HW 0x004c9b40
@@ -1731,7 +1726,7 @@ void C2_HOOK_FASTCALL ARResetNapalmBolts(void) {
     int i;
     int j;
 
-    for (i = 0; i < CARPOCALYPSE2_ASIZE(gNapalm_bolts); i++) {
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gNapalm_bolts); i++) {
         gNapalm_bolts[i].ped = NULL;
 
         for (j = 0; j < 7; j++) {

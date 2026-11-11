@@ -175,8 +175,8 @@ void C2_HOOK_FASTCALL FUN_004a78e0(tNet_message_chunk* pChunk) {
 }
 
 // FUNCTION: CARMA2_HW 0x004a7460
-void C2_HOOK_FASTCALL  SetInitialOilStuff(tOil_spill_info* pOil, br_model* pModel) {
-
+void C2_HOOK_FASTCALL SetInitialOilStuff(tOil_spill_info* pOil, br_model* pModel) {
+    /* Resize the spill in the ground plane without changing vertex heights. */
     pModel->vertices[0].p.v[0] = -pOil->field_0x20;
     pModel->vertices[0].p.v[2] = -pOil->field_0x20;
     pModel->vertices[1].p.v[0] = pOil->field_0x20;
@@ -516,8 +516,7 @@ int C2_HOOK_FASTCALL GetOilSpillCount(void) {
 
 // FUNCTION: CARMA2_HW 0x004a74f0
 void C2_HOOK_FASTCALL GetOilSpillDetails(int pIndex, br_actor** pActor, br_scalar* pSize) {
-
-    if (gOily_spills[pIndex].car != NULL) {
+    if (gOily_spills[pIndex].car_actor != NULL) {
         *pActor = gOily_spills[pIndex].actor;
         *pSize = gOily_spills[pIndex].full_size;
     } else {
@@ -626,8 +625,9 @@ void C2_HOOK_FASTCALL MungeIndexedOilsHeightAboveGround(int pIndex) {
 // FUNCTION: CARMA2_HW 0x004a6a10
 void C2_HOOK_FASTCALL InitOilSpills(void) {
     int i;
-    br_actor* the_actor;
     br_model* the_model;
+
+    C2_HOOK_BUG_ON(sizeof(tOil_spill_info) != 0x54);
 
     for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gOil_pixie_names); i++) {
         gOil_pixies[i] = LoadPixelmap(gOil_pixie_names[i]);
@@ -651,7 +651,6 @@ void C2_HOOK_FASTCALL InitOilSpills(void) {
         oily_material->index_shade = BrTableFind("IDENTITY.TAB");
         GlorifyMaterial(&oily_material, 1, kRendererShadingType_Specular);
         BrMaterialUpdate(oily_material, BR_MATU_ALL);
-
         the_model = BrModelAllocate(NULL, 4, 2);
         the_model->flags |= BR_MODF_KEEP_ORIGINAL;
 
@@ -660,6 +659,7 @@ void C2_HOOK_FASTCALL InitOilSpills(void) {
         the_model->faces[0].vertices[2] = 0;
         the_model->faces[0].material = NULL;
         the_model->faces[0].smoothing = 1;
+
         the_model->faces[1].vertices[0] = 3;
         the_model->faces[1].vertices[1] = 2;
         the_model->faces[1].vertices[2] = 0;
@@ -674,13 +674,11 @@ void C2_HOOK_FASTCALL InitOilSpills(void) {
         BrVector2Set(&the_model->vertices[2].map, 1.f, 0.f);
         BrVector3Set(&the_model->vertices[3].p, -1.f, 0.f, 1.f);
         BrVector2Set(&the_model->vertices[3].map, 1.f, 1.f);
-
-        the_actor = BrActorAllocate(BR_ACTOR_MODEL, NULL);
-        gOily_spills[i].actor = the_actor;
-        the_actor->model = the_model;
+        gOily_spills[i].actor = BrActorAllocate(BR_ACTOR_MODEL, NULL);
+        gOily_spills[i].actor->model = the_model;
         gOily_spills[i].actor->render_style = BR_RSTYLE_NONE;
         gOily_spills[i].actor->material = oily_material;
-        BrActorAdd(gNon_track_actor, gOily_spills[i].actor);
+        BrActorAdd(gOther_selfs[2], gOily_spills[i].actor);
     }
 }
 

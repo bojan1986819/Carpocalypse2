@@ -75,7 +75,7 @@ void C2_HOOK_FASTCALL QueueIconGoing(tPowerup* pPowerup, tHeadup_icon* pHeadup_i
     int i;
 
     for (i = 0; i < *pCount_icons; i++) {
-        if (pHeadup_icons[i].powerup == pPowerup) {
+        if (pPowerup == pHeadup_icons[i].powerup) {
             pHeadup_icons[i].fizzle_stage = 3;
             pHeadup_icons[i].fizzle_direction = -1;
             pHeadup_icons[i].fizzle_start = GetTotalTime();

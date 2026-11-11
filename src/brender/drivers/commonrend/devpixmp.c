@@ -103,6 +103,9 @@ void BREND_CMETHOD_DECL(BREND_CLASS(br_device_pixelmap_), free)(br_object* _self
     br_device_pixelmap* self = (br_device_pixelmap*)_self;
 
     if (self->sub_pixelmap) {
+        /* a sub-pixelmap owns no buffers, only itself: it was kept (InitMap reallocates the minimap
+         * one every frame, ~1.6 MB per minute of racing until the Vita ran out of memory) */
+        BrResFreeNoCallback(self);
         return;
     }
 
@@ -209,8 +212,9 @@ br_error BREND_CMETHOD_DECL(BREND_CLASS(br_device_pixelmap_), directUnlock)(br_d
 #if defined(BREND_DRIVER_GL)
     /* port: the overlay stays mapped (backbuf.c) */
     if (self->root != NULL) {
+        extern void GLBackMarkDirty(br_device_pixelmap* self);
         self->pm_pixels = self->root->asBack.lockedPixels;
-        self->root->asBack.possiblyDirty = 1;
+        GLBackMarkDirty(self); /* backbuf.c: the sub-pixelmap's rectangle */
     }
 #else
     self->pm_pixels = NULL;

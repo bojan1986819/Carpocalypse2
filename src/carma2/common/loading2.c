@@ -933,11 +933,92 @@ void C2_HOOK_FASTCALL ReadNetworkSettings(FILE* pF, tNet_game_options* pOptions)
 
 // FUNCTION: CARMA2_HW 0x0048d190
 int C2_HOOK_FASTCALL SaveOptions(void) {
+#ifdef CARPOCALYPSE2_MATCHING
+    tPath_name the_path;
+    FILE* f;
+    const char* player_name;
+
+#define BAIL_IF_NEGATIVE(VAL) \
+    if ((VAL) < 0) {          \
+        goto fail;            \
+    }
+
+    PathCat(the_path, gApplication_path, "OPTIONS.TXT");
+    PDFileUnlock(the_path);
+    f = DRfopen(the_path, "wt");
+    if (f == NULL) {
+        goto fail;
+    }
+
+    BAIL_IF_NEGATIVE(fprintf(f, "YonFactor %f\n", GetYonFactor()));
+    BAIL_IF_NEGATIVE(fprintf(f, "SkyTextureOn %d\n", GetSkyTextureOn()));
+    BAIL_IF_NEGATIVE(fprintf(f, "CarTexturingLevel %d\n", GetCarTexturingLevel()));
+    BAIL_IF_NEGATIVE(fprintf(f, "RoadTexturingLevel %d\n", GetRoadTexturingLevel()));
+    BAIL_IF_NEGATIVE(fprintf(f, "WallTexturingLevel %d\n", GetWallTexturingLevel()));
+    BAIL_IF_NEGATIVE(fprintf(f, "ShadowLevel %d\n", GetShadowLevel()));
+    BAIL_IF_NEGATIVE(fprintf(f, "DepthCueingOn %d\n", GetDepthCueingOn()));
+    BAIL_IF_NEGATIVE(fprintf(f, "Yon %f\n", GetYon()));
+    BAIL_IF_NEGATIVE(fprintf(f, "CarSimplificationLevel %d\n", GetCarSimplificationLevel()));
+    BAIL_IF_NEGATIVE(fprintf(f, "AccessoryRendering %d\n", GetAccessoryRendering()));
+    BAIL_IF_NEGATIVE(fprintf(f, "SmokeOn %d\n", GetSmokeOn()));
+    BAIL_IF_NEGATIVE(fprintf(f, "SoundDetailLevel %d\n", GetSoundDetailLevel()));
+    BAIL_IF_NEGATIVE(fprintf(f, "ScreenSize %d\n", GetScreenSize()));
+    BAIL_IF_NEGATIVE(fprintf(f, "MapRenderX %f\n", gMap_render_x));
+    BAIL_IF_NEGATIVE(fprintf(f, "MapRenderY %f\n", gMap_render_y));
+    BAIL_IF_NEGATIVE(fprintf(f, "MapRenderWidth %f\n", gMap_render_width));
+    BAIL_IF_NEGATIVE(fprintf(f, "MapRenderHeight %f\n", gMap_render_height));
+    BAIL_IF_NEGATIVE(fprintf(f, "MapMode %d\n", 1));
+    player_name = gProgram_state.player_name[0] != '\0' ? gProgram_state.player_name : "MAX DAMAGE";
+    BAIL_IF_NEGATIVE(fprintf(f, "PlayerName 0\n%s\n", player_name));
+    BAIL_IF_NEGATIVE(fprintf(f, "EVolume %d\n", gProgram_state.effects_volume));
+    BAIL_IF_NEGATIVE(fprintf(f, "MVolume %d\n", gProgram_state.music_volume));
+    BAIL_IF_NEGATIVE(fprintf(f, "KeyMapIndex %d\n", gKey_map_index));
+    BAIL_IF_NEGATIVE(fprintf(f, "MapTrans %d\n", gMap_trans));
+    BAIL_IF_NEGATIVE(fprintf(f, "HeadupMapX %d\n", gHeadup_map_x));
+    BAIL_IF_NEGATIVE(fprintf(f, "HeadupMapY %d\n", gHeadup_map_y));
+    BAIL_IF_NEGATIVE(fprintf(f, "HeadupMapW %d\n", gHeadup_map_w));
+    BAIL_IF_NEGATIVE(fprintf(f, "HeadupMapH %d\n", gHeadup_map_h));
+    BAIL_IF_NEGATIVE(fprintf(f, "CameraType %d\n", gCamera_type));
+    BAIL_IF_NEGATIVE(fprintf(f, "ARCameraType %d\n", gAR_camera_type));
+    BAIL_IF_NEGATIVE(fprintf(f, "GoreLevel %d\n", GetHowMuchBloodAndSnotToSmearAbout()));
+    BAIL_IF_NEGATIVE(fprintf(f, "AnimalsOn %d\n", GetAnimalsOn()));
+    BAIL_IF_NEGATIVE(fprintf(f, "FlameThrowerOn %d\n", IsItOkayToFireHorribleBallsOfNastyNapalmDeathAtPerfectlyInnocentPassersByAndByInnocentIDoMeanInTheBiblicalSense()));
+    BAIL_IF_NEGATIVE(fprintf(f, "MinesOn %d\n", IsItReallyOKThatWeDontMakeAnyEffortToProtectAnySadFuckersOutThereThatDontWishToSeeInnocentPeopleBlownToBitsByHighExplosiveMinesAndShells()));
+    BAIL_IF_NEGATIVE(fprintf(f, "DronesOn %d\n", GetDronesOn()));
+    BAIL_IF_NEGATIVE(fprintf(f, "MiniMapVisible %i\n", gMini_map_visible));
+    BAIL_IF_NEGATIVE(fprintf(f, "SkillLevel %d\n", gProgram_state.skill_level));
+    BAIL_IF_NEGATIVE(fprintf(f, "AmbientSound %i\n", gAmbient_sound));
+    BAIL_IF_NEGATIVE(fprintf(f, "AutoLoad %d\n", gAuto_load));
+    BAIL_IF_NEGATIVE(fprintf(f, "RussellsFannies %d\n", gRussels_fannies));
+    BAIL_IF_NEGATIVE(fprintf(f, "QuickTimeQuality 0\n%s\n", gQuick_time_quality));
+    BAIL_IF_NEGATIVE(fprintf(f, "QuickTimeCompressor 0\n%s\n", gQuick_time_compressor));
+    BAIL_IF_NEGATIVE(fprintf(f, "QuickTimeBanner %d\n%s\n", gQuick_time_banner_number, gQuick_time_banner_texture_name));
+    BAIL_IF_NEGATIVE(fprintf(f, "QuickTimeTempPath 0\n%s\n", gQuick_time_temp_path));
+    BAIL_IF_NEGATIVE(fprintf(f, "QuickTimeMoviePathStub 0\n%s\n", gQuick_time_movie_path_stub));
+    BAIL_IF_NEGATIVE(fprintf(f, "NETGAMETYPE %d\n", gNet_last_game_type));
+    BAIL_IF_NEGATIVE(PrintNetOptions(f, 0));
+    BAIL_IF_NEGATIVE(PrintNetOptions(f, 1));
+    BAIL_IF_NEGATIVE(PrintNetOptions(f, 2));
+    BAIL_IF_NEGATIVE(PrintNetOptions(f, 3));
+    BAIL_IF_NEGATIVE(PrintNetOptions(f, 4));
+    BAIL_IF_NEGATIVE(PrintNetOptions(f, 5));
+    BAIL_IF_NEGATIVE(PrintNetOptions(f, 6));
+    BAIL_IF_NEGATIVE(PrintNetOptions(f, 7));
+    BAIL_IF_NEGATIVE(PrintNetOptions(f, 8));
+    BAIL_IF_NEGATIVE(fprintf(f, "HeadupDetailLevel %d\n", gHeadup_detail_level));
+
+#undef BAIL_IF_NEGATIVE
+
+    if (PFfclose(f) == 0) {
+        return 1;
+    }
+fail:
+    return 0;
+#else
     tPath_name the_path;
     FILE* f;
     int i;
 
-#ifndef CARPOCALYPSE2_MATCHING
     PathCat(the_path, gApplication_path, "OPTIONS.TXT");
     f = DRfopen(the_path, "wt");
     if (f == NULL) {
@@ -996,70 +1077,6 @@ int C2_HOOK_FASTCALL SaveOptions(void) {
     fprintf(f, "HeadupDetailLevel %d\n", gHeadup_detail_level);
 
     PFfclose(f);
-    return 1;
-#else
-    PathCat(the_path, gApplication_path, "OPTIONS.TXT");
-    PDFileUnlock(the_path);
-    f = DRfopen(the_path, "wt");
-    if (f == NULL
-        || fprintf(f, "YonFactor %f\n", GetYonFactor()) < 0
-        || fprintf(f, "SkyTextureOn %d\n", GetSkyTextureOn()) < 0
-        || fprintf(f, "CarTexturingLevel %d\n", GetCarTexturingLevel()) < 0
-        || fprintf(f, "RoadTexturingLevel %d\n", GetRoadTexturingLevel()) < 0
-        || fprintf(f, "WallTexturingLevel %d\n", GetWallTexturingLevel()) < 0
-        || fprintf(f, "ShadowLevel %d\n", GetShadowLevel()) < 0
-        || fprintf(f, "DepthCueingOn %d\n", GetDepthCueingOn()) < 0
-        || fprintf(f, "Yon %f\n", GetYon()) < 0
-        || fprintf(f, "CarSimplificationLevel %d\n", GetCarSimplificationLevel()) < 0
-        || fprintf(f, "AccessoryRendering %d\n", GetAccessoryRendering()) < 0
-        || fprintf(f, "SmokeOn %d\n", GetSmokeOn()) < 0
-        || fprintf(f, "SoundDetailLevel %d\n", GetSoundDetailLevel()) < 0
-        || fprintf(f, "ScreenSize %d\n", GetScreenSize()) < 0
-        || fprintf(f, "MapRenderX %f\n", gMap_render_x) < 0
-        || fprintf(f, "MapRenderY %f\n", gMap_render_y) < 0
-        || fprintf(f, "MapRenderWidth %f\n", gMap_render_width) < 0
-        || fprintf(f, "MapRenderHeight %f\n", gMap_render_height) < 0
-        || fprintf(f, "MapMode %d\n", 1) < 0
-        || fprintf(f, "PlayerName 0\n%s\n", gProgram_state.player_name[0] != '\0' ? gProgram_state.player_name : "MAX DAMAGE") < 0
-        || fprintf(f, "EVolume %d\n", gProgram_state.effects_volume) < 0
-        || fprintf(f, "MVolume %d\n", gProgram_state.music_volume) < 0
-        || fprintf(f, "KeyMapIndex %d\n", gKey_map_index) < 0
-        || fprintf(f, "MapTrans %d\n", gMap_trans) < 0
-        || fprintf(f, "HeadupMapX %d\n", gHeadup_map_x) < 0
-        || fprintf(f, "HeadupMapY %d\n", gHeadup_map_y) < 0
-        || fprintf(f, "HeadupMapW %d\n", gHeadup_map_w) < 0
-        || fprintf(f, "HeadupMapH %d\n", gHeadup_map_h) < 0
-        || fprintf(f, "CameraType %d\n", gCamera_type) < 0
-        || fprintf(f, "ARCameraType %d\n", gAR_camera_type) < 0
-        || fprintf(f, "GoreLevel %d\n", GetHowMuchBloodAndSnotToSmearAbout()) < 0
-        || fprintf(f, "AnimalsOn %d\n", GetAnimalsOn()) < 0
-        || fprintf(f, "FlameThrowerOn %d\n", IsItOkayToFireHorribleBallsOfNastyNapalmDeathAtPerfectlyInnocentPassersByAndByInnocentIDoMeanInTheBiblicalSense()) < 0
-        || fprintf(f, "MinesOn %d\n", IsItReallyOKThatWeDontMakeAnyEffortToProtectAnySadFuckersOutThereThatDontWishToSeeInnocentPeopleBlownToBitsByHighExplosiveMinesAndShells()) < 0
-        || fprintf(f, "DronesOn %d\n", GetDronesOn()) < 0
-        || fprintf(f, "MiniMapVisible %i\n", gMini_map_visible) < 0
-        || fprintf(f, "SkillLevel %d\n", gProgram_state.skill_level) < 0
-        || fprintf(f, "AmbientSound %i\n", gAmbient_sound) < 0
-        || fprintf(f, "AutoLoad %d\n", gAuto_load) < 0
-        || fprintf(f, "RussellsFannies %d\n", gRussels_fannies) < 0
-        || fprintf(f, "QuickTimeQuality 0\n%s\n", gQuick_time_quality) < 0
-        || fprintf(f, "QuickTimeCompressor 0\n%s\n", gQuick_time_compressor) < 0
-        || fprintf(f, "QuickTimeBanner %d\n%s\n", gQuick_time_banner_number, gQuick_time_banner_texture_name) < 0
-        || fprintf(f, "QuickTimeTempPath 0\n%s\n", gQuick_time_temp_path) < 0
-        || fprintf(f, "QuickTimeMoviePathStub 0\n%s\n", gQuick_time_movie_path_stub) < 0
-        || fprintf(f, "NETGAMETYPE %d\n", gNet_last_game_type) < 0
-        || PrintNetOptions(f, 0) < 0
-        || PrintNetOptions(f, 1) < 0
-        || PrintNetOptions(f, 2) < 0
-        || PrintNetOptions(f, 3) < 0
-        || PrintNetOptions(f, 4) < 0
-        || PrintNetOptions(f, 5) < 0
-        || PrintNetOptions(f, 6) < 0
-        || PrintNetOptions(f, 7) < 0
-        || PrintNetOptions(f, 8) < 0
-        || fprintf(f, "HeadupDetailLevel %d\n", gHeadup_detail_level) < 0
-        || PFfclose(f) != 0) {
-        return 0;
-    }
     return 1;
 #endif
 }
@@ -1245,15 +1262,15 @@ void C2_HOOK_FASTCALL InitializePalettes(void) {
     gOrig_render_palette->pixels = BrMemAllocate(256 * sizeof(br_uint_32), kMem_misc);
     memcpy(gOrig_render_palette->pixels, gRender_palette->pixels, 256 * sizeof(br_uint_32));
     gFlic_palette = BrTableFind("DRACEFLC.PAL");
-    render_palette = gRender_palette;
     if (gFlic_palette == NULL) {
         FatalError(kFatalError_unableToFindRequiredPalette);
     }
-    ((br_uint_32*)gRender_palette->pixels)[0] = 0;
-    memcpy(gCurrent_palette_pixels, gRender_palette->pixels, 256 * sizeof(br_uint_32));
+    render_palette = gRender_palette;
+    ((br_uint_32*)render_palette->pixels)[0] = 0;
+    memcpy(gCurrent_palette_pixels, render_palette->pixels, 256 * sizeof(br_uint_32));
     gPalette_changed = 0;
     if (!gFaded_palette) {
-        PDSetPalette(gRender_palette);
+        PDSetPalette(render_palette);
     }
     gPalette_munged |= render_palette != gRender_palette;
     gScratch_pixels = BrMemAllocate(256 * sizeof(br_uint_32), kMem_misc);

@@ -10,6 +10,7 @@ make -C "$C2_VITAGL_SOURCE" clean
 # Use the safe existing three-frame circular pool for transient buffers.
 # No drawing/memory speedhacks. Compiled shaders are cached in ux0:data/shader_cache (patch 0004
 # keeps their uniform blocks), so only the first launch pays the ~8 s of runtime compilation.
-make -C "$C2_VITAGL_SOURCE" -j4 install NO_SPLASHSCREEN=1 LOG_ERRORS=2 \
+# NO_DEBUG skips vitaGL's per-call error checks (+6% race fps on the Vita, 00.61 tests); errors are no longer logged.
+make -C "$C2_VITAGL_SOURCE" -j4 install NO_SPLASHSCREEN=1 NO_DEBUG=1 \
     HAVE_CUSTOM_HEAP=1 STORE_DEPTH_STENCIL=1 SAFE_UNIFORMS=1 USE_SCRATCH_MEMORY=1 \
     HAVE_SHADER_CACHE=1

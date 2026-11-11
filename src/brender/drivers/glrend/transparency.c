@@ -24,6 +24,7 @@ typedef struct transparent_gl_state {
 typedef struct gl_transparent_draw {
     struct gl_transparent_draw* next;
     float depth;
+    unsigned int seq; /* queue order: equal depths keep it */
     GLsizei vertex_count, index_count;
     shader_data_model model;
 #ifdef __vita__
@@ -93,10 +94,62 @@ static void apply_gl(const transparent_gl_state* s) {
     glColorMask(s->colour_write[0], s->colour_write[1], s->colour_write[2], s->colour_write[3]);
 }
 
+/* The queued groups of a frame live in reused memory chunks and a pointer array, sorted once at the
+ * flush (a group's copy and a sorted list insert each cost an allocation and a list walk; a tree-lined
+ * view queues 100+ groups a frame). */
+typedef struct transparent_chunk {
+    struct transparent_chunk* next;
+    size_t size, used;
+} transparent_chunk;
+#define CHUNK_HEADER ((sizeof(transparent_chunk) + 15) & ~(size_t)15)
+static transparent_chunk* chunks;
+static transparent_chunk* chunk_current;
+static gl_transparent_draw** queued;
+static int queued_count, queued_capacity;
+
+static void* arena_alloc(size_t bytes) {
+    transparent_chunk* c;
+    bytes = (bytes + 15) & ~(size_t)15;
+    for (c = chunk_current; c != NULL; c = c->next) {
+        if (c->size - c->used >= bytes) {
+            void* p = (unsigned char*)c + CHUNK_HEADER + c->used;
+            c->used += bytes;
+            chunk_current = c;
+            return p;
+        }
+    }
+    {
+        size_t size = bytes > 1024 * 1024 ? bytes : 1024 * 1024;
+        transparent_chunk** link = &chunks;
+        c = malloc(CHUNK_HEADER + size);
+        if (c == NULL) return NULL;
+        c->next = NULL;
+        c->size = size;
+        c->used = bytes;
+        while (*link != NULL) link = &(*link)->next;
+        *link = c;
+        chunk_current = c;
+        return (unsigned char*)c + CHUNK_HEADER;
+    }
+}
+
+static void arena_reset(void) {
+    transparent_chunk* c;
+    for (c = chunks; c != NULL; c = c->next) c->used = 0;
+    chunk_current = chunks;
+    queued_count = 0;
+}
+
+static int compare_draws(const void* a, const void* b) {
+    const gl_transparent_draw* x = *(gl_transparent_draw* const*)a;
+    const gl_transparent_draw* y = *(gl_transparent_draw* const*)b;
+    if (x->depth != y->depth) return x->depth > y->depth ? -1 : 1; /* back to front */
+    return x->seq < y->seq ? -1 : x->seq > y->seq;
+}
+
 br_boolean GLQueueTransparent(br_renderer* renderer, const struct v11group* group, const shader_data_model* model) {
     const state_stack* state = renderer->state.current;
     gl_transparent_draw* draw;
-    gl_transparent_draw** link;
     transparent_vertex* vertices;
     br_uint_16* indices;
     float z = 0.f;
@@ -114,8 +167,15 @@ br_boolean GLQueueTransparent(br_renderer* renderer, const struct v11group* grou
     if (group->nvertices == 0 || group->nfaces == 0)
         return BR_FALSE;
 
+    if (queued_count == queued_capacity) {
+        int capacity = queued_capacity ? queued_capacity * 2 : 256;
+        gl_transparent_draw** grown = realloc(queued, capacity * sizeof(*queued));
+        if (grown == NULL) BrFailure("Out of memory queueing transparent geometry");
+        queued = grown;
+        queued_capacity = capacity;
+    }
     bytes = sizeof(*draw) + group->nvertices * sizeof(*vertices) + group->nfaces * 3 * sizeof(*indices);
-    draw = BrResAllocate(renderer, bytes, BR_MEMORY_OBJECT_DATA);
+    draw = arena_alloc(bytes);
     if (draw == NULL) BrFailure("Out of memory snapshotting transparent geometry");
     draw->vertex_count = group->nvertices;
     draw->index_count = group->nfaces * 3;
@@ -146,11 +206,10 @@ br_boolean GLQueueTransparent(br_renderer* renderer, const struct v11group* grou
     for (i = 0; i < group->nfaces; i++)
         for (j = 0; j < 3; j++) indices[3 * i + j] = group->faces[i].vertices[j];
     draw->depth = -z / group->nvertices;
-    /* Stable back-to-front insertion, including groups from different actors. */
-    link = &renderer->transparent_head;
-    while (*link != NULL && (*link)->depth >= draw->depth) link = &(*link)->next;
-    draw->next = *link;
-    *link = draw;
+    /* back to front at the flush, groups of equal depth in queue order */
+    draw->seq = (unsigned int)queued_count;
+    draw->next = NULL;
+    queued[queued_count++] = draw;
     return BR_TRUE;
 }
 
@@ -175,37 +234,126 @@ static void init_buffers(br_renderer* renderer, HVIDEO video) {
     }
 }
 
+/* Only the state that differs from the previous group (all of it for the first). */
+static void apply_gl_changes(const transparent_gl_state* s, const transparent_gl_state* last) {
+    if (last == NULL) {
+        apply_gl(s);
+        return;
+    }
+    if (s->framebuffer != last->framebuffer) glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s->framebuffer);
+    if (memcmp(s->viewport, last->viewport, sizeof(s->viewport)) != 0)
+        glViewport(s->viewport[0], s->viewport[1], s->viewport[2], s->viewport[3]);
+    if (s->texture != last->texture) glBindTexture(GL_TEXTURE_2D, s->texture);
+    if (s->texture != 0 && (s->texture != last->texture || s->min_filter != last->min_filter || s->mag_filter != last->mag_filter
+            || s->wrap_s != last->wrap_s || s->wrap_t != last->wrap_t || s->anisotropy != last->anisotropy)) {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, s->min_filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, s->mag_filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, s->wrap_s);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, s->wrap_t);
+        if (GLAD_GL_EXT_texture_filter_anisotropic)
+            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, s->anisotropy);
+    }
+    if (s->blend != last->blend) enable(GL_BLEND, s->blend);
+    if (s->depth != last->depth) enable(GL_DEPTH_TEST, s->depth);
+    if (s->cull != last->cull) enable(GL_CULL_FACE, s->cull);
+    if (s->offset != last->offset) enable(GL_POLYGON_OFFSET_FILL, s->offset);
+    if (s->src_rgb != last->src_rgb || s->dst_rgb != last->dst_rgb || s->src_alpha != last->src_alpha || s->dst_alpha != last->dst_alpha)
+        glBlendFuncSeparate(s->src_rgb, s->dst_rgb, s->src_alpha, s->dst_alpha);
+    if (s->depth_func != last->depth_func) glDepthFunc(s->depth_func);
+    if (s->depth_write != last->depth_write) glDepthMask(s->depth_write);
+    if (s->cull_mode != last->cull_mode) glCullFace(s->cull_mode);
+    if (s->offset_factor != last->offset_factor || s->offset_units != last->offset_units)
+        glPolygonOffset(s->offset_factor, s->offset_units);
+    if (memcmp(s->colour_write, last->colour_write, sizeof(s->colour_write)) != 0)
+        glColorMask(s->colour_write[0], s->colour_write[1], s->colour_write[2], s->colour_write[3]);
+}
+
 void GLFlushTransparent(br_renderer* renderer) {
+    static transparent_vertex* vertex_buffer;
+    static br_uint_16* index_buffer;
+    static size_t vertex_capacity, index_capacity;
     HVIDEO video;
-    gl_transparent_draw* draw;
     transparent_gl_state saved;
+    const transparent_gl_state* last = NULL;
+    const void* last_scene = NULL;
     GLint vao, array_buffer, uniform_buffer;
     unsigned int groups = 0, bytes = 0;
-    if (renderer->transparent_head == NULL) return;
+    int i = 0, fast = 1;
+    if (queued_count == 0) return;
+#ifdef __vita__
+    {
+        /* test: C2_TEST_AB=transp alternates with one upload and full state per group */
+        extern int C2VitaABFeature(const char* pFeature, int pDefault);
+        fast = C2VitaABFeature("transp", 1);
+    }
+#endif
     video = &renderer->pixelmap->screen->asFront.video;
+#ifdef __vita__
+    {
+        extern int gGLModelUboValid;
+        gGLModelUboValid = 0; /* this pass writes the model block */
+    }
+#endif
+    qsort(queued, (size_t)queued_count, sizeof(*queued), compare_draws);
     capture_gl(&saved);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
     glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &array_buffer);
     glGetIntegerv(GL_UNIFORM_BUFFER_BINDING, &uniform_buffer);
     init_buffers(renderer, video);
     glBindVertexArray(renderer->transparent_vao);
-    while ((draw = renderer->transparent_head) != NULL) {
-        const transparent_vertex* vertices = (const transparent_vertex*)(draw + 1);
-        const br_uint_16* indices = (const br_uint_16*)(vertices + draw->vertex_count);
-        groups++;
-        bytes += sizeof(*draw) + draw->vertex_count * sizeof(*vertices) + draw->index_count * sizeof(*indices);
-        apply_gl(&draw->gl);
+    while (i < queued_count) {
+        /* the next run of groups whose vertices fit 16-bit indices: one upload for all of them */
+        int first = i, k;
+        size_t nv = 0, ni = 0, at_v = 0, at_i = 0;
+        while (i < queued_count && (i == first || (fast && nv + queued[i]->vertex_count <= 65535))) {
+            nv += queued[i]->vertex_count;
+            ni += queued[i]->index_count;
+            i++;
+        }
+        if (nv > vertex_capacity) {
+            transparent_vertex* grown = realloc(vertex_buffer, nv * sizeof(*vertex_buffer));
+            if (grown == NULL) BrFailure("Out of memory drawing transparent geometry");
+            vertex_buffer = grown;
+            vertex_capacity = nv;
+        }
+        if (ni > index_capacity) {
+            br_uint_16* grown = realloc(index_buffer, ni * sizeof(*index_buffer));
+            if (grown == NULL) BrFailure("Out of memory drawing transparent geometry");
+            index_buffer = grown;
+            index_capacity = ni;
+        }
+        for (k = first; k < i; k++) {
+            const gl_transparent_draw* draw = queued[k];
+            const transparent_vertex* vertices = (const transparent_vertex*)(draw + 1);
+            const br_uint_16* indices = (const br_uint_16*)(vertices + draw->vertex_count);
+            int n;
+            memcpy(vertex_buffer + at_v, vertices, draw->vertex_count * sizeof(*vertices));
+            for (n = 0; n < draw->index_count; n++) index_buffer[at_i + n] = (br_uint_16)(indices[n] + at_v);
+            at_v += draw->vertex_count;
+            at_i += draw->index_count;
+            groups++;
+            bytes += sizeof(*draw) + draw->vertex_count * sizeof(*vertices) + draw->index_count * sizeof(*indices);
+        }
         glBindBuffer(GL_ARRAY_BUFFER, renderer->transparent_vbo);
-        glBufferData(GL_ARRAY_BUFFER, draw->vertex_count * sizeof(*vertices), vertices, GL_STREAM_DRAW);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, draw->index_count * sizeof(*indices), indices, GL_STREAM_DRAW);
-        glBindBuffer(GL_UNIFORM_BUFFER, video->brenderProgram.uboScene);
-        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(draw->scene), &draw->scene);
-        glBindBuffer(GL_UNIFORM_BUFFER, video->brenderProgram.uboModel);
-        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(draw->model), &draw->model);
-        glDrawElements(GL_TRIANGLES, draw->index_count, GL_UNSIGNED_SHORT, NULL);
-        renderer->transparent_head = draw->next;
-        BrResFree(draw);
+        glBufferData(GL_ARRAY_BUFFER, nv * sizeof(*vertex_buffer), vertex_buffer, GL_STREAM_DRAW);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, ni * sizeof(*index_buffer), index_buffer, GL_STREAM_DRAW);
+        at_i = 0;
+        for (k = first; k < i; k++) {
+            const gl_transparent_draw* draw = queued[k];
+            apply_gl_changes(&draw->gl, last);
+            last = fast ? &draw->gl : NULL;
+            if (!fast || last_scene == NULL || memcmp(last_scene, &draw->scene, sizeof(draw->scene)) != 0) {
+                glBindBuffer(GL_UNIFORM_BUFFER, video->brenderProgram.uboScene);
+                glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(draw->scene), &draw->scene);
+                last_scene = &draw->scene;
+            }
+            glBindBuffer(GL_UNIFORM_BUFFER, video->brenderProgram.uboModel);
+            glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(draw->model), &draw->model);
+            glDrawElements(GL_TRIANGLES, draw->index_count, GL_UNSIGNED_SHORT, (const void*)(at_i * sizeof(*index_buffer)));
+            at_i += draw->index_count;
+        }
     }
+    arena_reset();
     glBindBuffer(GL_UNIFORM_BUFFER, video->brenderProgram.uboScene);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, GL_SCENE_UNIFORM_BYTES, &renderer->state.cache.scene);
     glBindBuffer(GL_UNIFORM_BUFFER, uniform_buffer);
@@ -222,11 +370,8 @@ void GLFlushTransparent(br_renderer* renderer) {
 }
 
 void GLFreeTransparent(br_renderer* renderer) {
-    while (renderer->transparent_head != NULL) {
-        gl_transparent_draw* draw = renderer->transparent_head;
-        renderer->transparent_head = draw->next;
-        BrResFree(draw);
-    }
+    arena_reset();
+    renderer->transparent_head = NULL;
     if (renderer->transparent_vao != 0) glDeleteVertexArrays(1, &renderer->transparent_vao);
     if (renderer->transparent_vbo != 0) glDeleteBuffers(1, &renderer->transparent_vbo);
     if (renderer->transparent_ibo != 0) glDeleteBuffers(1, &renderer->transparent_ibo);

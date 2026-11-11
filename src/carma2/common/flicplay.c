@@ -575,6 +575,12 @@ void C2_HOOK_FASTCALL LetFlicFuckWithPalettes(void) {
     gPalette_fuck_prevention = 0;
 }
 
+// FUNCTION: CARMA2_HW 0x004619c0
+void C2_HOOK_STDCALL PlayFlicsInDarkness(void) {
+    gDark_mode = 1;
+}
+
+
 // FUNCTION: CARMA2_HW 0x004619f0
 void C2_HOOK_FASTCALL TurnFlicTransparencyOff(void) {
 
@@ -910,39 +916,39 @@ void C2_HOOK_FASTCALL DoDifferenceX(tFlic_descriptor* pFlic_info, tU32 chunk_len
     int i;
     int j;
     int k;
-    int start_row;
-    int line_count;
+    int skipped_lines;
+    int number_of_lines;
     int number_of_packets;
     int skip_count;
     int size_count;
     tU8* pixel_ptr;
-    tU32 the_row_bytes;
     tU8* line_pixel_ptr;
     tU8 the_byte;
+    tU32 the_row_bytes;
 
-    start_row = MemReadU16(&pFlic_info->data);
-    line_count = MemReadU16(&pFlic_info->data);
+    (void)chunk_length;
+    skipped_lines = MemReadU16(&pFlic_info->data);
+    number_of_lines = MemReadU16(&pFlic_info->data);
     the_row_bytes = pFlic_info->the_pixelmap->row_bytes;
-    pixel_ptr = pFlic_info->first_pixel + the_row_bytes * start_row;
-
-    for (i = 0; i < line_count; i++) {
-        number_of_packets = MemReadU8(&pFlic_info->data);
+    pixel_ptr = pFlic_info->first_pixel + skipped_lines * the_row_bytes;
+    for (i = 0; i < number_of_lines; i++) {
         line_pixel_ptr = pixel_ptr;
+        number_of_packets = MemReadU8(&pFlic_info->data);
         for (j = 0; j < number_of_packets; j++) {
             skip_count = MemReadU8(&pFlic_info->data);
             size_count = MemReadS8(&pFlic_info->data);
             line_pixel_ptr += skip_count;
-            if (size_count < 0) {
-                the_byte = MemReadU8(&pFlic_info->data);
+            if (size_count >= 0) {
+                for (k = 0; k < size_count; k++) {
+                    *line_pixel_ptr++ = *pFlic_info->data;
+                    pFlic_info->data++;
+                }
+            } else {
+                the_byte = *pFlic_info->data;
+                pFlic_info->data++;
                 for (k = 0; k < -size_count; k++) {
                     *line_pixel_ptr = the_byte;
                     line_pixel_ptr++;
-                }
-            } else {
-                for (k = 0; k < size_count; k++) {
-                    *line_pixel_ptr = *pFlic_info->data;
-                    line_pixel_ptr++;
-                    pFlic_info->data++;
                 }
             }
         }
@@ -950,52 +956,52 @@ void C2_HOOK_FASTCALL DoDifferenceX(tFlic_descriptor* pFlic_info, tU32 chunk_len
     }
 }
 
-// C2PORT-NONMATCHING: best 44.8% | difftest PASS 2000 trials (spec difftest/specs/00462480_DoDifferenceTrans.json) | reason VC5 register allocation; matches transparent delta decoding
 // FUNCTION: CARMA2_HW 0x00462480
 void C2_HOOK_FASTCALL DoDifferenceTrans(tFlic_descriptor* pFlic_info, tU32 chunk_length) {
     int i;
     int j;
     int k;
-    int start_row;
-    int line_count;
+    int skipped_lines;
+    int number_of_lines;
     int number_of_packets;
     int skip_count;
     int size_count;
     tU8* pixel_ptr;
-    tU32 the_row_bytes;
     tU8* line_pixel_ptr;
     tU8 the_byte;
+    tU32 the_row_bytes;
 
-    start_row = MemReadU16(&pFlic_info->data);
-    line_count = MemReadU16(&pFlic_info->data);
+    (void)chunk_length;
+    skipped_lines = MemReadU16(&pFlic_info->data);
+    number_of_lines = MemReadU16(&pFlic_info->data);
     the_row_bytes = pFlic_info->the_pixelmap->row_bytes;
-    pixel_ptr = pFlic_info->first_pixel + the_row_bytes * start_row;
-
-    for (i = 0; i < line_count; i++) {
-        number_of_packets = MemReadU8(&pFlic_info->data);
+    pixel_ptr = pFlic_info->first_pixel + skipped_lines * the_row_bytes;
+    for (i = 0; i < number_of_lines; i++) {
         line_pixel_ptr = pixel_ptr;
+        number_of_packets = MemReadU8(&pFlic_info->data);
         for (j = 0; j < number_of_packets; j++) {
             skip_count = MemReadU8(&pFlic_info->data);
             size_count = MemReadS8(&pFlic_info->data);
             line_pixel_ptr += skip_count;
-            if (size_count < 0) {
-                the_byte = MemReadU8(&pFlic_info->data);
-                if (the_byte) {
+            if (size_count >= 0) {
+                for (k = 0; k < size_count; k++) {
+                    the_byte = *pFlic_info->data++;
+                    if (the_byte != 0) {
+                        *line_pixel_ptr = the_byte;
+                        line_pixel_ptr++;
+                    } else {
+                        line_pixel_ptr++;
+                    }
+                }
+            } else {
+                the_byte = *pFlic_info->data++;
+                if (the_byte != 0) {
                     for (k = 0; k < -size_count; k++) {
                         *line_pixel_ptr = the_byte;
                         line_pixel_ptr++;
                     }
                 } else {
                     line_pixel_ptr += size_count;
-                }
-            } else {
-                for (k = 0; k < size_count; k++) {
-                    the_byte = *pFlic_info->data;
-                    pFlic_info->data++;
-                    if (the_byte) {
-                        *line_pixel_ptr = the_byte;
-                    }
-                    line_pixel_ptr++;
                 }
             }
         }
@@ -1028,28 +1034,27 @@ void C2_HOOK_FASTCALL DoRunLengthX(tFlic_descriptor* pFlic_info, tU32 chunk_leng
     int k;
     int number_of_packets;
     int size_count;
+    int the_row_bytes;
     tU8* pixel_ptr;
     tU8* line_pixel_ptr;
     tU8 the_byte;
-    tU32 the_row_bytes;
 
+    (void)chunk_length;
     the_row_bytes = pFlic_info->the_pixelmap->row_bytes;
     pixel_ptr = pFlic_info->first_pixel;
-
     for (i = 0; i < pFlic_info->height; i++) {
         line_pixel_ptr = pixel_ptr;
         number_of_packets = MemReadU8(&pFlic_info->data);
         for (j = 0; j < number_of_packets; j++) {
             size_count = MemReadS8(&pFlic_info->data);
-            if (size_count >= 0) {
-                the_byte = MemReadU8(&pFlic_info->data);
-                for (k = 0; k < size_count; k++) {
-                    *line_pixel_ptr = the_byte;
+            if (size_count < 0) {
+                for (k = 0; k < -size_count; k++) {
+                    *line_pixel_ptr = MemReadU8(&pFlic_info->data);
                     line_pixel_ptr++;
                 }
             } else {
-                for (k = 0; k < -size_count; k++) {
-                    the_byte = MemReadU8(&pFlic_info->data);
+                the_byte = MemReadU8(&pFlic_info->data);
+                for (k = 0; k < size_count; k++) {
                     *line_pixel_ptr = the_byte;
                     line_pixel_ptr++;
                 }
@@ -1059,7 +1064,6 @@ void C2_HOOK_FASTCALL DoRunLengthX(tFlic_descriptor* pFlic_info, tU32 chunk_leng
     }
 }
 
-// C2PORT-NONMATCHING: best 24.19% | difftest PASS 2000 trials (spec difftest/specs/004626a0_DoRunLengthTrans.json) | reason VC5 packet and pixel pointer loop layout
 // FUNCTION: CARMA2_HW 0x004626a0
 void C2_HOOK_FASTCALL DoRunLengthTrans(tFlic_descriptor* pFlic_info, tU32 chunk_length) {
     int i;
@@ -1074,28 +1078,30 @@ void C2_HOOK_FASTCALL DoRunLengthTrans(tFlic_descriptor* pFlic_info, tU32 chunk_
 
     the_row_bytes = pFlic_info->the_pixelmap->row_bytes;
     pixel_ptr = pFlic_info->first_pixel;
-
     for (i = 0; i < pFlic_info->height; i++) {
         line_pixel_ptr = pixel_ptr;
         number_of_packets = MemReadU8(&pFlic_info->data);
         for (j = 0; j < number_of_packets; j++) {
             size_count = MemReadS8(&pFlic_info->data);
-            if (size_count >= 0) {
-                the_byte = MemReadU8(&pFlic_info->data);
-
-                for (k = 0; k < size_count; k++) {
-                    if (the_byte) {
-                        *line_pixel_ptr = the_byte;
-                    }
-                    line_pixel_ptr++;
-                }
-            } else {
+            if (size_count < 0) {
                 for (k = 0; k < -size_count; k++) {
                     the_byte = MemReadU8(&pFlic_info->data);
-                    if (the_byte) {
+                    if (the_byte != 0) {
                         *line_pixel_ptr = the_byte;
+                        line_pixel_ptr++;
+                    } else {
+                        line_pixel_ptr++;
                     }
-                    line_pixel_ptr++;
+                }
+            } else {
+                the_byte = MemReadU8(&pFlic_info->data);
+                if (the_byte != 0) {
+                    for (k = 0; k < size_count; k++) {
+                        *line_pixel_ptr = the_byte;
+                        line_pixel_ptr++;
+                    }
+                } else {
+                    line_pixel_ptr += size_count;
                 }
             }
         }
@@ -1127,27 +1133,33 @@ void C2_HOOK_FASTCALL DoUncompressed(tFlic_descriptor* pFlic_info, tU32 chunk_le
 // FUNCTION: CARMA2_HW 0x004627f0
 void C2_HOOK_FASTCALL DoUncompressedTrans(tFlic_descriptor* pFlic_info, tU32 chunk_length) {
     int i;
-    int the_row_bytes = pFlic_info->the_pixelmap->row_bytes;
-    int width = pFlic_info->width;
-    tU8* pixel_ptr = pFlic_info->first_pixel;
     int j;
-    tU32 the_word;
+    int the_width;
+    tU8* pixel_ptr;
+    tU8* line_pixel_ptr;
+    tU8 the_byte;
+    tU32 the_row_bytes;
 
+    (void)chunk_length;
+    pixel_ptr = pFlic_info->first_pixel;
+    the_row_bytes = pFlic_info->the_pixelmap->row_bytes;
+    the_width = pFlic_info->width;
     for (i = 0; i < pFlic_info->height; i++) {
-        tU8* dest = pixel_ptr;
-        for (j = 0; j < width; j++) {
-            the_word = MemReadU32(&pFlic_info->data);
-            if (the_word & 0xff) {
-                *dest = (tU8)the_word;
+        line_pixel_ptr = pixel_ptr;
+        for (j = 0; j < the_width; j++) {
+            the_byte = (tU8)MemReadU32(&pFlic_info->data);
+            if (the_byte != '\0') {
+                *line_pixel_ptr = the_byte;
+                line_pixel_ptr++;
+            } else {
+                line_pixel_ptr++;
             }
-            dest++;
         }
         pixel_ptr += the_row_bytes;
     }
 }
 #pragma auto_inline(on)
 
-// C2PORT-NONMATCHING: best 41.46% | difftest PASS 2000 trials (spec difftest/specs/00462860_DrawTranslations.json) | reason regalloc-translation-loop
 // FUNCTION: CARMA2_HW 0x00462860
 void C2_HOOK_FASTCALL DrawTranslations(tFlic_descriptor* pFlic_info) {
     tTranslation_record* trans;
@@ -1523,6 +1535,33 @@ void C2_HOOK_FASTCALL SwapScreen(void) {
 
 // FUNCTION: CARMA2_HW 0x00462a90
 int C2_HOOK_FASTCALL LoadFlicData(char* pName, tU8** pData, tU32* pData_length) {
+#ifdef CARPOCALYPSE2_MATCHING
+    FILE* f;
+    tPath_name the_path;
+
+    if (*pData == NULL) {
+        if (!gPlay_from_disk) {
+            PossibleService();
+            PathCat(the_path, gApplication_path, "ANIM");
+            PathCat(the_path, the_path, pName);
+            f = DRfopen(the_path, "rb");
+            if (f == NULL) {
+                return 0;
+            }
+            *pData_length = GetFileLength(f);
+            *pData = BrMemAllocate(*pData_length, kMem_misc);
+            if (*pData == NULL) {
+                PFfclose(f);
+                return 0;
+            }
+            PFfread(*pData, 1, *pData_length, f);
+            PFfclose(f);
+        }
+    } else {
+        MAMSLock((void**)pData);
+    }
+    return 1;
+#else
     FILE* f;
     tPath_name the_path;
 
@@ -1541,7 +1580,6 @@ int C2_HOOK_FASTCALL LoadFlicData(char* pName, tU8** pData, tU32* pData_length) 
         return 0;
     }
     *pData_length = GetFileLength(f);
-#ifndef CARPOCALYPSE2_MATCHING
     /* The memory-mode decoder retains pointers into this caller-owned data.
      * Disk playback has its own 75 KB streaming path; reject oversized memory
      * mode assets instead of reintroducing an unbounded packed-entry copy. */
@@ -1550,7 +1588,6 @@ int C2_HOOK_FASTCALL LoadFlicData(char* pName, tU8** pData, tU32* pData_length) 
         PFfclose(f);
         return 0;
     }
-#endif
     *pData = BrMemAllocate(*pData_length, kMem_misc);
     if (*pData == NULL) {
         PFfclose(f);
@@ -1559,6 +1596,7 @@ int C2_HOOK_FASTCALL LoadFlicData(char* pName, tU8** pData, tU32* pData_length) 
     PFfread(*pData, 1, *pData_length, f);
     PFfclose(f);
     return 1;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00462b80
@@ -2061,7 +2099,77 @@ outer:
 
 // FUNCTION: CARMA2_HW 0x00463340
 void C2_HOOK_FASTCALL LoadInterfaceStrings(void) {
-#ifndef CARPOCALYPSE2_MATCHING
+#ifdef CARPOCALYPSE2_MATCHING
+    FILE* f;
+    char s[256];
+    char s2[256];
+    char* str;
+    char ch;
+    tPath_name the_path;
+    int i;
+    int j;
+
+    gTranslation_count = 0;
+    PathCat(the_path, gApplication_path, "TRNSLATE.TXT");
+    f = PFfopen(the_path, "rt");
+    if (f == NULL) {
+        return;
+    }
+    while (!PFfeof(f)) {
+        GetALineAndDontArgue(f, s);
+        gTranslation_count++;
+    }
+    PFrewind(f);
+    gTranslations = BrMemAllocate(gTranslation_count * sizeof(tTranslation_record), kMem_misc);
+    for (i = 0; i < gTranslation_count; i++) {
+        GetALineAndDontArgue(f, s);
+        str = strtok(s, "\t ,/");
+        strcpy(s2, str);
+        strtok(s2, ".");
+        strcat(s2, ".FLI");
+        gTranslations[i].flic_index = -1;
+        for (j = 0; j < (int)CARPOCALYPSE2_ASIZE(gMain_flic_list); j++) {
+            if (strcmp(gMain_flic_list[j].file_name, s2) == 0) {
+                gTranslations[i].flic_index = j;
+                break;
+            }
+        }
+        if (gTranslations[i].flic_index < 0) {
+            FatalError(kFatalError_CannotFindFlicReferencedTranslation_S, s2);
+        }
+        str[strlen(str)] = ',';
+        strtok(s, "\t ,/");
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%d", &gTranslations[i].x);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%d", &gTranslations[i].y);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%d", &gTranslations[i].font_index);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%c", &ch);
+        switch (ch) {
+            case 'L':
+            case 'l':
+                gTranslations[i].justification = eJust_left;
+                break;
+            case 'R':
+            case 'r':
+                gTranslations[i].justification = eJust_right;
+                break;
+            case 'C':
+            case 'c':
+                gTranslations[i].justification = eJust_centre;
+                break;
+        }
+        str += strlen(str) + 1;
+        gTranslations[i].text = BrMemAllocate(strlen(str) + 1, kMem_misc);
+        strcpy(gTranslations[i].text, str);
+    }
+    LoadFont(1);
+    LoadFont(2);
+    gTrans_fonts[0] = &gFonts[1];
+    gTrans_fonts[1] = &gFonts[2];
+#else
     FILE* f;
     char s[256];
     char s2[256];
@@ -2133,75 +2241,6 @@ void C2_HOOK_FASTCALL LoadInterfaceStrings(void) {
     gTrans_fonts[1] = &gFonts[2];
 
     PFfclose(f);
-#else
-    FILE* f;
-    char s[256];
-    char s2[256];
-    char* str;
-    char ch;
-    tPath_name the_path;
-    int i;
-    int j;
-
-    gTranslation_count = 0;
-    PathCat(the_path, gApplication_path, "TRNSLATE.TXT");
-    f = PFfopen(the_path, "rt");
-    if (f != NULL) {
-        while (!PFfeof(f)) {
-            GetALineAndDontArgue(f, s);
-            gTranslation_count++;
-        }
-        PFrewind(f);
-        gTranslations = BrMemAllocate(gTranslation_count * sizeof(tTranslation_record), kMem_misc);
-        for (i = 0; i < gTranslation_count; i++) {
-            GetALineAndDontArgue(f, s);
-            str = strtok(s, gSkip_lines_delimiters);
-            strcpy(s2, str);
-            strtok(s2, ".");
-            strcat(s2, ".FLI");
-            gTranslations[i].flic_index = -1;
-            for (j = 0; j < 372; j++) {
-                if (strcmp(gMain_flic_list[j].file_name, s2) == 0) {
-                    gTranslations[i].flic_index = j;
-                    break;
-                }
-            }
-            if (gTranslations[i].flic_index < 0) {
-                FatalError(kFatalError_CannotFindFlicReferencedTranslation_S, s2);
-            }
-            str[strlen(str)] = ',';
-            strtok(s, gSkip_lines_delimiters);
-            str = strtok(NULL, gSkip_lines_delimiters);
-            sscanf(str, gSkip_lines_format, &gTranslations[i].x);
-            str = strtok(NULL, gSkip_lines_delimiters);
-            sscanf(str, gSkip_lines_format, &gTranslations[i].y);
-            str = strtok(NULL, gSkip_lines_delimiters);
-            sscanf(str, gSkip_lines_format, &gTranslations[i].font_index);
-            str = strtok(NULL, gSkip_lines_delimiters);
-            sscanf(str, "%c", &ch);
-            switch (ch) {
-                case 'L':
-                case 'l':
-                    gTranslations[i].justification = eJust_left;
-                    break;
-                case 'R':
-                case 'r':
-                    gTranslations[i].justification = eJust_right;
-                    break;
-                case 'C':
-                case 'c':
-                    gTranslations[i].justification = eJust_centre;
-                    break;
-            }
-            str += strlen(str) + 1;
-            gTranslations[i].text = BrMemAllocate(strlen(str) + 1, kMem_misc);
-            strcpy(gTranslations[i].text, str);
-        }
-        LoadFont(1);
-        LoadFont(2);
-        gTrans_fonts[0] = &gFonts[1];
-        gTrans_fonts[1] = &gFonts[2];
-    }
 #endif
 }
 

@@ -183,7 +183,7 @@ if(CARPOCALYPSE2_MATCHING)
 endif()
 
 if(VITA)
-    target_sources(c2_platform PRIVATE sdl3/vita_controls.c sdl3/vita_platform.c sdl3/vita_data.c sdl3/vita_music.c sdl3/vita_video.c sdl3/vita_gl.c sdl3/vita_pack.c sdl3/vita_perf.c sdl3/vita_hud.c)
+    target_sources(c2_platform PRIVATE sdl3/vita_controls.c sdl3/vita_platform.c sdl3/vita_data.c sdl3/vita_music.c sdl3/vita_video.c sdl3/vita_gl.c sdl3/vita_pack.c sdl3/vita_perf.c sdl3/vita_hud.c sdl3/vita_sndprefetch.c sdl3/vita_glqueue.c)
     target_link_libraries(carpocalypse2 PRIVATE SceCtrl_stub SceIofilemgr_stub ScePower_stub)
     target_link_libraries(carpocalypse2 PRIVATE vitaGL stdc++ mathneon vitashark SceShaccCgExt
         taihen_stub SceShaccCg_stub SceGxm_stub SceDisplay_stub SceKernelDmacMgr_stub zip)

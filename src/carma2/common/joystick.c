@@ -668,12 +668,12 @@ int C2_HOOK_FASTCALL ReadJoystickInfo(FILE* pFile, tButtonJoystickInfo* pInfo) {
 
 // FUNCTION: CARMA2_HW 0x0045c0b0
 int C2_HOOK_FASTCALL LoadJoystickPreferences(void) {
-    tButtonJoystickInfo* joystick_info;
-    FILE* f;
     tPath_name path;
+    tButtonJoystickInfo* info;
+    FILE* f;
 
-    joystick_info = PDGetCurrentJoystickData();
-    if (joystick_info == NULL) {
+    info = PDGetCurrentJoystickData();
+    if (info == NULL) {
         return 0;
     }
     PathCat(path, gApplication_path, "JOYSTICK.TXT");
@@ -681,35 +681,26 @@ int C2_HOOK_FASTCALL LoadJoystickPreferences(void) {
     if (f == NULL) {
         return 0;
     }
-    if (FUN_0045b7e0(f, (char*)GetCurrentJoystickName()) > 0) {
-        ReadJoystickInfo(f, joystick_info);
+    if (FUN_0045b7e0(f, GetCurrentJoystickName()) > 0) {
+        ReadJoystickInfo(f, info);
         fclose(f);
     } else {
         fclose(f);
         remove(path);
     }
-    gJoystick_x_steering = joystick_info->field_0xd8;
-    gJoystick_y_throttle = joystick_info->field_0xdc;
-    gUNK_00595f9c = joystick_info->field_0xd4;
-    gUNK_00595f84 = joystick_info->field_0xe4;
-    gUNK_00596310 += 0x19;
+    gJoystick_x_steering = info->field_0xd8;
+    gJoystick_y_throttle = info->field_0xdc;
+    gUNK_00595f9c = info->field_0xd4;
+    gUNK_00595f84 = info->field_0xe4;
+    gUNK_00596310 += 25;
     if (gUNK_00596310 > 100) {
         gUNK_00596310 = 0;
     }
     SetAllFFBEffectsGain(gUNK_00596310);
-    if (joystick_info->field_0xe8 != 0) {
-        FUN_0045a070();
-        joystick_info = PDGetCurrentJoystickData();
-        if (joystick_info != NULL) {
-            joystick_info->field_0xe8 = 1;
-            return 1;
-        }
+    if (info->field_0xe8 != 0) {
+        EnableJoysticks();
     } else {
-        joystick_info = PDGetCurrentJoystickData();
-        if (joystick_info != NULL) {
-            joystick_info->field_0xe8 = 0;
-        }
-        FUN_0045a0c0();
+        DisableJoysticks();
     }
     return 1;
 }
@@ -982,20 +973,20 @@ int C2_HOOK_FASTCALL PeekChar(FILE* pFile) {
 }
 
 // FUNCTION: CARMA2_HW 0x0045a300
-tU32 C2_HOOK_FASTCALL ReadStringUntil(FILE* pFile, char* pString, int pMaxLength, char pTerminator) {
-    char character[2];
-    int length;
+int C2_HOOK_FASTCALL ReadStringUntil(FILE* pF, char* pBuffer, int pBuffer_size, char pLimit_char) {
+    int i;
+    char s[2];
 
-    pString[0] = *(volatile const char*) "";
-    character[1] = '\0';
-    character[0] = (char) fgetc(pFile);
-    length = 0;
-    while (character[0] != pTerminator && length < pMaxLength && !feof(pFile)) {
-        strcat(pString, character);
-        length++;
-        character[0] = (char) fgetc(pFile);
+    strcpy(pBuffer, "");
+    s[1] = '\0';
+    for (i = 0; (s[0] = fgetc(pF)) != pLimit_char && i < pBuffer_size && !feof(pF); i++) {
+        strcat(pBuffer, s);
     }
-    return feof(pFile) ? 1 : 0;
+    if (feof(pF)) {
+        return 1;
+    } else {
+        return 0;
+    }
 }
 
 // C2PORT-NONMATCHING: best 50.55% | difftest PASS 2000 trials (spec difftest/specs/0045c910_FUN_0045c910.json) | reason x87-order

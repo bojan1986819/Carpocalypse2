@@ -153,9 +153,45 @@ void C2_HOOK_FASTCALL NetSummary_Draw(tFrontend_spec* pFrontend) {
     }
 }
 
-// C2PORT-NONMATCHING: best 46.81% | difftest PASS 2000 trials (spec difftest/specs/00474400_NetSummary_MenuHandler.json) | reason original inlines NetSummary_Draw; VC5 does not
+#pragma inline_depth(0)
 // FUNCTION: CARMA2_HW 0x00474400
 int C2_HOOK_FASTCALL NetSummary_MenuHandler(tFrontend_spec* pFrontend) {
+#ifdef CARPOCALYPSE2_MATCHING
+    int result;
+    int i;
+    int player_index;
+
+    if (gFrontend_netsummary_first_iteration) {
+
+        gFrontend_selected_item_index = 79;
+        gFrontend_netsummary_first_iteration = 0;
+    }
+    if (gProgram_state.prog_status == eProg_idling) {
+        return 1;
+    }
+    result = Generic_MenuHandler(pFrontend);
+    for (i = 0; i < gNumber_of_net_players; i++) {
+
+        player_index = gPlayer_lookup_netsummary[i];
+        pFrontend->items[player_index].visible = 1;
+        pFrontend->items[12 + player_index].visible = 1;
+        pFrontend->items[24 + player_index].visible = 1;
+        pFrontend->items[36 + player_index].visible = 1;
+        pFrontend->items[48 + player_index].visible = 1;
+        pFrontend->items[65 + player_index].visible = 1;
+        DrawThisCarIconNow(gNet_players[player_index].car_index, 88, 112 + 24 * i);
+    }
+    for (i = gNumber_of_net_players; i < kMax_netplayers; i++) {
+
+        pFrontend->items[0 + i].visible = 0;
+        pFrontend->items[12 + i].visible = 0;
+        pFrontend->items[24 + i].visible = 0;
+        pFrontend->items[36 + i].visible = 0;
+        pFrontend->items[48 + i].visible = 0;
+        pFrontend->items[65 + i].visible = 0;
+    }
+    return result;
+#else
     int result;
 
     if (gFrontend_netsummary_first_iteration) {
@@ -169,4 +205,6 @@ int C2_HOOK_FASTCALL NetSummary_MenuHandler(tFrontend_spec* pFrontend) {
     result = Generic_MenuHandler(pFrontend);
     NetSummary_Draw(pFrontend);
     return result;
+#endif
 }
+#pragma inline_depth()

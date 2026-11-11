@@ -329,6 +329,12 @@ C2_MATCHING_INLINE void C2_HOOK_FASTCALL DoGame(void) {
     DisposeRace();
     PrintMemoryDump(0, "AFTER DISPOSING RACE");
     if (gNet_mode == eNet_mode_none) {
+#ifndef CARPOCALYPSE2_MATCHING
+        if (getenv("C2_TEST_RACES") != NULL) {
+            /* test harness (mainloop.c TestRaces): straight back to the main menu */
+            options_result = (tSO_result)0;
+        } else
+#endif
         options_result = DoPostRace(race_result);
         if (race_result == eRace_completed) {
             gSave_game_out_of_sync = 1;
@@ -381,12 +387,11 @@ int C2_HOOK_FASTCALL ChooseOpponent(int pNastiness) {
         count = 0;
         for (i = 0; i < gNumber_of_racers; i++) {
             if ((pNastiness == 0 || gOpponents[i].strength_rating == pNastiness)
-                && gProgram_state.current_car.index != i
+                && gProgram_state.current_car_index != i
                 && !gOpponents[i].picked
-                && gOpponents[i].strength_rating < 6
-                && gOpponents[i].strength_rating > 0) {
-                temp_array[count] = i;
-                count++;
+                && gOpponents[i].strength_rating <= 5
+                && gOpponents[i].strength_rating >= 1) {
+                temp_array[count++] = i;
             }
         }
         if (count != 0) {
@@ -547,31 +552,29 @@ void C2_HOOK_FASTCALL Checkpoint(int pCheckpoint_index, int pDo_sound) {
 void C2_HOOK_FASTCALL IncrementCheckpoint(void) {
     int done_voice;
 
+    done_voice = 0;
     if (gRace_finished) {
         return;
     }
-    if (!(gCurrent_race.race_spec->race_type == kRaceType_Carma1 || gCurrent_race.race_spec->race_type == kRaceType_Checkpoints)) {
+    if (gCurrent_race.race_spec->race_type != kRaceType_Carma1
+            && gCurrent_race.race_spec->race_type != kRaceType_Checkpoints) {
         return;
     }
-    done_voice = 0;
     gLast_checkpoint_time = GetTotalTime();
-    if (gCheckpoint < gCheckpoint_count) {
-        gCheckpoint += 1;
-    } else {
+    if (gCheckpoint >= gCheckpoint_count) {
         gCheckpoint = 1;
-        if (gLap < gTotal_laps) {
-            gLap += 1;
-            if (gLap == gTotal_laps) {
-                PratcamEvent(33);
-                NewTextHeadupSlot(4, 0, 1000, -4, GetMiscString(eMiscString_final_lap));
-                DRS3StartSound(gPedestrians_outlet, eSoundId_FinalLap);
-                done_voice = 1;
-            }
-        } else {
+        if (gLap++ >= gTotal_laps) {
             gLap = gTotal_laps;
             gCheckpoint = gCheckpoint_count;
             RaceCompleted(eRace_over_0);
+        } else if (gLap == gTotal_laps) {
+            PratcamEvent(33);
+            NewTextHeadupSlot(4, 0, 1000, -4, GetMiscString(eMiscString_final_lap));
+            DRS3StartSound(gPedestrians_outlet, eSoundId_FinalLap);
+            done_voice = 1;
         }
+    } else {
+        gCheckpoint += 1;
     }
     if (!gRace_finished) {
         PratcamEvent(33);
@@ -774,9 +777,40 @@ void C2_HOOK_FASTCALL TotalRepair(void) {
     NewTextHeadupSlot(4, 0, 1000, -4, GetMiscString(eMiscString_instant_repair));
 }
 
-// C2PORT-NONMATCHING: best 29.20% | difftest PASS 2000 trials (spec 00503ba0_PickNetRace.json + _TIES.json) | reason loop and register allocation
 // FUNCTION: CARMA2_HW 0x00503ba0
 int C2_HOOK_FASTCALL PickNetRace(int pCurrent_race, tNet_sequence_type pNet_race_sequence) {
+#ifdef CARPOCALYPSE2_MATCHING
+    int i;
+    int new_index;
+    int races_count;
+    int most_seldom_seen;
+    int races_to_pick_from[50];
+
+    if (pNet_race_sequence == eNet_sequence_sequential) {
+        pCurrent_race++;
+        if (pCurrent_race >= gNumber_of_races) {
+            pCurrent_race = 0;
+        }
+        return pCurrent_race;
+    } else {
+        most_seldom_seen = 10000;
+        for (i = 0; i < gNumber_of_races; i++) {
+            if (gRace_list[i].been_there_done_that < most_seldom_seen) {
+                most_seldom_seen = gRace_list[i].been_there_done_that;
+            }
+        }
+        races_count = 0;
+        for (i = 0; i < gNumber_of_races; i++) {
+            if (gRace_list[i].been_there_done_that == most_seldom_seen && i != pCurrent_race) {
+                races_to_pick_from[races_count] = i;
+                races_count++;
+            }
+        }
+        new_index = races_to_pick_from[IRandomBetween(0, races_count - 1)];
+        gRace_list[new_index].been_there_done_that++;
+        return new_index;
+    }
+#else
     int i;
     int new_index;
     int races_count;
@@ -806,6 +840,7 @@ int C2_HOOK_FASTCALL PickNetRace(int pCurrent_race, tNet_sequence_type pNet_race
         gRace_list[new_index].count_opponents += 1;
     }
     return new_index;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00504170
@@ -1163,11 +1198,7 @@ void C2_HOOK_FASTCALL DoProgram(void) {
     gProgram_state.dont_load = 0;
     gProgram_state.mirror_on = 1;
     gProgram_state.prat_cam_on = 1;
-#ifndef CARPOCALYPSE2_MATCHING
     gProgram_state.cockpit_on = 0;
-#else
-    gProgram_state.cockpit_on = 1;
-#endif
     gProgram_state.frank_or_anniness = eFrankie;
 #ifdef __vita__
     /* Vita: AutoLoad defaults to on once (the shipped OPTIONS.TXT says 0); afterwards the

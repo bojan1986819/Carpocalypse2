@@ -85,7 +85,7 @@ tPD_net_game_info* gJoinable_games;
 // FUNCTION: CARMA2_HW 0x0051a190
 void C2_HOOK_FASTCALL PDNetObtainSystemUserName(char* pName, int pMax_length) {
     char buffer[16];
-    DWORD size;
+    DWORD size = sizeof(buffer);
     char *p;
 
     dr_dprintf("PDNetObtainSystemUserName()");
@@ -566,34 +566,20 @@ tNet_message* C2_HOOK_FASTCALL PDNetGetNextMessage(tNet_game_details* pDetails, 
     msg = NetAllocateMessage(512);
     receive_buffer = (char*)msg;
     res = recvfrom(gSocket, receive_buffer, 512, 0, &gListen_address, &sa_len) != SOCKET_ERROR;
-    if (res == 0) {
+    if (res == SOCKET_ERROR) {
         WSAGetLastError();
-    }
-    if (res <= 0) {
-        goto dispose_message;
-    }
-    {
+    } else {
         NetNowIPXLocalTarget2String(addr_str, gPtr_listen_address);
         if (!SameEthernetAddress(gPtr_local_address, gPtr_listen_address)) {
             int msg_type;
 
-            msg_type = 0;
-            if (strncmp(receive_buffer + 4, BROADCAST_HEADER, gMsg_header_strlen) == 0) {
-                if (isdigit(receive_buffer[4 + gMsg_header_strlen])) {
-                    msg_type = receive_buffer[4 + gMsg_header_strlen] - '0';
-                }
-                if (msg_type == 0 || msg_type >= 3) {
-                    msg_type = 999;
-                }
-            } else {
-                msg_type = 999;
-            }
+            msg_type = GetMessageTypeFromMessage(receive_buffer);
             switch (msg_type) {
             case 1:
                 if (gNet_mode == eNet_mode_host) {
                     dr_dprintf("PDNetGetNextMessage(): Received '%s' from '%s', replying to joiner", receive_buffer, addr_str);
                     MakeMessageToSend(2);
-                    if (sendto(gSocket, gSend_buffer, strlen(gSend_buffer) + 1, 0, &gListen_address, 14) == SOCKET_ERROR) {
+                    if (sendto(gSocket, gSend_buffer, strlen(gSend_buffer) + 1, 0, &gListen_address, sizeof(gListen_address)) == SOCKET_ERROR) {
                         dr_dprintf("PDNetGetNextMessage(): Error on sendto() - WSAGetLastError=%d", WSAGetLastError());
                     }
                 }
@@ -603,13 +589,12 @@ tNet_message* C2_HOOK_FASTCALL PDNetGetNextMessage(tNet_game_details* pDetails, 
                 break;
             default:
                 dr_dprintf("PDNetGetNextMessage(): res is %d, received message type %d from '%s', passing up", res, msg->contents.raw.header.type, addr_str);
-                memcpy(&gLast_received_addr, gPtr_listen_address, 14);
+                memcpy(&gLast_received_addr, gPtr_listen_address, sizeof(gLast_received_addr));
                 *pSender_address = &gLast_received_addr;
                 return msg;
             }
         }
     }
-dispose_message:
     msg->header.field_0x14 = 0;
     NetDisposeMessage(pDetails, msg);
     return NULL;

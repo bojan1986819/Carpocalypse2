@@ -69,6 +69,13 @@ void* C2_HOOK_CDECL BrResAllocate(void* vparent, br_size_t size, br_uint_8 res_c
     }
 
     pad = (~(malign - 1)) & (calign - 1);
+#ifdef __vita__
+    {
+        /* port diagnostics: who allocated each block (drmem.c C2VitaMemTally) */
+        extern void* gC2_mem_caller;
+        gC2_mem_caller = __builtin_return_address(0);
+    }
+#endif
     res = BrMemAllocate(pad + size, res_class);
     actual_pad = (((br_size_t)res + calign - 1) & (~(calign - 1))) - (br_size_t)res;
     if (actual_pad > pad) {

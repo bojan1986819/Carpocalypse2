@@ -355,10 +355,11 @@ play_sound:
 // FUNCTION: CARMA2_HW 0x00455950
 int C2_HOOK_FASTCALL DRS3SetVolume(int pVolume) {
 
-    if (!gSound_enabled) {
+    if (gSound_enabled) {
+        return S3SetVolume(pVolume);
+    } else {
         return 0;
     }
-    return S3SetVolume(pVolume);
 }
 
 // C2PORT-NONMATCHING: best 53.61% | difftest PASS 2000 trials (spec difftest/specs/00457260_FoundSoundSource.json) | reason VC5 register allocation and copy scheduling
@@ -677,7 +678,7 @@ int C2_HOOK_FASTCALL DRS3StartSoundNoPiping(tS3_outlet* pOutlet, tS3_sound_id pS
 int C2_HOOK_FASTCALL DRS3StartSound2(tS3_outlet *pOutlet, tS3_sound_id pSound, int pRepeats, int pLeft_volume, int pRight_volume, int pLeft_pitch, int pRight_pitch) {
 
     if (gSound_enabled) {
-        if (pOutlet != gIndexed_outlets[0]
+        if (pOutlet != gMusic_outlet
                 && pSound != 1000
                 && !(pSound >= 3000 && pSound <= 3007)
                 && !(pSound >= 5300 && pSound <= 5320)
@@ -921,7 +922,7 @@ void C2_HOOK_FASTCALL InitSoundSources(void) {
         for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gEnvironment_sound_sources); i++) {
 
             env_src = &gEnvironment_sound_sources[i];
-            env_src->field_0x10 = 0;
+            env_src->field_0x10 = NULL;
             if (env_src->source == NULL) {
                 env_src->source = S3CreateSoundSourceBR(&env_src->position, &gZero_v__car, gIndexed_outlets[0]);
                 if (env_src->source != NULL) {
@@ -1119,7 +1120,7 @@ void C2_HOOK_FASTCALL SetSoundVolumes(int pCD_audio) {
     if (gEffects_outlet != NULL) {
         DRS3SetOutletVolume(gEffects_outlet, gProgram_state.effects_volume);
     }
-    DRS3SetOutletVolume(gCar_outlet, gProgram_state.effects_volume);
+    DRS3SetOutletVolume(gXXX_outlet, gProgram_state.effects_volume);
     DRS3SetOutletVolume(gEngine_outlet, gProgram_state.effects_volume);
     DRS3SetOutletVolume(gDriver_outlet, gProgram_state.effects_volume);
     DRS3SetOutletVolume(gPedestrians_outlet, gProgram_state.effects_volume);
@@ -1185,7 +1186,7 @@ int C2_HOOK_FASTCALL DRS3StartCDA(int pSound) {
                 } while (pSound == gLast_tune);
             }
             gLast_tune = pSound;
-            gINT_00684554 = S3StartSound(gMusic_outlet, pSound);
+            gINT_00684554 = DRS3StartSoundNoPiping(gMusic_outlet, pSound);
             gINT_00684568 = gINT_00684554;
             if (!gINT_00684554) {
                 dr_dprintf("CDINFO: DRS3StartCDA(): Chosen actual CD track %d", pSound);

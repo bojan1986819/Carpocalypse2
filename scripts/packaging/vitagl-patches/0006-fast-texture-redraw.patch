@@ -1,0 +1,63 @@
+--- a/source/custom_shaders.c
++++ b/source/custom_shaders.c
+@@ -1379,6 +1379,50 @@
+ 	return GL_TRUE;
+ }
+ 
++/* C2 port: draws count 16-bit indices at gl_indices of the bound VAO's element buffer as triangles
++ * with everything the previous glDrawElements set up (program, vertex streams, uniforms, state) except
++ * the 2D texture of the first fragment sampler, which is the one bound now. The caller makes sure that
++ * previous draw used this program and VAO and that nothing else changed since. */
++void vglFastDrawElementsTexture(GLsizei count, const GLvoid *gl_indices) {
++	program *p = &progs[cur_program - 1];
++	vbo *gpu_buf = (vbo *)cur_vao->index_array_unit;
++	if (p->max_frag_texunit_idx > 0 && p->frag_texunits[0]) {
++		texture_unit *tex_unit = &texture_units[(int)p->frag_texunits[0]->sampler_index];
++		uint8_t tex_type = p->frag_texunits[0]->type == UNIFORM_CUBE_SAMPLER ? 2 : tex2d_override;
++		texture *tex = &texture_slots[tex_unit->tex_id[tex_type]];
++#ifdef HAVE_TEX_CACHE
++		restore_tex_cache(tex);
++#endif
++#ifndef TEXTURES_SPEEDHACK
++		tex->last_frame = vgl_framecount;
++#endif
++		sampler *smp = samplers[(int)p->frag_texunits[0]->sampler_index];
++		if (smp) {
++			vglSetTexMinFilter(&tex->gxm_tex, smp->min_filter);
++			vglSetTexMipFilter(&tex->gxm_tex, smp->mip_filter);
++			vglSetTexMagFilter(&tex->gxm_tex, smp->mag_filter);
++			vglSetTexUMode(&tex->gxm_tex, smp->u_mode);
++			vglSetTexVMode(&tex->gxm_tex, smp->v_mode);
++			vglSetTexMipmapCount(&tex->gxm_tex, smp->use_mips ? tex->mip_count : 0);
++			vglSetTexLodBias(&tex->gxm_tex, smp->lod_bias);
++			tex->overridden = GL_TRUE;
++		} else if (tex->overridden) {
++			vglSetTexMinFilter(&tex->gxm_tex, tex->min_filter);
++			vglSetTexMipFilter(&tex->gxm_tex, tex->mip_filter);
++			vglSetTexMagFilter(&tex->gxm_tex, tex->mag_filter);
++			vglSetTexUMode(&tex->gxm_tex, tex->u_mode);
++			vglSetTexVMode(&tex->gxm_tex, tex->v_mode);
++			vglSetTexMipmapCount(&tex->gxm_tex, tex->use_mips ? tex->mip_count : 0);
++			vglSetTexLodBias(&tex->gxm_tex, tex->lod_bias);
++			tex->overridden = GL_FALSE;
++		}
++		sceGxmSetFragmentTexture(gxm_context, 0, &tex->gxm_tex);
++	}
++	upload_uniforms();
++	gpu_buf->last_frame = vgl_framecount;
++	sceGxmDraw(gxm_context, SCE_GXM_PRIMITIVE_TRIANGLES, SCE_GXM_INDEX_FORMAT_U16, (uint8_t *)gpu_buf->ptr + (uint32_t)gl_indices, count);
++}
++
+ GLboolean _glDrawElements_CustomShadersIMPL(uint16_t *idx_buf, GLsizei count, uint32_t top_idx, uint32_t base_idx, SceGxmIndexSource index_type) {
+ #ifdef HAVE_PROFILING
+ 	uint32_t draw_start = sceKernelGetProcessTimeLow();
+--- a/source/vitaGL.h
++++ b/source/vitaGL.h
+@@ -1297,6 +1297,7 @@
+ 
+ // Perform a display buffer swap. Equivalent of eglSwapBuffers but allows support with Common Dialog.
+ void vglSwapBuffers(GLboolean has_commondialog);
++void vglFastDrawElementsTexture(GLsizei count, const GLvoid *gl_indices); // C2 port: texture-only re-draw
+ 
+ // Enqueue a request for display resolution change that will happen at next vglSwapBuffers call.
+ GLboolean vglSwapResolution(int width, int height);

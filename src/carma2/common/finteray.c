@@ -1613,39 +1613,32 @@ void C2_HOOK_FASTCALL FUN_0041e360(br_vector3* pRay_pos, br_vector3* pRay_dir, b
 }
 
 // FUNCTION: CARMA2_HW 0x004225f0
-tFace_ref* C2_HOOK_FASTCALL FUN_004225f0(br_vector3* pRay_pos, br_vector3* pRay_dir, br_vector3* pHit_normal, br_scalar* pBest_t, br_vector3* pHit_pos, tFace_ref* pFaces, int pFace_count) {
-	br_vector3 hit_normal;
-	br_vector3 hit_pos;
-	br_scalar t;
-	tFace_ref* face;
-	br_vector3* output_pos;
+tFace_ref* C2_HOOK_FASTCALL FUN_004225f0(br_vector3* pPosition, br_vector3* pDirection, br_vector3* pNormal, br_scalar* pT, br_vector3* pCollision_position, tFace_ref* pFaces, int pCount) {
+    br_vector3 normal;
+    br_vector3 collision_position;
+    br_scalar t;
+    tFace_ref* best;
+    int i;
 
-	*pBest_t = 2.0f;
-	if (pFace_count > 0) {
-		output_pos = pHit_pos;
-		face = pFaces;
-		do {
-			if ((face->flags & 0x80) == 0) {
-				CheckSingleFace(face, pRay_pos, pRay_dir, &hit_normal, &t, &hit_pos);
-				if (t < *pBest_t) {
-					*pBest_t = t;
-					pHit_normal->v[0] = hit_normal.v[0];
-					pHit_normal->v[1] = hit_normal.v[1];
-					pHit_normal->v[2] = hit_normal.v[2];
-					output_pos->v[0] = hit_pos.v[0];
-					output_pos->v[1] = hit_pos.v[1];
-					output_pos->v[2] = hit_pos.v[2];
-					pHit_pos = (br_vector3*)face;
-				}
-			}
-			face++;
-			pFace_count--;
-		} while (pFace_count != 0);
-	}
-	if (*pBest_t < gFLOAT_00589968) {
-		return (tFace_ref*)pHit_pos;
-	}
-	return NULL;
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFace_ref, flags, 0x40);
+
+    *pT = 2.f;
+    for (i = 0; i < pCount; i++, pFaces++) {
+        if ((pFaces->flags & 0x80) == 0) {
+            CheckSingleFace(pFaces, pPosition, pDirection, &normal, &t, &collision_position);
+            if (t < *pT) {
+                *pT = t;
+                BrVector3Copy(pNormal, &normal);
+                best = pFaces;
+                BrVector3Copy(pCollision_position, &collision_position);
+            }
+        }
+    }
+    if (*pT < gFLOAT_00589968) {
+        return best;
+    } else {
+        return NULL;
+    }
 }
 
 // FUNCTION: CARMA2_HW 0x004227a0
@@ -2269,47 +2262,24 @@ typedef struct {
 } tFinteray_corner_source;
 
 // FUNCTION: CARMA2_HW 0x00428480
-void C2_HOOK_FASTCALL FinterayGetCorner(br_vector3* pDest, tFinteray_corner_source* pSource, int pIndex) {
-    int offset;
-    float value;
-
-    switch (pSource->type) {
-    case 0:
+void C2_HOOK_FASTCALL FinterayGetCorner(br_vector3* pPoint, tPhysics_shape* pShape, tU32 pIndex) {
+    switch (pShape->common.type) {
+    case kCollisionShapeType_Box:
+        BrVector3Set(pPoint,
+            (pIndex & 0x2) ? pShape->common.bb.min.v[0] : pShape->common.bb.max.v[0],
+            (pIndex & 0x1) ? pShape->common.bb.min.v[1] : pShape->common.bb.max.v[1],
+            (pIndex & 0x4) ? pShape->common.bb.min.v[2] : pShape->common.bb.max.v[2]);
         break;
-    case 2:
-        offset = pIndex * sizeof(br_vector3);
-        *(tU32*)((tU8*)pDest + 0) = *(tU32*)((tU8*)pSource->vectors_a + offset);
-        *(tU32*)((tU8*)pDest + 4) = *(tU32*)((tU8*)pSource->vectors_a + offset + 4);
-        *(tU32*)((tU8*)pDest + 8) = *(tU32*)((tU8*)pSource->vectors_a + offset + 8);
+    case kCollisionShapeType_Wireframe:
+        BrVector3Copy(pPoint, &pShape->wireframe.wireframe.points[pIndex]);
         return;
-    case 1:
-    case 3:
-        offset = pIndex * sizeof(br_vector3);
-        *(tU32*)((tU8*)pDest + 0) = *(tU32*)((tU8*)pSource->vectors_b + offset);
-        *(tU32*)((tU8*)pDest + 4) = *(tU32*)((tU8*)pSource->vectors_b + offset + 4);
-        *(tU32*)((tU8*)pDest + 8) = *(tU32*)((tU8*)pSource->vectors_b + offset + 8);
+    case kCollisionShapeType_Polyhedron:
+    case kCollisionShapeType_Wireframe_Polyhedron:
+        BrVector3Copy(pPoint, &pShape->polyhedron.polyhedron.points[pIndex]);
         return;
     default:
         return;
     }
-    if ((pIndex & 2) != 0) {
-        value = pSource->max_xyz[0];
-    } else {
-        value = pSource->min_xyz[0];
-    }
-    pDest->v[0] = value;
-    if ((pIndex & 1) != 0) {
-        value = pSource->max_xyz[1];
-    } else {
-        value = pSource->min_xyz[1];
-    }
-    pDest->v[1] = value;
-    if ((pIndex & 4) != 0) {
-        value = pSource->max_xyz[2];
-    } else {
-        value = pSource->min_xyz[2];
-    }
-    pDest->v[2] = value;
 }
 
 #pragma auto_inline(off)

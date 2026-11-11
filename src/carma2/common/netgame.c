@@ -1263,7 +1263,7 @@ void C2_HOOK_FASTCALL ReceivedNonCar(tNet_message_chunk_non_car* pContents) {
     }
 
     non_car = (tNon_car_spec*)actor->type_data;
-    if (non_car != NULL && (non_car->driver != 4 || (tU16)non_car->car_ID != pContents->non_car_id)) {
+    if (non_car != NULL && (non_car->driver != eDriver_4 || (tU16)non_car->car_ID != pContents->non_car_id)) {
         non_car = NULL;
     }
     if ((pContents->flags & 1) != 0) {
@@ -2235,47 +2235,51 @@ void C2_HOOK_FASTCALL RemovePlayerFromShapeStatusLists(tPlayer_ID pPlayer_id, in
 }
 
 // FUNCTION: CARMA2_HW 0x0049be90
-void C2_HOOK_FASTCALL PackMatrixQuaternion(tU16* pPacked_quat, const br_matrix34* pMatrix) {
+void C2_HOOK_FASTCALL PackMatrixQuaternion(tU16* pOrientation, const br_matrix34* pMatrix) {
     br_quat quaternion;
-    float component;
+    br_scalar value;
 
     BrMatrix34ToQuat(&quaternion, pMatrix);
-
-    component = quaternion.x;
-    if (component > gFLOAT_0058a3f8) {
-        component = gFLOAT_0058a3f8;
+    value = quaternion.x;
+    if (value > gFLOAT_0058a3f8) {
+        value = gFLOAT_0058a3f8;
     }
-    if (component < gFLOAT_0058a3fc) {
-        component = gFLOAT_0058a3fc;
+    if (value < gFLOAT_0058a3fc) {
+        value = gFLOAT_0058a3fc;
     }
-    pPacked_quat[0] = (tU16)(((component - gFLOAT_0058a3fc) * gFLOAT_0058a404 * gFLOAT_0058a400) - gFLOAT_0058a408);
-
-    component = quaternion.y;
-    if (component > gFLOAT_0058a3f8) {
-        component = gFLOAT_0058a3f8;
+    value = (value - gFLOAT_0058a3fc) * gFLOAT_0058a400;
+    value *= gFLOAT_0058a404;
+    pOrientation[0] = (tU16)(value - gFLOAT_0058a408);
+    value = quaternion.y;
+    if (value > gFLOAT_0058a3f8) {
+        value = gFLOAT_0058a3f8;
     }
-    if (component < gFLOAT_0058a3fc) {
-        component = gFLOAT_0058a3fc;
+    if (value < gFLOAT_0058a3fc) {
+        value = gFLOAT_0058a3fc;
     }
-    pPacked_quat[1] = (tU16)(((component - gFLOAT_0058a3fc) * gFLOAT_0058a404 * gFLOAT_0058a400) - gFLOAT_0058a408);
-
-    component = quaternion.z;
-    if (component > gFLOAT_0058a3f8) {
-        component = gFLOAT_0058a3f8;
+    value = (value - gFLOAT_0058a3fc) * gFLOAT_0058a400;
+    value *= gFLOAT_0058a404;
+    pOrientation[1] = (tU16)(value - gFLOAT_0058a408);
+    value = quaternion.z;
+    if (value > gFLOAT_0058a3f8) {
+        value = gFLOAT_0058a3f8;
     }
-    if (component < gFLOAT_0058a3fc) {
-        component = gFLOAT_0058a3fc;
+    if (value < gFLOAT_0058a3fc) {
+        value = gFLOAT_0058a3fc;
     }
-    pPacked_quat[2] = (tU16)(((component - gFLOAT_0058a3fc) * gFLOAT_0058a404 * gFLOAT_0058a400) - gFLOAT_0058a408);
-
-    component = quaternion.w;
-    if (component > gFLOAT_0058a3f8) {
-        component = gFLOAT_0058a3f8;
+    value = (value - gFLOAT_0058a3fc) * gFLOAT_0058a400;
+    value *= gFLOAT_0058a404;
+    pOrientation[2] = (tU16)(value - gFLOAT_0058a408);
+    value = quaternion.w;
+    if (value > gFLOAT_0058a3f8) {
+        value = gFLOAT_0058a3f8;
     }
-    if (component < gFLOAT_0058a3fc) {
-        component = gFLOAT_0058a3fc;
+    if (value < gFLOAT_0058a3fc) {
+        value = gFLOAT_0058a3fc;
     }
-    pPacked_quat[3] = (tU16)(((component - gFLOAT_0058a3fc) * gFLOAT_0058a404 * gFLOAT_0058a400) - gFLOAT_0058a408);
+    value = (value - gFLOAT_0058a3fc) * gFLOAT_0058a400;
+    value *= gFLOAT_0058a404;
+    pOrientation[3] = (tU16)(value - gFLOAT_0058a408);
 }
 
 // C2PORT-NONMATCHING: best 23.19% | difftest PASS 2000 trials (spec difftest/specs/0049c000_UnpackMatrixQuaternion.json) | reason x87-scheduling

@@ -54,8 +54,9 @@ void C2VitaMapKeys(const C2VitaPad* pad,int racing,const int* bindings,int* keys
     /* the gearbox is automatic, so the d-pad up/down gear keys are free: power-ups instead */
     if (b&C2V_UP) action(keys,mark,bindings,61);   /* use selected power-up */
     if (b&C2V_DOWN) action(keys,mark,bindings,63); /* next power-up in the inventory */
-    if (pad->rx<-48) action(keys,mark,bindings,31);
-    if (pad->rx>48) action(keys,mark,bindings,32);
-    if (pad->ry<-48) action(keys,mark,bindings,33);
-    if (pad->ry>48) action(keys,mark,bindings,34);
+    /* right stick: left/right swings the camera round the car, up/down zooms in/out */
+    if (pad->rx<-48) action(keys,mark,bindings,33);
+    if (pad->rx>48) action(keys,mark,bindings,34);
+    if (pad->ry<-48) action(keys,mark,bindings,31);
+    if (pad->ry>48) action(keys,mark,bindings,32);
 }

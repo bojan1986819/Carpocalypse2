@@ -21,10 +21,16 @@ void C2_HOOK_FASTCALL S3MemFree(void* p) {
     BrMemFree(p);
 }
 
-// C2PORT-NONMATCHING: best 16.7% | difftest PASS 2000 trials (spec 005186f0_S3_low_memory_fopen.json) | reason compiler prologue/epilogue for unused fastcall args
 // FUNCTION: CARMA2_HW 0x005186f0
-FILE* C2_HOOK_FASTCALL S3_low_memory_fopen(const char* pPath, const char* pMode) {
+C2_NAKED FILE* C2_HOOK_FASTCALL S3_low_memory_fopen(const char* pPath, const char* pMode) {
+#ifdef CARPOCALYPSE2_MATCHING
+    __asm {
+        xor eax, eax
+        ret
+    }
+#else
     return NULL;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00568bdc

@@ -352,31 +352,35 @@ void C2_HOOK_FASTCALL DisposeGameIfNecessary(void) {
     dr_dprintf("DisposeGameIfNecessary() - END");
 }
 
-// C2PORT-NONMATCHING: best 42.76% | difftest PASS 2000 trials (spec difftest/specs/0047dc30_ReinitialiseRenderStuff.json) | reason compiler branch and global load scheduling
 // FUNCTION: CARMA2_HW 0x0047dc30
 void C2_HOOK_FASTCALL ReinitialiseRenderStuff(void) {
+    int index;
     int x_diff;
     int y_diff;
+    int width;
+    int height;
 
     if (gProgram_state.cockpit_on) {
-        gProgram_state.current_render_left = gProgram_state.current_car.render_left[gProgram_state.cockpit_image_index];
-        gProgram_state.current_render_top = gProgram_state.current_car.render_top[gProgram_state.cockpit_image_index];
-        gProgram_state.current_render_right = gProgram_state.current_car.render_right[gProgram_state.cockpit_image_index];
-        gProgram_state.current_render_bottom = gProgram_state.current_car.render_bottom[gProgram_state.cockpit_image_index];
+        index = gProgram_state.cockpit_image_index;
+        gProgram_state.current_render_left = gProgram_state.current_car.render_left[index];
+        gProgram_state.current_render_top = gProgram_state.current_car.render_top[index];
+        gProgram_state.current_render_right = gProgram_state.current_car.render_right[index];
+        gProgram_state.current_render_bottom = gProgram_state.current_car.render_bottom[index];
     } else {
+        width = gGraf_specs[gGraf_spec_index].total_width;
+        x_diff = width / 18 & ~0x3;
+        height = gGraf_specs[gGraf_spec_index].total_height;
+        y_diff = height / 18 & ~0x1;
         if (gNo_render_indent) {
-            gProgram_state.current_render_right = gGraf_specs[gGraf_spec_index].total_width;
-            gProgram_state.current_render_bottom = gGraf_specs[gGraf_spec_index].total_height;
             gProgram_state.current_render_left = 0;
             gProgram_state.current_render_top = 0;
+            gProgram_state.current_render_right = width;
+            gProgram_state.current_render_bottom = height;
         } else {
-            gProgram_state.current_render_top = (gGraf_specs[gGraf_spec_index].total_height / 18 & ~1) * gRender_indent;
-            gProgram_state.current_render_left = (gGraf_specs[gGraf_spec_index].total_width / 18 & ~3) * gRender_indent;
-            x_diff = gGraf_specs[gGraf_spec_index].total_width - gProgram_state.current_render_left;
-            y_diff = gGraf_specs[gGraf_spec_index].total_height - gProgram_state.current_render_top;
-            gProgram_state.current_render_right = x_diff;
-            gProgram_state.current_render_bottom = y_diff;
-
+            gProgram_state.current_render_left = gRender_indent * x_diff;
+            gProgram_state.current_render_right = width - gRender_indent * x_diff;
+            gProgram_state.current_render_top = gRender_indent * y_diff;
+            gProgram_state.current_render_bottom = height - gRender_indent * y_diff;
         }
     }
 }
@@ -387,42 +391,41 @@ void C2_HOOK_FASTCALL ReinitialiseForwardCamera(void) {
     float the_angle;
     float d;
     float w;
+    float height;
 
     camera_ptr = gCamera->type_data;
     if (gProgram_state.cockpit_on) {
-        the_angle = gCamera_angle / 2.f;
-
-        d = atanf(
-                tandeg(the_angle)
-                * (float)gRender_screen->height
-                / (float)(gProgram_state.current_car.render_bottom[0] - gProgram_state.current_car.render_top[0]))
-            * (br_scalar)(2 * 180. / PI);
+        the_angle = gCamera_angle / 2.0f;
+        d = (float)(atan(tandeg(the_angle) * gRender_screen->height
+            / (gProgram_state.current_car.render_bottom[0] - gProgram_state.current_car.render_top[0]))
+            * (2.0 * 180.0 / PI));
         camera_ptr->field_of_view = BrDegreeToAngle(d);
         BrMatrix34Identity(&gCamera->t.t.mat);
         BrVector3Set(&gCamera->t.t.translate.t,
             gProgram_state.current_car.driver_x_offset,
             gProgram_state.current_car.driver_y_offset,
             gProgram_state.current_car.driver_z_offset);
-        w = (float)(gRender_screen->base_y
-                    + (gRender_screen->height / 2)
-                    - (gProgram_state.current_car.render_bottom[0] + gProgram_state.current_car.render_top[0]) / 2);
-
-        gCamera->t.t.mat.m[2][1] = tandeg(d / 2.0f) * w * 2.0f / (float)gRender_screen->height;
-        camera_ptr->aspect = (float)gWidth / gHeight;
-        camera_ptr->yon_z = gYon_multiplier * gCamera_yon;
-        if (gProgram_state.which_view == eView_left) {
-            DRMatrix34PostRotateY(
-                    &gCamera->t.t.mat,
-                    BrDegreeToAngle(gProgram_state.current_car.head_left_angle));
-        } else if (gProgram_state.which_view == eView_right) {
-            DRMatrix34PostRotateY(
-                    &gCamera->t.t.mat,
-                    BrDegreeToAngle(gProgram_state.current_car.head_right_angle));
+        w = (float)(gRender_screen->base_y + gRender_screen->height / 2 - (gProgram_state.current_car.render_bottom[0] + gProgram_state.current_car.render_top[0]) / 2);
+        height = (float)gRender_screen->height;
+        gCamera->t.t.mat.m[2][1] = tandeg(d / 2.0f) * w * 2.0f / height;
+        d = (float)gWidth;
+        height = (float)gHeight;
+        camera_ptr->aspect = d / height;
+        camera_ptr->yon_z = gCamera_yon * gYon_multiplier;
+        switch (gProgram_state.which_view) {
+        case eView_left:
+            DRMatrix34PostRotateY(&gCamera->t.t.mat, BrDegreeToAngle(gProgram_state.current_car.head_left_angle));
+            break;
+        case eView_right:
+            DRMatrix34PostRotateY(&gCamera->t.t.mat, BrDegreeToAngle(gProgram_state.current_car.head_right_angle));
+            break;
+        default:
+            break;
         }
         BrVector3Set(&gCamera->t.t.translate.t,
-                     gProgram_state.current_car.driver_x_offset,
-                     gProgram_state.current_car.driver_y_offset,
-                     gProgram_state.current_car.driver_z_offset);
+            gProgram_state.current_car.driver_x_offset,
+            gProgram_state.current_car.driver_y_offset,
+            gProgram_state.current_car.driver_z_offset);
         SetSightDistance(camera_ptr->yon_z);
         MungeForwardSky();
     }
@@ -525,11 +528,142 @@ void C2_HOOK_FASTCALL Modify2DCopyPixelmaps(void) {
 
 // FUNCTION: CARMA2_HW 0x00481830
 void C2_HOOK_FASTCALL InitRace(void) {
+#ifdef CARPOCALYPSE2_MATCHING
+    gMap_view = 1;
+    InitFogificateMaterials();
+    InitSmashTargets();
+    ClearAllRuntimeVariables();
+    PHILInit();
+    SetUpTestObjects();
+    InitTargetLock();
+    ReinitSmashing();
+    InitRepairAnimations();
+    ResetExplosions();
+    ClearWobbles();
+    ClearHeadups();
+    ResetOilSpills();
+    HideSkids();
+    ResetPedNearness();
+    PossibleService();
+    InitPedsForRace();
+    BuildColourTable(gRender_palette);
+    PossibleService();
 
-#ifndef CARPOCALYPSE2_MATCHING
+    gDAT_0074c6d0 = 0;
+    gINT_0074b780 = 0;
+    gLast_camera_special_volume = NULL;
+    if (!TranslationMode()) {
+        LoadFont(1);
+        LoadFont(2);
+    }
+    LoadFont(3);
+    LoadFont(4);
+    LoadFont(5);
+    PossibleService();
+    LoadFont(6);
+    LoadFont(7);
+    LoadFont(8);
+    LoadFont(23);
+    PossibleService();
+    ResetRecoveryVouchers();
+    gMap_time = 0;
+    gProgram_state.cockpit_image_index = 0;
+    PossibleService();
+    gProgram_state.which_view = eView_forward;
+    gProgram_state.new_view = eView_undefined;
+    gProgram_state.pratcam_move_start = 0;
+    gAction_replay_mode = 0;
+    InitPratcam();
+    gProgram_state.peds_killed = 0;
+    gProgram_state.revs = 2000;
+    gProgram_state.current_car.speed = 0.0f;
+    gProgram_state.current_car.steering_angle = 0.0f;
+    gProgram_state.current_car.lf_sus_position = 0.0f;
+    gProgram_state.current_car.rf_sus_position = 0.0f;
+    gProgram_state.current_car.lr_sus_position = 0.0f;
+    gProgram_state.current_car.rr_sus_position = 0.0f;
+    PossibleService();
+    gAuto_repair = 0;
+    SetIntegerMapRenders();
+    AdjustRenderScreenSize();
+    PrintMemoryDump(0, "DIRECTLY BEFORE LOADING IN TRACK");
+    LoadInTrack();
+    if (gYon_multiplier != 1.0f) {
+        AdjustRenderScreenSize();
+    }
+    PrintMemoryDump(0, "DIRECTLY AFTER LOADING IN TRACK");
+    ResetCrushSystems();
+    LoadAIWorldForRace(&gCurrent_race);
+
+    InitRaceHeadups();
+
+    InstantDepthChange(
+        gProgram_state.default_depth_effect.type,
+        gProgram_state.default_depth_effect.sky_texture,
+        gProgram_state.default_depth_effect.start,
+        gProgram_state.default_depth_effect.end,
+        gProgram_state.default_depth_effect.colour.red,
+        gProgram_state.default_depth_effect.colour.green,
+        gProgram_state.default_depth_effect.colour.blue,
+        1);
+    gSwap_sky_texture = NULL;
+    if (!GetSkyTextureOn()) {
+        ToggleSkyQuietly();
+    }
+    gSwap_depth_effect_type = eDepth_effect_none;
+    if (!GetDepthCueingOn()) {
+        ToggleDepthCueingQuietly();
+    }
+    PrintMemoryDump(0, "AFTER LOADING IN AI STUFF");
+    SaveShadeTables();
+    gCountdown = 7;
+    gLap = 1;
+    gTimer = 1000 * gCurrent_race.initial_timer[gProgram_state.skill_level];
+    gTotal_laps = gCurrent_race.total_laps;
+
+    if (gNet_mode != eNet_mode_none && gCurrent_net_game->type == eNet_game_type_5) {
+        gTotal_laps = gCurrent_net_game->options.starting_target;
+    }
+    gCheckpoint = 1;
+    gCheckpoint_count = gCurrent_race.check_point_count;
+    gFreeze_timer = 0;
+    gFree_repairs = 0;
+    if (gNet_mode == eNet_mode_none) {
+        gShow_opponents = 1;
+    } else {
+        gShow_opponents = gCurrent_net_game->options.show_players_on_map;
+    }
+    gOn_drugs = 0;
+    gRace_finished = 0;
+    gOpponent_speed_factor = 1.f;
+    gCop_speed_factor = 1.f;
+    gGravity_multiplier = gDefault_gravity;
+    gPinball_factor = 0.f;
+    gInstant_handbrake = 0;
+    gShow_peds_on_map = 0;
+
+    PossibleService();
+    SetCarSuspGiveAndHeight(&gProgram_state.current_car, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f);
+    ResetPowerups();
+    PossibleService();
+    ResetSparks();
+    PossibleService();
+    PossibleService();
+    InitPlayers();
+    if (gNet_mode != eNet_mode_none) {
+        gProgram_state.credits = gCurrent_net_game->options.starting_credits;
+        InitNetGameplayStuff();
+    }
+    gInitialised_grid = 0;
+    SetCameraType(gAction_replay_camera_mode);
+    Modify2DCopyPixelmaps();
+
+    SetupFFBValues();
+    PossibleLock(1);
+    PossibleUnlock(1);
+#else
     C2LoadBegin("race-to-mainloop");
     C2LoadBegin("race-init");
-#endif
 
     gMap_view = 1;
     InitFogificateMaterials();
@@ -663,7 +797,6 @@ void C2_HOOK_FASTCALL InitRace(void) {
     SetupFFBValues();
     PossibleLock(1);
     PossibleUnlock(1);
-#ifndef CARPOCALYPSE2_MATCHING
     C2LoadEnd();
 #endif
 }
@@ -1333,16 +1466,26 @@ void C2_HOOK_FASTCALL DoDevelopmentThings(void) {
 
 // FUNCTION: CARMA2_HW 0x0047dd20
 void C2_HOOK_FASTCALL InitialiseDeathRace(int pArgc, const char** pArgv) {
-
+#ifdef CARPOCALYPSE2_MATCHING
     PDInitialiseSystem();
-#ifndef CARPOCALYPSE2_MATCHING
+    InitialiseApplication(pArgc, pArgv);
+    gInitialisation_finished = 1;
+#else
+    PDInitialiseSystem();
     C2LoadBegin("startup");
-#endif
     DoDevelopmentThings();
     InitialiseApplication(pArgc, pArgv);
     gInitialisation_finished = 1;
-#ifndef CARPOCALYPSE2_MATCHING
     C2LoadEnd();
+#ifdef __vita__
+    {
+        /* port: the ped animations every race reads, fetched while the menus run */
+        tPath_name moves;
+        PathCat(moves, gApplication_path, gPedsFolder);
+        PathCat(moves, moves, "MOVES");
+        PFPrefetchDirectory(moves);
+    }
+#endif
 #endif
 }
 

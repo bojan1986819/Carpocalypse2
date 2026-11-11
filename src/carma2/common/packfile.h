@@ -20,6 +20,16 @@ extern int C2_HOOK_FASTCALL PFfclose(FILE* pFile);
 #endif
 
 extern FILE* C2_HOOK_FASTCALL PFfopen(const char* pPath, const char* mode);
+#ifndef CARPOCALYPSE2_MATCHING
+/* port: while set, PFfopen reads a loose (unpacked) file opened for reading into memory and serves
+ * it like a pack entry; only for readers that use the PF functions alone */
+extern int gPF_loose_into_memory;
+int PFIsInMountedPack(const char* pPath);
+#ifdef __vita__
+/* reads every file of pDir into the session cache of gPF_loose_into_memory files, in the background */
+void PFPrefetchDirectory(const char* pDir);
+#endif
+#endif
 
 extern int C2_HOOK_FASTCALL PFfgetc(FILE* pFile);
 

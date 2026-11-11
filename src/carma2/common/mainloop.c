@@ -380,6 +380,365 @@ place:
         car->car_master_actor->t.t.translate.t.v[1], car->car_master_actor->t.t.translate.t.v[2]);
 }
 
+int C2TestTourStop = -1; /* the last stop made (vita_video.c shoots after each) */
+
+/* Test harness: C2_TEST_TURN=<degrees>[,<seconds>] turns the player car on the spot about the
+ * vertical axis, once, that long (default 1 s) after the countdown (a C2_TEST_TOUR stop for shots). */
+static void TestTurn(void) {
+    static tU32 go_time;
+    static int done;
+    const char* e = getenv("C2_TEST_TURN");
+    tCar_spec* car = &gProgram_state.current_car;
+    br_matrix34 m, turn;
+    float degrees = 0.f, seconds = 1.f;
+    int n;
+
+    if (e == NULL || done) {
+        return;
+    }
+    if (gCountdown != 0 || go_time == 0) {
+        go_time = gCountdown == 0 ? PDGetTotalTime() : 0;
+        return;
+    }
+    sscanf(e, "%f,%f", &degrees, &seconds);
+    if (PDGetTotalTime() - go_time < (tU32)(seconds * 1000.f)) {
+        return;
+    }
+    done = 1;
+    BrMatrix34RotateY(&turn, BrDegreeToAngle(degrees));
+    BrMatrix34Mul(&m, &turn, &car->car_master_actor->t.t.mat);
+    for (n = 0; n < (int)CARPOCALYPSE2_ASIZE(car->last_safe_positions); n++) {
+        BrMatrix34Copy(&car->last_safe_positions[n], &m);
+    }
+    FlipUpCar(car);
+    C2TestTourStop++;
+    dr_dprintf("TEST TURN %.1f degrees at %.1f,%.1f,%.1f", degrees, m.m[3][0], m.m[3][1], m.m[3][2]);
+}
+
+/* port diagnostics (playtest 00.68: two wrecked opponents half in the ground, not reproduced): every
+ * 2 s a wrecked opponent whose origin is more than 0.3 m below the track under it is logged with its
+ * physics state, once per car until it comes back up. */
+static void LogSunkWrecks(void) {
+    extern br_scalar C2_HOOK_FASTCALL FindYVerticallyBelow(br_vector3* pPosition);
+    static tU32 next_check;
+    static unsigned char reported[30];
+    int i;
+
+    if (gCountdown != 0 || PDGetTotalTime() < next_check) {
+        return;
+    }
+    next_check = PDGetTotalTime() + 2000;
+    for (i = 0; i < gProgram_state.AI_vehicles.number_of_opponents && i < (int)CARPOCALYPSE2_ASIZE(reported); i++) {
+        tOpponent_spec* opponent = &gProgram_state.AI_vehicles.opponents[i];
+        tCar_spec* car = opponent->car_spec;
+        br_vector3 probe;
+        br_scalar ground, y;
+        if (car == NULL || !car->knackered || car->car_master_actor == NULL) {
+            continue;
+        }
+        y = car->car_master_actor->t.t.translate.t.v[1];
+        BrVector3Copy(&probe, &car->car_master_actor->t.t.translate.t);
+        probe.v[1] += 1.f;
+        ground = FindYVerticallyBelow(&probe);
+        if (ground > y + .3f && ground < y + 1.f) {
+            if (!reported[i]) {
+                reported[i] = 1;
+                dr_dprintf("SUNK WRECK opponent %d '%s' y=%.2f ground=%.2f physics=%d objective=%d speed=%.2f v=(%.2f,%.2f,%.2f) up=%.2f",
+                    i, car->driver_name, y, ground, opponent->physics_me, opponent->current_objective, car->speed,
+                    car->collision_info->v.v[0], car->collision_info->v.v[1], car->collision_info->v.v[2],
+                    car->car_master_actor->t.t.mat.m[1][1]);
+#ifdef __vita__
+                {
+                    extern void C2VitaLog(const char* format, ...);
+                    C2VitaLog("SUNK WRECK opponent %d y=%.2f ground=%.2f physics=%d objective=%d up=%.2f\n", i, y, ground,
+                        opponent->physics_me, opponent->current_objective, car->car_master_actor->t.t.mat.m[1][1]);
+                }
+#endif
+            }
+        } else {
+            reported[i] = 0;
+        }
+    }
+}
+
+/* Test harness: C2_TEST_RACES=<n>,<s> abandons each race <s> seconds after its countdown and starts it
+ * again from the main menu, <n> races in all (memory left behind by each race). */
+int gC2_test_keys_suspended; /* read by the C2_TEST_KEYS injection (sdl3_input.c) */
+static void TestRaces(void) {
+    static tU32 go_time;
+    static int abandoned;
+    const char* e = getenv("C2_TEST_RACES");
+    const char* comma;
+
+    if (e == NULL || (comma = strchr(e, ',')) == NULL) {
+        return;
+    }
+    if (gCountdown != 0) {
+        go_time = 0;
+        abandoned = 0;
+        gC2_test_keys_suspended = 0;
+        return;
+    }
+    if (go_time == 0) {
+        go_time = PDGetTotalTime();
+        return;
+    }
+    if (!abandoned && PDGetTotalTime() - go_time >= (tU32)(atof(comma + 1) * 1000.f)) {
+        abandoned = 1;
+        /* held test keys would keep the end of the race in WaitForNoKeys */
+        gC2_test_keys_suspended = 1;
+        dr_dprintf("TEST RACES abandoning the race");
+        AbortRace();
+    }
+}
+
+/* Test harness: C2_TEST_WRECK=<s> wrecks every opponent <s> seconds after the countdown; with
+ * C2_TEST_SINKCHECK every car's height above the track straight below it is logged each 2 s
+ * (playtest: wrecks half sunk into the ground). */
+static void TestWreck(void) {
+    extern br_scalar C2_HOOK_FASTCALL FindYVerticallyBelow(br_vector3* pPosition);
+    static tU32 go_time, next_check;
+    static int wrecked;
+    const char* e = getenv("C2_TEST_WRECK");
+    int i, n;
+
+    if ((e == NULL && getenv("C2_TEST_SINKCHECK") == NULL) || gCountdown != 0) {
+        return;
+    }
+    if (go_time == 0) {
+        go_time = PDGetTotalTime();
+        return;
+    }
+    if (e != NULL && !wrecked && PDGetTotalTime() - go_time >= (tU32)(atof(e) * 1000.f)) {
+        wrecked = 1;
+        n = GetCarCount(eVehicle_opponent);
+        for (i = 0; i < n; i++) {
+            tCar_spec* car = GetCarSpec(eVehicle_opponent, i);
+            int u;
+            for (u = 0; u < (int)CARPOCALYPSE2_ASIZE(car->damage_units); u++) {
+                car->damage_units[u].damage_level = 99;
+            }
+            KnackerThisCar(car);
+        }
+        dr_dprintf("TEST WRECK %d opponents", n);
+    }
+    if (getenv("C2_TEST_SINKCHECK") != NULL && PDGetTotalTime() >= next_check) {
+        next_check = PDGetTotalTime() + 2000;
+        n = GetCarCount(eVehicle_opponent);
+        for (i = -1; i < n; i++) {
+            tCar_spec* car = i < 0 ? &gProgram_state.current_car : GetCarSpec(eVehicle_opponent, i);
+            br_vector3 above;
+            br_scalar ground;
+            if (car == NULL || car->car_master_actor == NULL) {
+                continue;
+            }
+            BrVector3Copy(&above, &car->car_master_actor->t.t.translate.t);
+            above.v[1] += 2.f;
+            ground = FindYVerticallyBelow(&above);
+            dr_dprintf("TEST SINK car %d knackered=%d y=%.2f ground=%.2f above_ground=%.2f",
+                i, car->knackered, car->car_master_actor->t.t.translate.t.v[1], ground,
+                car->car_master_actor->t.t.translate.t.v[1] - ground);
+        }
+    }
+}
+
+/* Test harness: C2_TEST_POWERUPS=<first>,<last>[,<ms>] gives the player powerups first..last one
+ * second after the countdown, then cycles the inventory (the '[' key) every <ms> (default 700),
+ * logging the selection and checking the repulse ray actors that the cycling once overwrote. */
+static void TestPowerups(void) {
+    extern int gNumber_of_powerups;
+    static tU32 go_time, next_cycle;
+    static int given, cycles;
+    const char* e = getenv("C2_TEST_POWERUPS");
+    int first = 0, last = -1, period = 700, i;
+
+    if (e == NULL || gCountdown != 0) {
+        return;
+    }
+    if (go_time == 0) {
+        go_time = PDGetTotalTime();
+        return;
+    }
+    sscanf(e, "%d,%d,%d", &first, &last, &period);
+    if (!given) {
+        if (PDGetTotalTime() - go_time < 1000) {
+            return;
+        }
+        given = 1;
+        for (i = first; i <= last && i < gNumber_of_powerups; i++) {
+            GotPowerup(&gProgram_state.current_car, i);
+        }
+        next_cycle = PDGetTotalTime() + period;
+        dr_dprintf("TEST POWERUPS gave %d..%d selected=%d", first, last, gInventory_selected);
+        return;
+    }
+    if (PDGetTotalTime() < next_cycle) {
+        return;
+    }
+    next_cycle = PDGetTotalTime() + period;
+    LeftInventory();
+    cycles++;
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gRepulse_links); i++) {
+        if (gRepulse_links[i].actor == NULL) {
+            dr_dprintf("TEST POWERUPS cycle %d: repulse link %d lost its actor", cycles, i);
+        }
+    }
+    if (cycles % 10 == 1) {
+        dr_dprintf("TEST POWERUPS cycle %d selected=%d powerup=%d", cycles, gInventory_selected,
+            gInventory_selected >= 0 ? gInventory[gInventory_selected] : -1);
+    }
+}
+
+/* Test harness: C2_TEST_TOUR=<s> moves the player car every <s> seconds of the race to another
+ * opponent path section (spread over the map by a prime stride), on its first node, facing along it,
+ * so that one test race sees most of the track with the world running normally. */
+static void TestTour(void) {
+    static tU32 next_time;
+    static int stop;
+    const char* e = getenv("C2_TEST_TOUR");
+    tCar_spec* car = &gProgram_state.current_car;
+    tPath_section* section;
+    br_vector3 p0, p1, d;
+    br_matrix34 m;
+    float l;
+    int n, count = gProgram_state.AI_vehicles.number_of_path_sections;
+
+    if (e == NULL || gCountdown != 0 || count <= 0) {
+        next_time = 0;
+        return;
+    }
+    if (next_time == 0) {
+        next_time = PDGetTotalTime() + (tU32)(atof(e) * 1000.f);
+        return;
+    }
+    if (PDGetTotalTime() < next_time) {
+        return;
+    }
+    next_time = PDGetTotalTime() + (tU32)(atof(e) * 1000.f);
+    if (stop == 0 && getenv("C2_TEST_TOURFIRST") != NULL) {
+        stop = atoi(getenv("C2_TEST_TOURFIRST")); /* start the tour at that stop (profile one place) */
+    }
+    section = &gProgram_state.AI_vehicles.path_sections[(stop * 37) % count];
+    BrVector3Copy(&p0, &gProgram_state.AI_vehicles.path_nodes[section->node_indices[0]].pos);
+    BrVector3Copy(&p1, &gProgram_state.AI_vehicles.path_nodes[section->node_indices[1]].pos);
+    BrVector3Sub(&d, &p0, &p1);
+    l = sqrtf(d.v[0] * d.v[0] + d.v[2] * d.v[2]);
+    if (l < 1e-3f) {
+        d.v[0] = 0.f;
+        d.v[2] = 1.f;
+        l = 1.f;
+    }
+    BrMatrix34Identity(&m);
+    m.m[2][0] = d.v[0] / l; m.m[2][1] = 0.f; m.m[2][2] = d.v[2] / l;
+    m.m[0][0] = d.v[2] / l; m.m[0][1] = 0.f; m.m[0][2] = -d.v[0] / l;
+    m.m[3][0] = p0.v[0];
+    m.m[3][1] = p0.v[1] + .3f;
+    m.m[3][2] = p0.v[2];
+    for (n = 0; n < (int)CARPOCALYPSE2_ASIZE(car->last_safe_positions); n++) {
+        BrMatrix34Copy(&car->last_safe_positions[n], &m);
+    }
+    FlipUpCar(car);
+    TotallyRepairCar(); /* the tour must not end the race: no wrecks, no time-outs */
+    if (getenv("C2_TEST_TOURSTAY") != NULL) {
+        next_time = 0xffffffffu; /* stay at this first stop (profile one place) */
+    }
+    if (gTimer < 120000) {
+        gTimer = 120000;
+    }
+#ifdef __vita__
+    {
+        extern void C2VitaLog(const char* format, ...);
+        C2VitaLog("TEST TOUR stop=%d section=%d pos=%.1f,%.1f,%.1f\n", stop, (stop * 37) % count, p0.v[0], p0.v[1], p0.v[2]);
+    }
+#endif
+    dr_dprintf("TEST TOUR stop=%d section=%d pos=%.1f,%.1f,%.1f", stop, (stop * 37) % count, p0.v[0], p0.v[1], p0.v[2]);
+    C2TestTourStop = stop++;
+}
+
+/* Test harness: C2_TEST_RAM=<s> puts the player car every <s> seconds of the race 7 units behind the
+ * next opponent still running, with that opponent's heading (hold accelerate with C2_TEST_KEYS to ram
+ * it); with the CAR WASTED log this shows how rammed opponents end up wasted. */
+static void TestRam(void) {
+    static tU32 next_time;
+    static int next_opponent;
+    static tCar_spec* prev_target;
+    static tU32 placed_time;
+    static int killed_one;
+    static tU32 kill_time;
+    const char* e = getenv("C2_TEST_RAM");
+    tCar_spec* car = &gProgram_state.current_car;
+    tCar_spec* target = NULL;
+    br_matrix34 m;
+    int i, n, count = GetCarCount(eVehicle_opponent);
+
+    if (e == NULL || gCountdown != 0 || count <= 0) {
+        next_time = 0;
+        return;
+    }
+    if (next_time == 0) {
+        next_time = PDGetTotalTime() + 3000;
+        if (getenv("C2_TEST_KILLONE") != NULL) {
+            kill_time = PDGetTotalTime() + (tU32)(atof(getenv("C2_TEST_KILLONE")) * 1000.f);
+        }
+        return;
+    }
+    if (PDGetTotalTime() < next_time) {
+        return;
+    }
+    next_time = PDGetTotalTime() + (tU32)(atof(e) * 1000.f);
+    if (getenv("C2_TEST_KILLONE") != NULL && !killed_one && PDGetTotalTime() >= kill_time) {
+        /* C2_TEST_KILLONE=<s>: <s> seconds into the rams one opponent is wasted the way a hard hit
+         * wastes it (DoDamage on the engine), the playtest 00.73 cars-pass-through trigger */
+        for (i = 0; i < count; i++) {
+            tCar_spec* victim = GetCarSpec(eVehicle_opponent, i);
+            if (victim != NULL && !victim->knackered) {
+                victim->last_hit_by = car;
+                victim->time_last_hit = PDGetTotalTime();
+                DoDamage(victim, eDamage_engine, 99);
+                dr_dprintf("TEST KILLONE '%s' knackered=%d", victim->driver_name, victim->knackered);
+                break;
+            }
+        }
+        killed_one = 1;
+    }
+    if (prev_target != NULL) {
+        /* did the last ram reach it? (playtest 00.73: cars drove through each other after a while) */
+        br_vector3 d;
+        BrVector3Sub(&d, &car->car_master_actor->t.t.translate.t, &prev_target->car_master_actor->t.t.translate.t);
+        dr_dprintf("TEST RAM RESULT '%s' hit=%d dist=%.2f knackered=%d", prev_target->driver_name,
+            prev_target->last_hit_by == car && (int)(prev_target->time_last_hit - placed_time) >= 0,
+            BrVector3Length(&d), prev_target->knackered);
+        prev_target = NULL;
+    }
+    for (i = 0; i < count && target == NULL; i++) {
+        tCar_spec* candidate = GetCarSpec(eVehicle_opponent, (next_opponent + i) % count);
+        if (candidate != NULL && !candidate->knackered && candidate->car_master_actor != NULL) {
+            target = candidate;
+            next_opponent = (next_opponent + i + 1) % count;
+        }
+    }
+    if (target == NULL) {
+        return;
+    }
+    BrMatrix34Copy(&m, &target->car_master_actor->t.t.mat);
+    m.m[3][0] += 7.f * m.m[2][0];
+    m.m[3][1] += .5f;
+    m.m[3][2] += 7.f * m.m[2][2];
+    for (n = 0; n < (int)CARPOCALYPSE2_ASIZE(car->last_safe_positions); n++) {
+        BrMatrix34Copy(&car->last_safe_positions[n], &m);
+    }
+    FlipUpCar(car);
+    TotallyRepairCar();
+    prev_target = target;
+    placed_time = PDGetTotalTime();
+    if (gTimer < 120000) {
+        gTimer = 120000;
+    }
+    dr_dprintf("TEST RAM '%s' engine=%d trans=%d driver=%d at %.1f,%.1f,%.1f", target->driver_name,
+        target->damage_units[eDamage_engine].damage_level, target->damage_units[eDamage_transmission].damage_level,
+        target->damage_units[eDamage_driver].damage_level, m.m[3][0], m.m[3][1], m.m[3][2]);
+}
+
 /* First twelve seconds only, for countdown/start-grid investigations. */
 static void LogRaceStart(void) {
     static tU32 previous_start, previous_sample;
@@ -441,6 +800,13 @@ void C2_HOOK_FASTCALL MungeAIWorld(tU32 pFrame_period) {
 #ifndef CARPOCALYPSE2_MATCHING
     LogRaceStart();
     TestPlaceAtSmashTarget();
+    TestTour();
+    TestRam();
+    TestTurn();
+    TestPowerups();
+    TestWreck();
+    TestRaces();
+    LogSunkWrecks();
     {
         /* heap-corruption tripwire (drmem.c), about once a second of game time */
         extern void C2_HOOK_FASTCALL C2CheckRegistriesAt(const char* pTitle);
@@ -569,14 +935,16 @@ void C2_HOOK_FASTCALL CalculateFrameRate(void) {
 // FUNCTION: CARMA2_HW 0x00492840
 void C2_HOOK_FASTCALL FUN_00492840(void* pMemory, br_size_t pSize) {
 #ifdef CARPOCALYPSE2_MATCHING
+    extern br_size_t gWin32_page_size;
+    extern SYSTEM_INFO gSystem_info;
     br_size_t offset;
 
-    if (gPage_size == 0) {
+    if (gWin32_page_size == 0) {
         GetSystemInfo(&gSystem_info);
-        gPage_size = gSystem_info.dwOemId;
+        gWin32_page_size = gSystem_info.dwOemId;
     }
-    for (offset = gPage_size << 4; offset < pSize; offset += gPage_size) {
-        *((volatile br_uint_8*)pMemory + (offset - 16 * gPage_size)) = *((volatile br_uint_8*)pMemory + (offset - 16 * gPage_size));
+    for (offset = gWin32_page_size << 4; offset < pSize; offset += gWin32_page_size) {
+        *((volatile br_uint_8*)pMemory + (offset - 16 * gWin32_page_size)) = *((volatile br_uint_8*)pMemory + (offset - 16 * gWin32_page_size));
         *((volatile br_uint_8*)pMemory + offset) = *((volatile br_uint_8*)pMemory + offset);
     }
 #else
@@ -660,6 +1028,9 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
         C2VitaPerfReset();
 #endif
         CyclePollKeys();
+#ifdef __vita__
+        C2VitaPhaseMark(C2VP_O_PRE);
+#endif
         InitSmashQueue();
         CheckSystemKeys(1);
         InitialiseExtraRenders();
@@ -693,7 +1064,12 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
         }
         gWindow_inactive = window_inactive;
 
+#if defined(__vita__) && !defined(CARPOCALYPSE2_MATCHING)
+        /* remote benchmark (C2_TEST_FREEZE=<s>): from then on the world stands still, only rendering runs */
+        if (!gAction_replay_mode && !C2VitaTestFrozen(gLast_tick_count - gRace_start)) {
+#else
         if (!gAction_replay_mode) {
+#endif
 #ifdef __vita__
             C2VitaPerfBegin(C2VP_AI);
 #endif
@@ -704,6 +1080,10 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
             PollCarControls(gFrame_period);
         }
 
+#if defined(__vita__) && !defined(CARPOCALYPSE2_MATCHING)
+        if (C2VitaTestFrozen(gLast_tick_count - gRace_start)) {
+        } else
+#endif
         if (!gAction_replay_mode) {
             CheckActiveCarList();
 
@@ -729,6 +1109,9 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
 #endif
             Timers_Pop(TIMER_PHS);
 
+#ifdef __vita__
+            C2VitaPhaseMark(C2VP_O_CARGFX);
+#endif
             MungeSomeOtherCarGraphics();
             PipeCarPositions();
 
@@ -736,12 +1119,18 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
             CrushBendFlapRend();
             Timers_Pop(TIMER_CRS);
 
+#ifdef __vita__
+            C2VitaPhaseMark(C2VP_O_NET);
+#endif
             DoNetGameManagement();
             CheckRecoveryOfCars(gFrame_period + gLast_tick_count - gRace_start);
             NetSendMessageStacks();
         } else {
             DoActionReplay(gFrame_period);
         }
+#ifdef __vita__
+        C2VitaPhaseMark(C2VP_O_CAMERA);
+#endif
         PollCameraControls(gCamera_period);
         MungeEngineNoise();
         CalculateCameraStuff(gCamera_period);
@@ -754,6 +1143,9 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
             MungeEnvironmentalSound();
         }
         ChangingView();
+#ifdef __vita__
+        C2VitaPhaseMark(C2VP_O_CARMUNGE);
+#endif
         MungeCarGraphics(gFrame_period);
         FunkThoseTronics();
         GrooveThoseDelics();
@@ -772,6 +1164,9 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
             static tU32 last_rattle_time;
 
             ClearHeadupSlot(3);
+#ifdef __vita__
+            C2VitaPhaseMark(C2VP_O_HEADUPS);
+#endif
             MungeJoystickHeadups();
             net_credits = gProgram_state.credits;
             if (fabsf((float)gProgram_state.credits - (float)gLast_credit_headup__mainloop) / (float)gFrame_rate > 1.2f) {
@@ -987,6 +1382,9 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
             ProcessOilSpills(gFrame_period);
             MungeSmashEdgeTriggers(GetTotalTime());
         }
+#ifdef __vita__
+        C2VitaPhaseMark(C2VP_O_EFFECTS);
+#endif
         MungeDelayedSideEffects();
         MungeShrapnel(gFrame_period);
         if (!gAction_replay_mode) {
@@ -995,12 +1393,21 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
         ChangeDepthEffect();
         ServiceGameInRace();
         EnterUserMessage();
+#ifdef __vita__
+        C2VitaPhaseMark(C2VP_O_SKIDS);
+#endif
         SkidsPerFrame();
         FlushSmashQueue(0);
+#ifdef __vita__
+        C2VitaPhaseMark(C2VP_O_GLASS);
+#endif
         MungeGlassFragments();
         AnimateSky();
         MungeExplosions();
         LastChanceForPedEffects();
+#ifdef __vita__
+        C2VitaPhaseMark(C2VP_O_LOD);
+#endif
         DoLODCarModels();
         MungeLightingEffects();
 
@@ -1017,6 +1424,7 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
             RenderAFrame(1);
 #ifdef __vita__
             C2VitaPerfEnd(C2VP_RENDER);
+            C2VitaPhaseMark(255);
 #endif
             Timers_Force(TIMER_OQQ);
         }
@@ -1093,6 +1501,12 @@ tRace_result C2_HOOK_FASTCALL MainGameLoop(void) {
         gProgram_state.credits = gCredits_post_race + gTotal_bonus_post_race;
     }
     PHILDisable();
+#ifndef CARPOCALYPSE2_MATCHING
+    {
+        extern void C2PortCameraRaceEnd(void);
+        C2PortCameraRaceEnd();
+    }
+#endif
     PrintMemoryDump(0, "JUST EXITED MAINLOOP");
     FadePaletteDown();
     ClearEntireScreen();
@@ -1172,6 +1586,12 @@ tRace_result C2_HOOK_FASTCALL DoRace(void) {
         StartMusicTrack(9997);
     }
     gRace_start = PDGetTotalTime();
+#ifndef CARPOCALYPSE2_MATCHING
+    {
+        extern void C2_HOOK_FASTCALL C2ForgetDamageEvents(void);
+        C2ForgetDamageEvents();
+    }
+#endif
     result = MainGameLoop();
     return result;
 }
@@ -1182,21 +1602,28 @@ void C2_HOOK_FASTCALL UpdateFramePeriod(tU32* pCamera_period) {
     tU32 new_camera_tick_count;
     int error;
 
-    if (gAction_replay_mode) {
+    if (gPed_676914) {
         tU32 last_tick_count;
+        tU32 camera_period;
 
         last_tick_count = gLast_tick_count;
-        gLast_tick_count = gLast_replay_frame_time;
         gFrame_period = abs((int)(gLast_replay_frame_time - last_tick_count));
+        gLast_tick_count = gLast_replay_frame_time;
         new_camera_tick_count = PDGetTotalTime();
         new_tick_count = GetTotalTime();
-        *pCamera_period = (gOld_camera_time != 0) ? (new_camera_tick_count - gOld_camera_time) : 0;
+        if (gOld_camera_time != 0) {
+            camera_period = new_camera_tick_count - gOld_camera_time;
+        } else {
+            camera_period = 0;
+        }
+        *pCamera_period = camera_period;
         gOld_camera_time = new_camera_tick_count;
         if (gFrame_period != 0) {
             *pCamera_period = gFrame_period;
         }
     } else {
         int new_period;
+
         new_tick_count = PDGetTotalTime();
         gLast_tick_count += gFrame_period;
         error = new_tick_count - gLast_tick_count;
@@ -1206,10 +1633,12 @@ void C2_HOOK_FASTCALL UpdateFramePeriod(tU32* pCamera_period) {
             gLast_tick_count = new_tick_count;
             if (gNet_mode != eNet_mode_none) {
                 switch (gNet_mode) {
-                case eNet_mode_host:
-                    break;
                 case eNet_mode_client:
                     gProgram_state.current_car.collision_info->field_0x49c = 0;
+                    break;
+                case eNet_mode_host:
+                    break;
+                default:
                     break;
                 }
             }
@@ -1236,7 +1665,7 @@ void C2_HOOK_FASTCALL UpdateFramePeriod(tU32* pCamera_period) {
     }
     if (*pCamera_period < 10) {
         *pCamera_period = 10;
-    } else if (*pCamera_period > 1000 && 0) {
+    } else if (*pCamera_period > 1000) {
         *pCamera_period = 1000;
     }
 }

@@ -79,6 +79,10 @@ typedef struct br_device_pixelmap {
             void *lockedPixels;
             GLuint overlayTexture;
             int possiblyDirty;
+            /* port: where CPU 2D writes may have landed since the last flush (root pixels, x1/y1
+             * exclusive), known when they came through sub-pixelmaps or copies (backbuf.c) */
+            int dirtyAll;
+            int dirtyX0, dirtyY0, dirtyX1, dirtyY1;
             int locked;
 
         } asBack;

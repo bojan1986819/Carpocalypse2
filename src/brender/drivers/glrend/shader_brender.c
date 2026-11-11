@@ -49,7 +49,7 @@ static void VIDEOI_GetShaderVariables(HVIDEO hVideo) {
 #include <string.h>
 extern void C2VitaLog(const char* format, ...);
 extern void C2VitaGLSetBrenderVariants(GLuint main_program, GLuint (*get)(unsigned key));
-enum { VITA_VARIANT_KEYS = 128 };
+enum { VITA_VARIANT_KEYS = 256 };
 static GLuint vita_variant_program[VITA_VARIANT_KEYS];
 static unsigned char vita_variant_state[VITA_VARIANT_KEYS]; /* 0 untried, 1 ok, 2 failed */
 static HVIDEO vita_variant_video;
@@ -95,8 +95,8 @@ static GLuint VitaBrenderVariant(unsigned key) {
 
     snprintf(defines, sizeof(defines),
         "#define C2_CLIP %d\n#define C2_ENV %d\n#define C2_TEX %d\n#define C2_KEY %d\n"
-        "#define C2_ALPHA %d\n#define C2_FOG %d\n#define C2_MOD %d\n",
-        !!(key & 1), !!(key & 2), !!(key & 4), !!(key & 8), !!(key & 16), !!(key & 32), !!(key & 64));
+        "#define C2_ALPHA %d\n#define C2_FOG %d\n#define C2_MOD %d\n#define C2_CUTOUT %d\n",
+        !!(key & 1), !!(key & 2), !!(key & 4), !!(key & 8), !!(key & 16), !!(key & 32), !!(key & 64), !!(key & 128));
     vert = VitaCompileVariantShader(GL_VERTEX_SHADER, defines, VITA_BRENDER_VARIANT_VERT);
     if (!vert) return 0;
     frag = VitaCompileVariantShader(GL_FRAGMENT_SHADER, defines, VITA_BRENDER_VARIANT_FRAG);

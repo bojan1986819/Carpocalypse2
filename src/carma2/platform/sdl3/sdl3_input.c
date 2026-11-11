@@ -53,11 +53,12 @@ static void parse_test_keys(void) {
     }
 }
 static const bool* apply_test_keys(const bool* real, int num_keys) {
+    extern int gC2_test_keys_suspended;
     static bool merged[SDL_SCANCODE_COUNT];
     Uint64 now;
     int i;
     if (test_key_count < 0) parse_test_keys();
-    if (test_key_count == 0 || num_keys > SDL_SCANCODE_COUNT) return real;
+    if (test_key_count == 0 || num_keys > SDL_SCANCODE_COUNT || gC2_test_keys_suspended) return real;
     SDL_memcpy(merged, real, (size_t)num_keys * sizeof(bool));
     now = SDL_GetTicks() - test_key_origin;
     for (i = 0; i < test_key_count; ++i)

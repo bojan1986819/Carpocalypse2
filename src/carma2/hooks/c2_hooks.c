@@ -37,7 +37,12 @@ void carpocalypse2_not_implemented(const char *function, const char *file, int l
         nseen++;
     }
     seq++;
+#ifdef __vita__
+    /* an append is a synchronous memory-card write (tens of ms), here in the middle of a race */
+    f = NULL;
+#else
     f = fopen("porttest_notimpl.log", "a");
+#endif
     if (f != NULL) {
         fprintf(f, "NOT_IMPLEMENTED #%d: %s (%s:%d)\n", seq, function, file, line);
         fclose(f);

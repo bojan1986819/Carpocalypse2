@@ -447,6 +447,39 @@ void C2_HOOK_FASTCALL KillSplashScreen(void) {
 
 // FUNCTION: CARMA2_HW 0x0047b990
 void C2_HOOK_FASTCALL SplashScreenWith(const char* pPixmap_name) {
+#ifdef CARPOCALYPSE2_MATCHING
+    br_pixelmap* map;
+    tPixelFlags flags;
+
+    map = BrMapFind(pPixmap_name);
+    if (gCurrent_splash != NULL && map == gCurrent_splash) {
+        return;
+    }
+    if (gCurrent_splash != NULL) {
+        KillSplashScreen();
+    }
+    flags = gPixelFlags;
+    gCurrent_splash = map;
+    if (map == NULL) {
+        gCurrent_splash = LoadPixelmap(pPixmap_name);
+        BRPM_convert(gCurrent_splash, gBack_screen->type);
+        if (gCurrent_splash != NULL) {
+            BrMapAdd(gCurrent_splash);
+        }
+    }
+    gPixelFlags = flags;
+    if (gCurrent_splash != NULL) {
+        PixelmapSwapByteOrder(gCurrent_splash);
+        FRONTEND_Redraw(gBack_screen, 0, 0, gCurrent_splash, 0, 0,
+            (br_int_16)gCurrent_splash->width, (br_int_16)gCurrent_splash->height);
+        PDScreenBufferSwap(0);
+        BrMapRemove(gCurrent_splash);
+        BrPixelmapFree(gCurrent_splash);
+        gCurrent_splash = NULL;
+    }
+#else
+    /* port: plain copy of the splash, as before 00.72: FRONTEND_Redraw scales the frontend's 640x480
+     * coordinates to the screen (the loading screen came out larger than the display) */
     br_pixelmap* the_map;
     tPixelFlags pixelFlags;
 
@@ -480,9 +513,9 @@ void C2_HOOK_FASTCALL SplashScreenWith(const char* pPixmap_name) {
         BrPixelmapFree(gCurrent_splash);
         gCurrent_splash = NULL;
     }
+#endif
 }
 
-// C2PORT-NONMATCHING: best 6.35% | difftest PASS 2000 trials (spec 0047ba80_DRPixelmapRectangleMaskedCopy.json) | reason repaired negative and right-edge clipping offsets
 // FUNCTION: CARMA2_HW 0x0047ba80
 void C2_HOOK_FASTCALL DRPixelmapRectangleMaskedCopy(br_pixelmap* pDest, br_int_16 pDest_x, br_int_16 pDest_y, const br_pixelmap* pSource, br_int_16 pSource_x, br_int_16 pSource_y, br_int_16 pWidth, br_int_16 pHeight) {
     int y;
@@ -492,45 +525,43 @@ void C2_HOOK_FASTCALL DRPixelmapRectangleMaskedCopy(br_pixelmap* pDest, br_int_1
     tU16 the_byte;
     tU16* source_ptr;
     tU16* dest_ptr;
-    int dest_x;
-    int dest_y;
+    int x_delta;
 
-    source_ptr = (tU16*)pSource->pixels + pSource->row_bytes * pSource_y / sizeof(tU16) + pSource_x;
-    dest_x = pDest_x;
-    dest_y = pDest_y;
-    dest_ptr = (tU16*)pDest->pixels + dest_y * pDest->row_bytes / sizeof(tU16) + pDest->base_x / sizeof(tU16) + dest_x;
-    source_row_wrap = pSource->row_bytes / sizeof(tU16) - pWidth;
-    dest_row_wrap = pDest->row_bytes / sizeof(tU16) - pWidth;
+    source_ptr = (tU16*)pSource->pixels + pSource->row_bytes * pSource_y / 2 + pSource_x;
+    dest_ptr = (tU16*)pDest->pixels + pDest_y * pDest->row_bytes / 2 + pDest->base_x / 2 + pDest_x;
+    source_row_wrap = pSource->row_bytes / 2 - pWidth;
+    dest_row_wrap = pDest->row_bytes / 2 - pWidth;
 
-    if (dest_y < 0) {
-        pHeight += dest_y;
+    if (pDest_y < 0) {
+        pHeight += pDest_y;
         if (pHeight <= 0) {
             return;
         }
-        source_ptr -= dest_y * pSource->row_bytes / sizeof(tU16);
-        dest_ptr -= dest_y * pDest->row_bytes / sizeof(tU16);
-        dest_y = 0;
+        source_ptr -= pDest_y * pSource->row_bytes / 2;
+        dest_ptr -= pDest_y * pDest->row_bytes / 2;
+        pDest_y = 0;
     }
-    if (dest_y < pDest->height) {
-        if (pDest->height < dest_y + pHeight) {
-            pHeight = pDest->height - dest_y;
+    if (pDest_y < pDest->height) {
+        if (pDest_y + pHeight > pDest->height) {
+            pHeight = pDest->height - pDest_y;
         }
-        if (dest_x < 0) {
-            pWidth += dest_x;
+        if (pDest_x < 0) {
+            pWidth += pDest_x;
             if (pWidth <= 0) {
                 return;
             }
-            source_ptr -= dest_x;
-            dest_ptr -= dest_x;
-            source_row_wrap -= dest_x;
-            dest_row_wrap -= dest_x;
-            dest_x = 0;
+            source_ptr -= pDest_x;
+            dest_ptr -= pDest_x;
+            source_row_wrap -= pDest_x;
+            dest_row_wrap -= pDest_x;
+            pDest_x = 0;
         }
-        if (dest_x < pDest->width) {
-            if (dest_x + pWidth > pDest->width) {
-                source_row_wrap += pWidth + dest_x - pDest->width;
-                dest_row_wrap += pWidth + dest_x - pDest->width;
-                pWidth -= pWidth + dest_x - pDest->width;
+        if (pDest_x < pDest->width) {
+            if (pDest_x + pWidth > pDest->width) {
+                x_delta = pDest_x + pWidth - pDest->width;
+                pWidth -= x_delta;
+                source_row_wrap += x_delta;
+                dest_row_wrap += x_delta;
             }
             for (y = 0; y < pHeight; y++) {
                 for (x = 0; x < pWidth; x++) {

@@ -14,6 +14,9 @@
 #include "state.h"
 #include <math.h>
 #include <string.h>
+#if defined(__vita__) && defined(BREND_DRIVER_GL)
+#include "../../../carma2/platform/sdl3/vita_perf.h"
+#endif
 
 /*
  * Default dispatch table for geometry type (defined at end of file)
@@ -71,10 +74,9 @@ static GLuint create_vao(HVIDEO hVideo, GLuint vbo_posn, GLuint vbo, GLuint ibo)
     return vao;
 }
 
-static GLuint build_vbo_posn(const struct v11model* model, size_t total_vertices) {
+static GLuint build_vbo_posn(const struct v11model* model, size_t total_vertices, GLuint buf) {
     br_vector3_f* vtx = BrScratchAllocate(total_vertices * sizeof(br_vector3_f));
     br_vector3_f* next = vtx;
-    GLuint buf;
 
     for (br_uint_16 i = 0; i < model->ngroups; ++i) {
         const struct v11group* gp = model->groups + i;
@@ -83,41 +85,40 @@ static GLuint build_vbo_posn(const struct v11model* model, size_t total_vertices
         }
     }
 
-    glGenBuffers(1, &buf);
+    if (buf == 0) glGenBuffers(1, &buf);
     glBindBuffer(GL_ARRAY_BUFFER, buf);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(total_vertices * sizeof(br_vector3_f)), vtx, GL_STATIC_DRAW);
     BrScratchFree(vtx);
     return buf;
 }
 
-static GLuint build_vbo(const struct v11model* model, size_t total_vertices) {
+static GLuint build_vbo(const struct v11model* model, size_t total_vertices, GLuint buf) {
     /* Collate and upload the vertex data. */
     gl_vertex_f* vtx = (gl_vertex_f*)BrScratchAllocate(total_vertices * sizeof(gl_vertex_f));
     gl_vertex_f* nextVtx = vtx;
-    GLuint buf;
 
     for (br_uint_16 i = 0; i < model->ngroups; ++i) {
         const struct v11group* gp = model->groups + i;
         for (br_uint_16 v = 0; v < gp->nvertices; ++v, ++nextVtx) {
             nextVtx->map = *(br_vector2_f*)&gp->vertices[v].map;
             nextVtx->n = *(br_vector3_f*)&gp->vertices[v].n;
-            nextVtx->c.v[0] = BR_RED(gp->vertex_colours[v]) / 255.0f;
-            nextVtx->c.v[1] = BR_GRN(gp->vertex_colours[v]) / 255.0f;
-            nextVtx->c.v[2] = BR_BLU(gp->vertex_colours[v]) / 255.0f;
-            nextVtx->c.v[3] = BR_ALPHA(gp->vertex_colours[v]) / 255.0f;
+            /* multiply, not divide: four VFP divisions per vertex showed up in animated-model refills */
+            nextVtx->c.v[0] = BR_RED(gp->vertex_colours[v]) * (1.0f / 255.0f);
+            nextVtx->c.v[1] = BR_GRN(gp->vertex_colours[v]) * (1.0f / 255.0f);
+            nextVtx->c.v[2] = BR_BLU(gp->vertex_colours[v]) * (1.0f / 255.0f);
+            nextVtx->c.v[3] = BR_ALPHA(gp->vertex_colours[v]) * (1.0f / 255.0f);
         }
     }
 
-    glGenBuffers(1, &buf);
+    if (buf == 0) glGenBuffers(1, &buf);
     glBindBuffer(GL_ARRAY_BUFFER, buf);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(total_vertices * sizeof(gl_vertex_f)), vtx, GL_STATIC_DRAW);
     BrScratchFree(vtx);
     return buf;
 }
 
-static GLuint build_ibo(const struct v11model* model, size_t total_faces, gl_groupinfo* groups) {
+static GLuint build_ibo(const struct v11model* model, size_t total_faces, gl_groupinfo* groups, GLuint buf) {
     br_uint_16* idx = (br_uint_16*)BrScratchAllocate(total_faces * 3 * sizeof(br_uint_16));
-    GLuint buf;
 
     br_uint_16* nextIdx = idx;
     br_uint_16 offset = 0;
@@ -159,7 +160,7 @@ static GLuint build_ibo(const struct v11model* model, size_t total_faces, gl_gro
         offset += model->groups[i].nvertices;
     }
 
-    glGenBuffers(1, &buf);
+    if (buf == 0) glGenBuffers(1, &buf);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buf);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)face_offset, idx, GL_STATIC_DRAW);
     BrScratchFree(idx);
@@ -589,9 +590,10 @@ br_geometry_stored* BREND_FN(GeometryStored, Allocate)(br_geometry_v1_model* gv1
     glBindVertexArray(0);
 
     self->gl_primitive = GL_TRIANGLES;
-    self->gl_vbo_posn = build_vbo_posn(model, total_vertices);
-    self->gl_vbo = build_vbo(model, total_vertices);
-    self->gl_ibo = build_ibo(model, total_faces, self->groups);
+    self->vita_pending_refresh = 0;
+    self->gl_vbo_posn = build_vbo_posn(model, total_vertices, 0);
+    self->gl_vbo = build_vbo(model, total_vertices, 0);
+    self->gl_ibo = build_ibo(model, total_faces, self->groups, 0);
     self->gl_vao = create_vao(&r->pixelmap->screen->asFront.video, self->gl_vbo_posn, self->gl_vbo, self->gl_ibo);
 
     glBindVertexArray(0);
@@ -617,6 +619,61 @@ br_geometry_stored* BREND_FN(GeometryStored, Allocate)(br_geometry_v1_model* gv1
 }
 
 #if defined(BREND_DRIVER_GL)
+/* Refills this object's buffers from its (changed) model, keeping the buffer and vertex array
+ * names: an animated model costs uploads, not new GL objects. The model must still have the same
+ * number of groups (the group table is sized for them). Triangle geometry only. */
+void StoredGLRefresh(br_geometry_stored* self, int rebuild_indices) {
+    const struct v11model* model = self->model;
+    size_t total_vertices = 0, total_faces = 0;
+
+    for (br_uint_16 i = 0; i < model->ngroups; ++i) {
+        total_vertices += model->groups[i].nvertices;
+        total_faces += model->groups[i].nfaces;
+    }
+    glBindVertexArray(0);
+    build_vbo_posn(model, total_vertices, self->gl_vbo_posn);
+    build_vbo(model, total_vertices, self->gl_vbo);
+    if (rebuild_indices) {
+        build_ibo(model, total_faces, self->groups, self->gl_ibo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+/* Performs a pending refill: vertices always; indices when the faces changed (for line geometry the
+ * visible-edge indices are rebuilt instead of the triangle ones). */
+void StoredGLApplyRefresh(br_geometry_stored* self) {
+    int pending = self->vita_pending_refresh;
+    self->vita_pending_refresh = 0;
+    if (pending == 2 && self->gl_primitive == GL_TRIANGLES) {
+        /* StoredGLMarkIndexRefresh: only the faces changed */
+        size_t total_faces = 0;
+        for (br_uint_16 i = 0; i < self->model->ngroups; ++i) {
+            total_faces += self->model->groups[i].nfaces;
+        }
+        glBindVertexArray(0);
+        build_ibo(self->model, total_faces, self->groups, self->gl_ibo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+        return;
+    }
+    if (self->gl_primitive == GL_LINES) {
+        StoredGLRefresh(self, 0);
+        if (pending & 2) StoredGLUseEdges(self);
+    } else {
+        StoredGLRefresh(self, (pending & 2) != 0);
+    }
+}
+
+/* The model's faces were edited in place (vertices unchanged): rebuild only the index buffer. */
+void StoredGLMarkIndexRefresh(br_geometry_stored* self) {
+    self->vita_pending_refresh |= 2;
+}
+
+/* Deferred form of StoredGLRefresh: modelrender.c refills before the first draw from the buffers. */
+void StoredGLMarkRefresh(br_geometry_stored* self, int rebuild_indices) {
+    self->vita_pending_refresh |= 1 | (rebuild_indices ? 2 : 0);
+}
+
 /* Reuse the immediate model's vertex buffers with its prepared visible edges. */
 void StoredGLUseEdges(br_geometry_stored* self) {
     br_size_t faces = 0, max_edges = 0, count;
@@ -717,6 +774,78 @@ static struct br_tv_template* BREND_CMETHOD_DECL(BREND_CLASS(br_geometry_stored)
 
 /* ------------------------------------------------------- Render loop --- */
 
+#if defined(__vita__) && defined(BREND_DRIVER_GL)
+extern int gGLGroupDrawnDirect;
+extern int C2VitaGLFastTextureDraw(GLuint pTexture, GLsizei pCount, const void* pOffset);
+extern int C2VitaABFeature(const char* pFeature, int pDefault);
+
+/* Whether group state b is group state a with another texture: then b's draw needs only that
+ * texture changed (C2VitaGLFastTextureDraw), not the whole material state resolved and applied
+ * again. Most groups of the merged track (one per texture) and many of the cars are such runs. */
+static int same_but_texture(const br_renderer_state_stored* a, const br_renderer_state_stored* b) {
+    const br_buffer_stored* map;
+    state_primitive pa, pb;
+
+    if (a == NULL || b == NULL || a->state.valid != b->state.valid) {
+        return 0;
+    }
+    map = b->state.prim.colour_map;
+    if (map == NULL || a->state.prim.colour_map == NULL || map->blended || (b->state.prim.flags & PRIMF_BLEND)
+            || b->state.surface.force_front || b->state.surface.force_back) {
+        return 0; /* untextured, or drawn by the transparent pass, or ordered against it */
+    }
+    if (map->paletted_source_dirty || (map->palette_pointer != NULL && map->palette_revision != map->palette_pointer->revision)) {
+        return 0; /* its texture is converted on the way (StoredGLApplyProperties) */
+    }
+    if (memcmp(&a->state.surface, &b->state.surface, sizeof(a->state.surface)) != 0
+            || memcmp(&a->state.cull, &b->state.cull, sizeof(a->state.cull)) != 0) {
+        return 0;
+    }
+    pa = a->state.prim;
+    pb = b->state.prim;
+    pa.colour_map = pb.colour_map = NULL;
+    return memcmp(&pa, &pb, sizeof(pa)) == 0;
+}
+
+/* The order the groups of a model are drawn in: those whose states differ only in the texture
+ * together (where the first of them is), so that most draws are texture-only. BRender prepares the
+ * groups in material address order; opaque groups of one model are depth tested, so drawing them in
+ * another order gives the same picture. Worked out on the first draw of a prepared model. */
+static const br_uint_16* draw_order(br_geometry_stored* self) {
+    int n = self->model->ngroups, i, j, at = 0;
+    unsigned char* placed;
+
+    if (n < 3) {
+        return NULL;
+    }
+    if (self->vita_order != NULL && self->vita_order_groups == n) {
+        return self->vita_order;
+    }
+    if (self->vita_order != NULL) {
+        BrResFree(self->vita_order);
+    }
+    self->vita_order = BrResAllocate(self, n * (sizeof(br_uint_16) + 1), BR_MEMORY_OBJECT_DATA);
+    self->vita_order_groups = n;
+    placed = (unsigned char*)(self->vita_order + n);
+    memset(placed, 0, n);
+    for (i = 0; i < n; i++) {
+        const br_renderer_state_stored* first = self->model->groups[i].stored;
+        if (placed[i]) {
+            continue;
+        }
+        placed[i] = 1;
+        self->vita_order[at++] = (br_uint_16)i;
+        for (j = i + 1; j < n; j++) {
+            if (!placed[j] && same_but_texture(first, self->model->groups[j].stored) && same_but_texture(self->model->groups[j].stored, first)) {
+                placed[j] = 1;
+                self->vita_order[at++] = (br_uint_16)j;
+            }
+        }
+    }
+    return self->vita_order;
+}
+#endif
+
 static br_error V1Model_RenderStored(br_geometry_stored* self, br_renderer* renderer, struct br_renderer_state_stored* default_state) {
 #if defined(BREND_DRIVER_GL)
     state_stack* state;
@@ -733,8 +862,41 @@ static br_error V1Model_RenderStored(br_geometry_stored* self, br_renderer* rend
 
     defer = want_defer(&state->hidden);
 #endif
+#if defined(__vita__) && defined(BREND_DRIVER_GL)
+    {
+        /* test (C2_TEST_AB=onedraw): the merged track drawn as one draw with its first material, the
+         * draw count a texture atlas would give (wrong textures; for measuring only) */
+        extern const char* gDebug_render_model_name;
+        extern int C2VitaABFeature(const char* pFeature, int pDefault);
+        if (!defer && self->model->ngroups > 1 && gDebug_render_model_name != NULL
+                && strcmp(gDebug_render_model_name, "C2 track batch") == 0 && C2VitaABFeature("onedraw", 0)) {
+            gl_groupinfo one = self->groups[0];
+            for (int i = 1; i < self->model->ngroups; ++i) {
+                one.count += self->groups[i].count;
+            }
+            one.stored = (br_renderer_state_stored*)self->model->groups[0].stored;
+            one.default_state = default_state;
+            StoredGLRenderGroup(self, renderer, &one);
+            renderer->frame_stats.model_count++;
+            return BRE_OK;
+        }
+    }
+#endif
 
-    for (int i = 0; i < self->model->ngroups; ++i) {
+#if defined(__vita__) && defined(BREND_DRIVER_GL)
+    /* test: C2_TEST_AB=texrun switches the texture-only draws off and on */
+    int texrun = !defer && C2VitaABFeature("texrun", 1);
+    const br_renderer_state_stored* drawn = NULL; /* state of the previous group, if it was the last draw */
+    /* test: C2_TEST_AB=texsort draws the groups in prepared order and in draw_order's */
+    const br_uint_16* order = texrun && C2VitaABFeature("texsort", 1) ? draw_order(self) : NULL;
+#endif
+
+    for (int k = 0; k < self->model->ngroups; ++k) {
+#if defined(__vita__) && defined(BREND_DRIVER_GL)
+        int i = order != NULL ? order[k] : k;
+#else
+        int i = k;
+#endif
         struct v11group* group = self->model->groups + i;
 #if defined(BREND_DRIVER_GL)
         gl_groupinfo* groupinfo = self->groups + i;
@@ -774,7 +936,23 @@ static br_error V1Model_RenderStored(br_geometry_stored* self, br_renderer* rend
             bucket = calculate_bucket(ot, stored ? &stored->state : state, &distance_from_zero);
             BrZsOrderTablePrimitiveInsert(ot, prim, bucket);
         } else {
+#if defined(__vita__) && defined(BREND_DRIVER_GL)
+            if (texrun && drawn != NULL && same_but_texture(drawn, stored)
+                    && C2VitaGLFastTextureDraw(BufferStoredGLGetTexture(stored->state.prim.colour_map), groupinfo->count, groupinfo->offset)) {
+                renderer->state.current->prim.colour_map = stored->state.prim.colour_map;
+                C2VitaPerfCount(C2VPC_GROUPS);
+                renderer->scene_stats.face_group_count++;
+                renderer->scene_stats.triangles_rendered_count += group->nfaces;
+                renderer->scene_stats.triangles_drawn_count += group->nfaces;
+                renderer->scene_stats.vertices_rendered_count += group->nfaces * 3;
+                drawn = stored;
+                continue;
+            }
+#endif
             StoredGLRenderGroup(self, renderer, groupinfo);
+#if defined(__vita__) && defined(BREND_DRIVER_GL)
+            drawn = gGLGroupDrawnDirect ? stored : NULL;
+#endif
         }
 #else
         StoredSDL3GPURENDRenderGroup(self, renderer, groupinfo);

@@ -84,16 +84,11 @@ void C2_HOOK_STDCALL prepareEdges(v11group* group, br_model* model) {
     C2_HOOK_BUG_ON(sizeof(*pm_edge_table) != 12);
     C2_HOOK_BUG_ON(sizeof(*pm_edge_hash) != 4);
 
-    scratch_size = group->nfaces * 3 * sizeof(*pm_edge_table) +
-            group->nvertices * sizeof(*pm_edge_hash);
+    scratch_size = (group->nfaces * 9 + group->nvertices) * sizeof(*pm_edge_hash);
 
-    pm_edge_scratch = BrScratchAllocate(scratch_size);
-
-    pm_edge_hash = (struct pm_temp_edge**)pm_edge_scratch;
-    /* Byte-offset semantics: the hash region is nvertices pointer-sized
-     * entries; adding the count to a pm_temp_edge* would scale by the (larger)
-     * element size and push the table past the end of the scratch block. */
-    pm_edge_table = (struct pm_temp_edge*)(pm_edge_scratch + group->nvertices * sizeof(*pm_edge_hash));
+    pm_edge_hash = (struct pm_temp_edge**)BrScratchAllocate(scratch_size);
+    pm_edge_scratch = pm_edge_hash;
+    pm_edge_table = (struct pm_temp_edge*)((char*)pm_edge_scratch + group->nvertices * sizeof(*pm_edge_hash));
 
     BrMemSet(pm_edge_hash, 0, group->nvertices * sizeof(*pm_edge_hash));
 
@@ -124,7 +119,7 @@ void C2_HOOK_STDCALL prepareEdges(v11group* group, br_model* model) {
 
     group->nedges = num_edges + 1;
 
-    BrScratchFree(pm_edge_scratch);
+    BrScratchFree(pm_edge_hash);
 }
 
 static int C2_HOOK_STDCALL addPreparedEdge(br_uint_16 first, br_uint_16 last) {
@@ -821,6 +816,13 @@ void C2_HOOK_CDECL BrModelUpdate(br_model* model, br_uint_16 flags) {
     if (model->flags & BR_MODF_PREPREPARED) {
         return;
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    if (model->flags & 0x4000) {
+        /* port: a model merged into a track block changes: draw it on its own again */
+        extern void C2TrackBatchModelChanged(br_model* pModel);
+        C2TrackBatchModelChanged(model);
+    }
+#endif
 
     if (model->faces == NULL || model->vertices == NULL) {
         BrFailure("BrModelUpdate: model has no faces or vertices (%s)",

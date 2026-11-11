@@ -223,7 +223,7 @@ if(VITA)
     # LiveArea bubble/background: 8-bit indexed PNGs made from the game's title screen and icon
     set(C2_VITA_SCE_SYS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/vita/sce_sys")
     vita_create_vpk(carpocalypse2.vpk C2VITA001 eboot.bin
-        VERSION 01.00 NAME "Carmageddon 2"
+        VERSION 01.10 NAME "Carmageddon 2"
         FILE ${C2_VITA_SCE_SYS}/icon0.png sce_sys/icon0.png
         FILE ${C2_VITA_SCE_SYS}/pic0.png sce_sys/pic0.png
         FILE ${C2_VITA_SCE_SYS}/livearea/contents/bg.png sce_sys/livearea/contents/bg.png

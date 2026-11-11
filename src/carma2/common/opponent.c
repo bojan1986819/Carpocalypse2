@@ -4653,12 +4653,35 @@ void C2_HOOK_FASTCALL TeleportOpponentToNearestSafeLocation(tOpponent_spec* pOpp
     AddToOpponentsProjectedRoute(pOpponent_spec, section_no, section_direction);
     TopUpRandomRoute(pOpponent_spec, -1);
     section_counter = 1;
+#ifndef CARPOCALYPSE2_MATCHING
+    {
+    /* port: on a small track (or with a NaN player position) no route node may be out of view, and the original
+     * loop then never ends (Vita 00.75 test: hang in the AI, watchdog core dump). After 2000 nodes the farthest
+     * one seen is used. */
+    int c2_tries = 0;
+    br_scalar c2_best_d = -1.f;
+    br_vector3 c2_best_pos;
+    BrVector3Copy(&c2_best_pos, &pOpponent_spec->car_spec->car_master_actor->t.t.translate.t);
+#endif
     while (!found_safe_place) {
         pOpponent_spec->car_spec->car_master_actor->t.t.translate.t = gProgram_state.AI_vehicles.path_nodes[gProgram_state.AI_vehicles.path_sections[pOpponent_spec->next_sections[section_counter].section_no].node_indices[pOpponent_spec->next_sections[section_counter].direction]].pos;
         CalcOpponentConspicuousnessWithAViewToCheatingLikeFuck(pOpponent_spec);
         if (pOpponent_spec->player_to_oppo_d > gIn_view_distance) {
             found_safe_place = 1;
         }
+#ifndef CARPOCALYPSE2_MATCHING
+        if (pOpponent_spec->player_to_oppo_d > c2_best_d) {
+            c2_best_d = pOpponent_spec->player_to_oppo_d;
+            BrVector3Copy(&c2_best_pos, &pOpponent_spec->car_spec->car_master_actor->t.t.translate.t);
+        }
+        if (!found_safe_place && ++c2_tries >= 2000) {
+            BrVector3Copy(&pOpponent_spec->car_spec->car_master_actor->t.t.translate.t, &c2_best_pos);
+            CalcOpponentConspicuousnessWithAViewToCheatingLikeFuck(pOpponent_spec);
+            dr_dprintf("TELEPORT '%s': no node out of view after %d tries, farthest %.2f used (view %.2f)",
+                pOpponent_spec->car_spec->driver_name, c2_tries, c2_best_d, gIn_view_distance);
+            break;
+        }
+#endif
         section_counter++;
         if (pOpponent_spec->nnext_sections <= section_counter) {
             ShiftOpponentsProjectedRoute(pOpponent_spec, section_counter - 1);
@@ -4666,6 +4689,9 @@ void C2_HOOK_FASTCALL TeleportOpponentToNearestSafeLocation(tOpponent_spec* pOpp
             TopUpRandomRoute(pOpponent_spec, -1);
         }
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    }
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004aad70
@@ -4714,10 +4740,28 @@ tS16 C2_HOOK_FASTCALL CalcNextTrailSection(const tOpponent_spec* pOpponent_spec,
     return -1;
 }
 
-// C2PORT-NONMATCHING: best 40.54% | difftest PASS 2000 trials (spec difftest/specs/004aea30_GetOpponentsNextSection.json) | reason VC5 inlines trail lookup with different register allocation
 // FUNCTION: CARMA2_HW 0x004aea30
 int C2_HOOK_FASTCALL GetOpponentsNextSection(const tOpponent_spec* pOpponent_spec, tS16 pCurrent_section) {
+#ifdef CARPOCALYPSE2_MATCHING
+    if (pCurrent_section >= 20000) {
+        if (pOpponent_spec->nnext_sections > pCurrent_section - 19999
+                && (pOpponent_spec->cheating || gProgram_state.AI_vehicles.path_sections[pCurrent_section - 19999].type != ePST_cheat_only)) {
+            return pCurrent_section + 1;
+        }
+        return -1;
+    }
+    if (pCurrent_section >= 15000) {
+        int trail_section = pCurrent_section - 15000;
 
+        if (trail_section >= pOpponent_spec->pursue_car_data.pursuee->my_trail.number_of_nodes - 2) {
+            trail_section = -1;
+        } else {
+            trail_section += 15001;
+        }
+        return (tS16)trail_section;
+    }
+    return -1;
+#else
     if (pCurrent_section < 20000) {
         if (pCurrent_section < 15000) {
             return -1;
@@ -4729,6 +4773,7 @@ int C2_HOOK_FASTCALL GetOpponentsNextSection(const tOpponent_spec* pOpponent_spe
     } else {
         return pCurrent_section + 1;
     }
+#endif
 }
 
 // C2PORT-NONMATCHING: best 75.00% | difftest PASS 2000 trials (spec difftest/specs/004aeab0_GetOpponentsSectionStartNode.json) | reason vc5-register-allocation
@@ -5106,21 +5151,26 @@ void C2_HOOK_FASTCALL ReportMurderToAllCops(tCar_spec* pCar) {
 
 // FUNCTION: CARMA2_HW 0x004ae790
 int C2_HOOK_FASTCALL GetCarCount(tVehicle_type pCategory) {
-#ifndef CARPOCALYPSE2_MATCHING
+#ifdef CARPOCALYPSE2_MATCHING
     switch (pCategory) {
     case eVehicle_self:
         return 1;
-    case eVehicle_net_player:
-        return gNumber_of_net_players;
     case eVehicle_opponent:
         return gProgram_state.AI_vehicles.number_of_opponents;
+    case eVehicle_net_player:
+        if (gNet_mode != eNet_mode_none) {
+            return gNumber_of_net_players - 1;
+        } else {
+            return 0;
+        }
     case eVehicle_rozzer:
         return gNumber_of_cops_before_faffage;
     case eVehicle_drone:
-    case eVehicle_not_really:
-    default:
         return 0;
+    case eVehicle_not_really:
+        return gNum_active_non_cars;
     }
+    return 0;
 #else
     switch (pCategory) {
     case eVehicle_self:
@@ -5139,18 +5189,18 @@ int C2_HOOK_FASTCALL GetCarCount(tVehicle_type pCategory) {
 #endif
 }
 
-// C2PORT-NONMATCHING: best 68.00% | difftest PASS 2000 trials (spec difftest/specs/004ae7e0_GetCarSpec.json) | reason VC5 switch and net-player index remap use different code layout
 // FUNCTION: CARMA2_HW 0x004ae7e0
 tCar_spec* C2_HOOK_FASTCALL GetCarSpec(tVehicle_type pCategory, int pIndex) {
-#ifndef CARPOCALYPSE2_MATCHING
+#ifdef CARPOCALYPSE2_MATCHING
     switch (pCategory) {
     case eVehicle_self:
         return &gProgram_state.current_car;
     case eVehicle_net_player:
         if (pIndex < gThis_net_player_index) {
             return gNet_players[pIndex].car;
+        } else {
+            return (&gNet_players[1])[pIndex].car;
         }
-        return gNet_players[pIndex + 1].car;
     case eVehicle_opponent:
         return gProgram_state.AI_vehicles.opponents[pIndex].car_spec;
     case eVehicle_rozzer:

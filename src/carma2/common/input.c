@@ -174,51 +174,41 @@ int C2_HOOK_FASTCALL KeyIsDownNoMouldiness(int pKey_index) {
     return gKey_array[gKey_mapping[pKey_index]];
 }
 
-// C2PORT-NONMATCHING: best 43.37% | difftest PASS 2000 trials (spec 00483cf0_AddRollingLetter.json and branch specs) | reason equivalent slot allocation and letter output with different register scheduling
 // FUNCTION: CARMA2_HW 0x00483cf0
 int C2_HOOK_FASTCALL AddRollingLetter(char pChar, int pX, int pY, tRolling_type rolling_type) {
     tRolling_letter* let;
     int i;
 
-    for (i = 0; i < NBR_ROLLING_LETTERS; i++) {
-        let = &gRolling_letters[i];
+    for (let = gRolling_letters, i = 0; i < NBR_ROLLING_LETTERS; i++, let++) {
         if (let->number_of_letters < 0) {
-            break;
+            goto letter_found;
         }
     }
-    if (i == NBR_ROLLING_LETTERS) {
-        return -1;
-    }
+    return -1;
+
+letter_found:
+    let->rolling_type = rolling_type;
     let->x_coord = pX;
     let->y_coord = pY;
-    let->rolling_type = rolling_type;
-    switch (rolling_type) {
-    case eRT_looping_random:
+    if (rolling_type == eRT_looping_random) {
         let->number_of_letters = 9;
-        break;
-    case eRT_looping_single:
+    } else if (rolling_type == eRT_looping_single) {
         let->number_of_letters = 2;
-        break;
-    default:
+    } else {
         let->number_of_letters = IRandomBetween(3, 9);
-        break;
     }
-
     let->current_offset = (float)(let->number_of_letters * gCurrent_graf_data->save_slot_letter_height);
-    for (i = (rolling_type != eRT_looping_random ? 1 : 0); i < let->number_of_letters; i++) {
-        if (rolling_type == eRT_numeric) {
-            /* The (tU8) cast makes sure extended ASCII is positive. */
-            let->letters[i] = (tS8)pChar;
-        } else {
+    for (i = let->number_of_letters - 1; i > (rolling_type != eRT_looping_random ? 0 : -1); i--) {
+        if (rolling_type != eRT_numeric) {
             let->letters[i] = IRandomBetween('A', 'Z' + 1);
+        } else {
+            let->letters[i] = (tS8)pChar;
         }
     }
     if (rolling_type != eRT_looping_random) {
-        /* The (tU8) cast makes sure extended ASCII is positive. */
         let->letters[0] = (tS8)pChar;
     }
-
-    return rolling_type == eRT_looping_random ? -1 : 0;
+    return i;
 }
 
 // FUNCTION: CARMA2_HW 0x00483dd0
@@ -261,7 +251,6 @@ int C2_HOOK_FASTCALL ChangeCharTo(int pSlot_index, int pChar_index, char pNew_ch
     }
     y_coord = gLetter_y_coords[pSlot_index];
     x_coord = gLetter_x_coords[pSlot_index] + pChar_index * gCurrent_graf_data->rolling_letter_x_pitch;
-
     if (pNew_char == ROLLING_LETTER_LOOP_RANDOM) {
         new_type = eRT_looping_random;
     } else if (pNew_char >= '0' && pNew_char <= '9') {
@@ -269,25 +258,22 @@ int C2_HOOK_FASTCALL ChangeCharTo(int pSlot_index, int pChar_index, char pNew_ch
     } else {
         new_type = eRT_alpha;
     }
-
-    for (i = 0; i < NBR_ROLLING_LETTERS; i++) {
-        let = &gRolling_letters[i];
+    for (let = gRolling_letters, i = 0; i < NBR_ROLLING_LETTERS; i++, let++) {
         if (let->number_of_letters >= 0 && x_coord == let->x_coord && y_coord == let->y_coord) {
-            break;
+            goto letter_found;
         }
     }
-    if (i >= NBR_ROLLING_LETTERS) {
-        return AddRollingLetter(pNew_char, x_coord, y_coord, new_type);
-    }
+    return AddRollingLetter(pNew_char, x_coord, y_coord, new_type);
+
+letter_found:
     if (pNew_char != ROLLING_LETTER_LOOP_RANDOM) {
-        /* The (tU8) cast makes sure extended ASCII is positive. */
-        let->letters[0] = (tU8)pNew_char;
+        let->letters[0] = (tS8)pNew_char;
     }
     if (pNew_char == ' ') {
         let->letters[0] = ' ';
     }
-    let->rolling_type = new_type;
     let->current_offset = (float)(gCurrent_graf_data->save_slot_letter_height * let->number_of_letters);
+    let->rolling_type = new_type;
     return i;
 }
 
@@ -1395,10 +1381,10 @@ void C2_HOOK_FASTCALL FUN_004840d0(int pSlot_index) {
 
 // FUNCTION: CARMA2_HW 0x00484120
 void C2_HOOK_FASTCALL RevertTyping(int pSlot_index, char* pRevert_str) {
-    unsigned i;
+    int i;
 
-    for (i = 0; (int)i < gThe_length; i++) {
-        ChangeCharTo(pSlot_index, i, i >= strlen(pRevert_str) ? ' ' : pRevert_str[i]);
+    for (i = 0; i < gThe_length; i++) {
+        ChangeCharTo(pSlot_index, i, (char)((size_t)i < strlen(pRevert_str) ? pRevert_str[i] : ' '));
     }
 }
 
@@ -1410,6 +1396,45 @@ void C2_HOOK_FASTCALL StartTyping(int pSlot_index, char* pText, int pVisible_len
     gVisible_length = pVisible_length;
     gCurrent_cursor = ChangeCharTo(pSlot_index, gCurrent_position, ROLLING_LETTER_LOOP_RANDOM);
 }
+
+// FUNCTION: CARMA2_HW 0x00484510
+void C2_HOOK_FASTCALL SetSlotXY(int pSlot_index, int pX_coord, int pY_coord) {
+    gLetter_x_coords[pSlot_index] = pX_coord;
+    gLetter_y_coords[pSlot_index] = pY_coord;
+}
+
+// FUNCTION: CARMA2_HW 0x00484530
+void C2_HOOK_FASTCALL GetTypedName(char* pDestn, int pMax_length) {
+
+    if (strlen(gThe_text) > (size_t)pMax_length) {
+        memcpy(pDestn, gThe_text, pMax_length);
+        pDestn[pMax_length] = '\0';
+    } else {
+        strcpy(pDestn, gThe_text);
+    }
+}
+
+// FUNCTION: CARMA2_HW 0x00484590
+void C2_HOOK_FASTCALL KillCursor(int pSlot_index) {
+    int x_coord;
+    int y_coord;
+    int j;
+    tRolling_letter* let;
+
+    if (gCurrent_position < gVisible_length && gCurrent_position >= 0) {
+        y_coord = gLetter_y_coords[pSlot_index];
+        x_coord = gCurrent_graf_data->rolling_letter_x_pitch * gCurrent_position + gLetter_x_coords[pSlot_index];
+        for (let = gRolling_letters, j = 0; j < NBR_ROLLING_LETTERS; j++, let++) {
+            if (let->number_of_letters >= 0 && x_coord == let->x_coord && y_coord == let->y_coord) {
+                gRolling_letters[j].number_of_letters = -1;
+                break;
+            }
+        }
+    }
+}
+
+
+
 
 // FUNCTION: CARMA2_HW 0x00484600
 void C2_HOOK_FASTCALL EdgeTriggerModeOn(void) {

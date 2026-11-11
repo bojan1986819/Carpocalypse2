@@ -123,6 +123,9 @@ add_library(glrend
         )
 
 brender_common_target_setup(glrend BREND_DRIVER_GL GL gl "glrend")
+if(VITA AND DEFINED ENV{C2_RENDER_OPT})
+    target_compile_options(glrend PRIVATE $ENV{C2_RENDER_OPT})
+endif()
 target_link_libraries(glrend PUBLIC glrend-headers PRIVATE brender-static c2_hooks)
 target_compile_definitions(glrend PRIVATE BASED_FLOAT=1 BASED_FIXED=0)
 target_include_directories(glrend PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/compat" "${CMAKE_CURRENT_SOURCE_DIR}/../ddi" "${BRender_SOURCE_DIR}/include/brender" "${BRender_SOURCE_DIR}")

@@ -371,9 +371,35 @@ void C2_HOOK_FASTCALL ClearCrushLists(void) {
     }
 }
 
-// C2PORT-NONMATCHING: best 10.53% | difftest PASS 2000 trials (spec difftest/specs/0042a190_ResetCrushSystems.json) | reason loop and register scheduling codegen
 // FUNCTION: CARMA2_HW 0x0042a190
 void C2_HOOK_FASTCALL ResetCrushSystems(void) {
+#ifdef CARPOCALYPSE2_MATCHING
+    C2_HOOK_BUG_ON(CARPOCALYPSE2_ASIZE(gTrack_crush_joints) != 32);
+
+    {
+        int i;
+        tCrush_list_item* item;
+
+        for (i = 0; i < 32; i++) {
+            gTrack_crush_joints[i]->type = eJoint_none;
+        }
+        gDetached_bit_crush_info_buffer.field_0x8 = 0;
+        gSplit_car_crush_info_buffer.field_0x8 = 0;
+        for (item = gCrush_lists; item->car_spec != NULL; item++) {
+            item->car_spec = NULL;
+        }
+    }
+    gCount_queued_drone_crushes = 0;
+    gCount_crush_detach_list = 0;
+    gINT_0067bdfc = 0;
+    gCount_toggled_doors = 0;
+    gCrush_data_entry_counter = 0;
+    gCount_net_crush_detach_list = 0;
+    gCount_net_crush_semi_detach_bit_list = 0;
+    gCount_net_crush_full_detach_bit_list = 0;
+    gCount_net_crush_reattach_bit_list = 0;
+    gCount_car_damage_crush_list = 0;
+#else
     int i;
 
     C2_HOOK_BUG_ON(CARPOCALYPSE2_ASIZE(gTrack_crush_joints) != 32);
@@ -394,6 +420,7 @@ void C2_HOOK_FASTCALL ResetCrushSystems(void) {
     gCount_net_crush_full_detach_bit_list = 0;
     gCount_net_crush_reattach_bit_list = 0;
     gCount_car_damage_crush_list = 0;
+#endif
 }
 
 // C2PORT-NONMATCHING: best 76.53% | difftest PASS 2000 trials (spec difftest/specs/0042f170_FUN_0042f170.json) | reason register allocation
@@ -1063,10 +1090,29 @@ void C2_HOOK_FASTCALL LinkCarCrushDatas(br_actor *pActor, tCar_crush_buffer *pBu
 }
 
 // FUNCTION: CARMA2_HW 0x0042a950
-int C2_HOOK_CDECL LinkCarCrushData(br_actor* pActor, void* data) {
+int C2_HOOK_CDECL LinkCarCrushData(br_actor* pActor, void* pData) {
+#ifdef CARPOCALYPSE2_MATCHING
     int i;
     tUser_crush_data* user_crush;
-    tCar_crush_buffer* pCar_crush_buffer = data;
+    tCar_crush_buffer* car_crush_buffer;
+
+    car_crush_buffer = pData;
+    user_crush = pActor->user;
+    if (user_crush == NULL) {
+        return 0;
+    }
+    user_crush->crush_data = NULL;
+    for (i = 0; i < car_crush_buffer->count_entries; i++) {
+        if (car_crush_buffer->entries[i] != NULL && DRStricmp(car_crush_buffer->entries[i]->actor_name, pActor->identifier) == 0) {
+            user_crush->crush_data = car_crush_buffer->entries[i];
+            return 0;
+        }
+    }
+    return 0;
+#else
+    int i;
+    tUser_crush_data* user_crush;
+    tCar_crush_buffer* pCar_crush_buffer = pData;
 
     user_crush = pActor->user;
     if (user_crush == NULL) {
@@ -1080,6 +1126,7 @@ int C2_HOOK_CDECL LinkCarCrushData(br_actor* pActor, void* data) {
         }
     }
     return 0;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x0048bf50
@@ -1204,9 +1251,34 @@ int C2_HOOK_CDECL DecreasingCompare(const void* pValue1, const void* pValue2) {
     return 1;
 }
 
-// C2PORT-NONMATCHING: best 28.40% | difftest PASS 2000 trials (spec 0042b4c0_CrushLimitNumber.json) | reason correct limit classification with different register and loop codegen
 // FUNCTION: CARMA2_HW 0x0042b4c0
 tU16 C2_HOOK_FASTCALL CrushLimitNumber(const br_vector3* pPoint, const tCar_crush_limits* pLimits, const tCar_crush_count_limits* pCount_limits, int* pInvalid) {
+#ifdef CARPOCALYPSE2_MATCHING
+    int number;
+    int i;
+    int mi;
+    int ma;
+
+    *pInvalid = 1;
+    number = 0;
+    for (i = CARPOCALYPSE2_ASIZE(pPoint->v) - 1; i >= 0; i--) {
+        for (mi = 0; mi < pCount_limits->counts[i][1] - 1; mi++) {
+            if (pPoint->v[i] < pLimits->limits[i][1].values[mi]) {
+                *pInvalid = 0;
+                break;
+            }
+        }
+        number = (number << 2) | mi;
+        for (ma = 0; ma < pCount_limits->counts[i][0] - 1; ma++) {
+            if (pLimits->limits[i][0].values[ma] < pPoint->v[i]) {
+                *pInvalid = 0;
+                break;
+            }
+        }
+        number = (number << 2) | ma;
+    }
+    return (tU16)number;
+#else
     tU16 number;
     int i;
 
@@ -1235,6 +1307,7 @@ tU16 C2_HOOK_FASTCALL CrushLimitNumber(const br_vector3* pPoint, const tCar_crus
         number = (number << 4) | (mi << 2) | (ma << 0);
     }
     return number;
+#endif
 }
 
 void C2_HOOK_FASTCALL InitModelMasterCrushData(tCar_spec* pCar_spec) {
@@ -1544,6 +1617,30 @@ intptr_t C2_HOOK_FASTCALL SoftnessOfNearestPointCB(br_actor* pActor, br_vector3*
 
 // FUNCTION: CARMA2_HW 0x0042b760
 intptr_t C2_HOOK_FASTCALL DRActorEnumRecurseWithTranslation(br_actor* pActor, br_vector3* pDelta, tDRActorEnumRecurseWithTranslation_cbfn* cbfn, void* pContext) {
+#ifdef CARPOCALYPSE2_MATCHING
+    br_vector3 delta;
+    intptr_t result;
+    br_actor* a;
+
+    if (pDelta != NULL) {
+        delta.v[0] = pActor->t.t.mat.m[3][0] + pDelta->v[0];
+        delta.v[1] = pActor->t.t.mat.m[3][1] + pDelta->v[1];
+        delta.v[2] = pActor->t.t.mat.m[3][2] + pDelta->v[2];
+    } else {
+        BrVector3Set(&delta, 0.0f, 0.0f, 0.0f);
+    }
+    result = cbfn(pActor, &delta, pContext);
+    if (result != 0) {
+        return result;
+    }
+    for (a = pActor->children; a != NULL; a = a->next) {
+        result = DRActorEnumRecurseWithTranslation(a, &delta, cbfn, pContext);
+        if (result != 0) {
+            return result;
+        }
+    }
+    return 0;
+#else
     br_vector3 delta;
     intptr_t result;
     br_actor* a;
@@ -1565,6 +1662,7 @@ intptr_t C2_HOOK_FASTCALL DRActorEnumRecurseWithTranslation(br_actor* pActor, br
         }
     }
     return 0;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x005148c0
@@ -5260,6 +5358,100 @@ int C2_HOOK_FASTCALL GetAverageCrushLevel(tCar_spec* pCar) {
 
 #pragma auto_inline(on)
 
+#ifndef CARPOCALYPSE2_MATCHING
+/* port diagnostics (playtest 00.70: opponents wasted "by nothing", e.g. a dumper truck 15 s after being
+ * hit): the last damage events of every car, written to the log when the car is wasted. */
+#define C2_DAMAGE_EVENTS 8
+typedef struct {
+    tU32 time;
+    void* caller;
+    short unit, amount, level;
+    char kind;
+} tC2_damage_event;
+static struct {
+    tCar_spec* car;
+    int next;
+    tC2_damage_event events[C2_DAMAGE_EVENTS];
+} gC2_damage_log[40];
+
+static void* C2DamageCaller(void* pAddress) {
+    return pAddress;
+}
+#ifdef __GNUC__
+#define C2_DAMAGE_CALLER() C2DamageCaller(__builtin_return_address(0))
+#else
+#define C2_DAMAGE_CALLER() C2DamageCaller(NULL)
+#endif
+
+void C2_HOOK_FASTCALL C2LogDamageEvent(tCar_spec* pCar, char pKind, int pUnit, int pAmount, void* pCaller) {
+    int i, free_slot = -1;
+    tC2_damage_event* e;
+
+    if (pCar == NULL) {
+        return;
+    }
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gC2_damage_log); i++) {
+        if (gC2_damage_log[i].car == pCar) {
+            break;
+        }
+        if (gC2_damage_log[i].car == NULL && free_slot < 0) {
+            free_slot = i;
+        }
+    }
+    if (i == (int)CARPOCALYPSE2_ASIZE(gC2_damage_log)) {
+        if (free_slot < 0) {
+            return;
+        }
+        i = free_slot;
+        gC2_damage_log[i].car = pCar;
+        gC2_damage_log[i].next = 0;
+        memset(gC2_damage_log[i].events, 0, sizeof(gC2_damage_log[i].events));
+    }
+    e = &gC2_damage_log[i].events[gC2_damage_log[i].next++ % C2_DAMAGE_EVENTS];
+    e->time = GetTotalTime();
+    e->caller = pCaller;
+    e->kind = pKind;
+    e->unit = (short)pUnit;
+    e->amount = (short)pAmount;
+    e->level = (short)(pUnit >= 0 && pUnit < 12 ? pCar->damage_units[pUnit].damage_level : -1);
+}
+
+void C2_HOOK_FASTCALL C2LogCarWasted(tCar_spec* pCar, const char* pHow) {
+    extern void C2_HOOK_FASTCALL DoDamage(tCar_spec * pCar, tDamage_type pDamage_type, int pMagnitude);
+    tU32 now = GetTotalTime();
+    int i, n;
+
+    dr_dprintf("CAR WASTED '%s' driver=%d how=%s pos=(%.1f,%.1f,%.1f) speed=%.3f last_hit_by='%s' %d ms ago "
+        "engine=%d trans=%d driver=%d wheels=%d,%d,%d,%d (DoDamage at %p)",
+        pCar->driver_name, pCar->driver, pHow,
+        pCar->car_master_actor->t.t.translate.t.v[0], pCar->car_master_actor->t.t.translate.t.v[1],
+        pCar->car_master_actor->t.t.translate.t.v[2], pCar->speed,
+        pCar->last_hit_by != NULL ? pCar->last_hit_by->driver_name : "-",
+        pCar->last_hit_by != NULL ? (int)(PDGetTotalTime() - pCar->time_last_hit) : -1,
+        pCar->damage_units[eDamage_engine].damage_level, pCar->damage_units[eDamage_transmission].damage_level,
+        pCar->damage_units[eDamage_driver].damage_level,
+        pCar->damage_units[eDamage_lf_wheel].damage_level, pCar->damage_units[eDamage_rf_wheel].damage_level,
+        pCar->damage_units[eDamage_lr_wheel].damage_level, pCar->damage_units[eDamage_rr_wheel].damage_level,
+        (void*)DoDamage);
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gC2_damage_log); i++) {
+        if (gC2_damage_log[i].car != pCar) {
+            continue;
+        }
+        for (n = 0; n < C2_DAMAGE_EVENTS; n++) {
+            tC2_damage_event* e = &gC2_damage_log[i].events[(gC2_damage_log[i].next + n) % C2_DAMAGE_EVENTS];
+            if (e->kind != 0) {
+                dr_dprintf("CAR WASTED   %6d ms ago %c unit=%d amount=%d level=%d from %p",
+                    (int)(now - e->time), e->kind, e->unit, e->amount, e->level, e->caller);
+            }
+        }
+    }
+}
+
+void C2_HOOK_FASTCALL C2ForgetDamageEvents(void) {
+    memset(gC2_damage_log, 0, sizeof(gC2_damage_log));
+}
+#endif
+
 // FUNCTION: CARMA2_HW 0x0043f930
 void C2_HOOK_FASTCALL DoDamage(tCar_spec *pCar, tDamage_type pDamage_type, int pMagnitude) {
     tDamage_unit* damage_unit;
@@ -5283,6 +5475,9 @@ void C2_HOOK_FASTCALL DoDamage(tCar_spec *pCar, tDamage_type pDamage_type, int p
             damage_unit->damage_level = 99;
         }
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    C2LogDamageEvent(pCar, 'D', pDamage_type, pMagnitude, C2_DAMAGE_CALLER());
+#endif
     if (SetKnackeredFlag(pCar)) {
         return;
     }
@@ -5816,6 +6011,11 @@ record_twattage:
                 if (new_level > 99) {
                     new_level = 99;
                 }
+#ifndef CARPOCALYPSE2_MATCHING
+                if (new_level != pAttacker->damage_units[u].damage_level) {
+                    C2LogDamageEvent(pAttacker, 'x', u, new_level - pAttacker->damage_units[u].damage_level, NULL);
+                }
+#endif
                 pAttacker->damage_units[u].damage_level = new_level;
                 damage += new_level - pAttacker->damage_units[u].last_level;
             }
@@ -8241,7 +8441,7 @@ tU32 C2_HOOK_FASTCALL CastRayAgainstShape(const br_vector3* pRay_start, const br
 
 // FUNCTION: CARMA2_HW 0x0043f5f0
 void C2_HOOK_FASTCALL KnackerThisCar(tCar_spec* pCar) {
-
+#ifdef CARPOCALYPSE2_MATCHING
     if (pCar->invulnerable_no_wastage) {
         return;
     }
@@ -8269,6 +8469,37 @@ void C2_HOOK_FASTCALL KnackerThisCar(tCar_spec* pCar) {
         KillGroovadelic(pCar->index);
         KillFunkotronic(pCar->index);
     }
+#else
+    if (pCar->invulnerable_no_wastage) {
+        return;
+    }
+    if (gNet_mode == eNet_mode_client) {
+        return;
+    }
+    if (gNet_mode == eNet_mode_none && pCar != NULL && pCar->driver == eDriver_local_human) {
+        RaceCompleted(eRace_over_6);
+    }
+    pCar->knackered = 1;
+    C2LogDamageEvent(pCar, 'K', -1, 0, C2_DAMAGE_CALLER());
+    C2LogCarWasted(pCar, "KnackerThisCar");
+    QueueWastedMessage(pCar->index);
+    if (gNet_mode == eNet_mode_none) {
+        if (GetCarCount(eVehicle_opponent) != 0 && NumberOfOpponentsLeft() == 0) {
+            if (gCurrent_race.race_spec->race_type == kRaceType_Carma1
+                || gCurrent_race.race_spec->race_type == kRaceType_Cars) {
+                if (gCurrent_race.race_spec->race_type == kRaceType_Carma1) {
+                    NewTextHeadupSlot(4, 0, 5000, -4, GetMiscString(eMiscString_every_opponent_wasted));
+                }
+                RaceCompleted(eRace_over_2);
+            }
+        }
+    }
+    QueueOilSpill(pCar);
+    if (gNet_mode == eNet_mode_none) {
+        KillGroovadelic(pCar->index);
+        KillFunkotronic(pCar->index);
+    }
+#endif
 }
 
 // C2PORT-NONMATCHING: best 91.84% | difftest PASS 2000 trials (spec difftest/specs/0043f9f0_RecordLastDamage.json) | reason layout-copy-scalarization

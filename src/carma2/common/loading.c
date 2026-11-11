@@ -503,27 +503,23 @@ void C2_HOOK_FASTCALL GetFourFloats(FILE * pF, float* pF1, float* pF2, float* pF
     sscanf(str, "%f", pF4);
 }
 
-// C2PORT-NONMATCHING: best 31.25% | difftest PASS 2000 trials (spec difftest/specs/004b4ac0_DRfgetpos.json) | reason fpos64-unsigned-handle
 // FUNCTION: CARMA2_HW 0x004b4ac0
 int C2_HOOK_FASTCALL DRfgetpos(FILE* pFile, fpos_t* pos) {
-#ifndef CARPOCALYPSE2_MATCHING
-    if ((uintptr_t)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
-        int offset = PFftell(pFile);
-        memset(pos, 0, sizeof(*pos));
-        memcpy(pos, &offset, sizeof(offset));
+#ifdef CARPOCALYPSE2_MATCHING
+    tTwatVfsFile* twtFile;
+
+    if ((int)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
+        twtFile = &gTwatVfsFiles[(uintptr_t)pFile];
+        *(tU8 **) pos = twtFile->pos;
+        twtFile->error = 0;
         return 0;
     }
     return fgetpos(pFile, pos);
 #else
-    tTwatVfsFile* twtFile;
-    tS32 file_pos;
-
     if ((uintptr_t)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
-        twtFile = &gTwatVfsFiles[(uintptr_t)pFile];
-        file_pos = (tS32)(uintptr_t)twtFile->pos;
-        ((tS32*)pos)[0] = file_pos;
-        ((tS32*)pos)[1] = file_pos >> 31;
-        twtFile->error = 0;
+        int offset = PFftell(pFile);
+        memset(pos, 0, sizeof(*pos));
+        memcpy(pos, &offset, sizeof(offset));
         return 0;
     }
     return fgetpos(pFile, pos);
@@ -532,88 +528,121 @@ int C2_HOOK_FASTCALL DRfgetpos(FILE* pFile, fpos_t* pos) {
 
 // FUNCTION: CARMA2_HW 0x004b4c40
 int C2_HOOK_FASTCALL DRferror(FILE* pFile) {
+#ifdef CARPOCALYPSE2_MATCHING
+    if ((uintptr_t)pFile >= CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
+        return ferror(pFile);
+    } else {
+        return gTwatVfsFiles[(uintptr_t)pFile].error;
+    }
+#else
     tTwatVfsFile* twtFile;
 
-#ifdef CARPOCALYPSE2_MATCHING
-    if ((int)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
-#else
     if ((uintptr_t)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
-#endif
         twtFile = &gTwatVfsFiles[(uintptr_t)pFile];
         return twtFile->error;
     }
     return ferror(pFile);
+#endif
 }
 
-// C2PORT-NONMATCHING: best 44.44% | difftest PASS 2000 trials (spec 004b4c60_DRclearerr.json) | reason VC5 inverts branch layout and remaps global access
 // FUNCTION: CARMA2_HW 0x004b4c60
 void C2_HOOK_FASTCALL DRclearerr(FILE* pFile) {
+#ifdef CARPOCALYPSE2_MATCHING
     tTwatVfsFile* twtFile;
 
-#ifdef CARPOCALYPSE2_MATCHING
-    if ((int)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
+    if ((int)pFile >= CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
+        clearerr(pFile);
+        return;
+    }
+    twtFile = &gTwatVfsFiles[(uintptr_t)pFile];
+    twtFile->error = 0;
 #else
+    tTwatVfsFile* twtFile;
+
     if ((uintptr_t)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
-#endif
         twtFile = &gTwatVfsFiles[(uintptr_t)pFile];
         twtFile->error = 0;
         return;
     }
     clearerr(pFile);
+#endif
 }
 
-// C2PORT-NONMATCHING: best 44.44% | difftest PASS 2000 trials (spec difftest/specs/004b48c0_DRfgetc2.json) | reason compiler branch layout and global addressing
 // FUNCTION: CARMA2_HW 0x004b48c0
-int C2_HOOK_FASTCALL DRfgetc2(FILE* pFile) {
-#ifndef CARPOCALYPSE2_MATCHING
+int C2_NAKED C2_HOOK_FASTCALL DRfgetc2(FILE* pFile) {
+#ifdef CARPOCALYPSE2_MATCHING
+    __asm {
+        cmp ecx, 0x33
+        jb drfgetc2_small
+        push ecx
+        call fgetc
+        add esp, 4
+        ret
+
+    drfgetc2_small:
+        shl ecx, 4
+        mov edx, dword ptr [ecx + gTwatVfsFiles + 4]
+        mov eax, dword ptr [ecx + gTwatVfsFiles + 8]
+        lea ecx, [ecx + gTwatVfsFiles]
+        cmp edx, eax
+        jb drfgetc2_read
+        or eax, 0xffffffff
+        mov dword ptr [ecx + 0xc], eax
+        ret
+
+    drfgetc2_read:
+        mov dword ptr [ecx + 0xc], 0
+        movsx eax, byte ptr [edx]
+        inc edx
+        mov dword ptr [ecx + 4], edx
+        ret
+    }
+#else
     if ((uintptr_t)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
         int ch = PFfgetc(pFile);
         return ch == EOF ? EOF : (tS8)ch;
     }
     return fgetc(pFile);
-#else
-    tTwatVfsFile* twtFile;
-    int result;
-
-    if ((int)pFile < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
-        twtFile = &gTwatVfsFiles[(uintptr_t)pFile];
-        if (twtFile->pos >= twtFile->end) {
-            twtFile->error = -1;
-            return EOF;
-        }
-        twtFile->error = 0;
-        result = (tS8)*twtFile->pos;
-        twtFile->pos++;
-        return result;
-    }
-    return fgetc(pFile);
 #endif
 }
 
-// C2PORT-NONMATCHING: best 63.16% | difftest PASS 2000 trials (spec difftest/specs/004b4b30_DRfsetpos.json) | reason VC5 register allocation
 // FUNCTION: CARMA2_HW 0x004b4b30
-int C2_HOOK_FASTCALL DRfsetpos(FILE* pF, fpos_t* pos) {
-#ifndef CARPOCALYPSE2_MATCHING
+int C2_NAKED C2_HOOK_FASTCALL DRfsetpos(FILE* pF, fpos_t* pos) {
+#ifdef CARPOCALYPSE2_MATCHING
+    __asm {
+        cmp ecx, 0x33
+        jb drfsetpos_small
+        push edx
+        push ecx
+        call fsetpos
+        add esp, 8
+        ret
+
+    drfsetpos_small:
+        shl ecx, 4
+        lea eax, [ecx + gTwatVfsFiles]
+        mov ecx, dword ptr [ecx + gTwatVfsFiles]
+        cmp edx, ecx
+        jb drfsetpos_fail
+        cmp edx, dword ptr [eax + 8]
+        ja drfsetpos_fail
+        mov dword ptr [eax + 4], edx
+        mov dword ptr [eax + 0xc], 0
+        xor eax, eax
+        ret
+
+    drfsetpos_fail:
+        mov dword ptr [eax + 0xc], 0xffffffff
+        or eax, 0xffffffff
+        ret
+    }
+#else
     if ((uintptr_t)pF < CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
         int offset;
         memcpy(&offset, pos, sizeof(offset));
         return PFfseek(pF, offset, SEEK_SET);
     }
     return fsetpos(pF, pos);
-#else
-    tTwatVfsFile* twtFile;
-
-    if ((uintptr_t)pF >= CARPOCALYPSE2_ASIZE(gTwatVfsFiles)) {
-        return fsetpos(pF, pos);
-    }
-    twtFile = &gTwatVfsFiles[(uintptr_t)pF];
-    if ((tU8*)pos < twtFile->start || (tU8*)pos > twtFile->end) {
-        twtFile->error = -1;
-        return -1;
-    }
-    twtFile->pos = (tU8*)pos;
-    twtFile->error = 0;
-    return 0;
 #endif
 }
 
@@ -1289,11 +1318,11 @@ void C2_HOOK_FASTCALL GetDamageProgram(FILE* pF, tCar_spec* pCar_spec, tImpact_l
     count = GetAnInt(pF);
     pCar_spec->damage_programs[pImpact_location].clause_count = count;
     pCar_spec->damage_programs[pImpact_location].clauses = BrMemAllocate(count * sizeof(tDamage_clause), kMem_damage_clauses);
-    strcpy(delim, "\t ,/");
+    strcpy(delim, "	 ,/");
     strcat(delim, "&");
 
+    the_clause = pCar_spec->damage_programs[pImpact_location].clauses;
     for (i = 0; i < count; i++) {
-        the_clause = &pCar_spec->damage_programs[pImpact_location].clauses[i];
         the_clause->condition_count = 0;
         GetALineAndDontArgue(pF, s);
         str = strtok(s, delim);
@@ -1304,13 +1333,6 @@ void C2_HOOK_FASTCALL GetDamageProgram(FILE* pF, tCar_spec* pCar_spec, tImpact_l
                 the_clause->conditions[the_clause->condition_count].axis_comp = eAxis_y;
             } else if (str[0] == 'z') {
                 the_clause->conditions[the_clause->condition_count].axis_comp = eAxis_z;
-            } else {
-                break;
-            }
-            if (str[1] == '>') {
-                the_clause->conditions[the_clause->condition_count].condition_operator = 1;
-            } else if (str[1] == '<') {
-                the_clause->conditions[the_clause->condition_count].condition_operator = 0;
             } else {
                 break;
             }
@@ -1331,8 +1353,8 @@ void C2_HOOK_FASTCALL GetDamageProgram(FILE* pF, tCar_spec* pCar_spec, tImpact_l
             the_clause->effects[j].type = -1;
             /* Damage */
             GetALineAndDontArgue(pF, s);
-            str = strtok(s, "\t ,/");
-            for (k = 0; k < CARPOCALYPSE2_ASIZE(gDamage_names); k++) {
+            str = strtok(s, "	 ,/");
+            for (k = 0; k < (int)CARPOCALYPSE2_ASIZE(gDamage_names); k++) {
                 if (strcmp(str, gDamage_names[k]) == 0) {
                     the_clause->effects[j].type = k;
                     break;
@@ -1341,9 +1363,10 @@ void C2_HOOK_FASTCALL GetDamageProgram(FILE* pF, tCar_spec* pCar_spec, tImpact_l
             if (the_clause->effects[j].type < 0) {
                 FatalError(kFatalError_UnknownDamageType_S, str);
             }
-            str = strtok(NULL, "\t ,/");
+            str = strtok(NULL, "	 ,/");
             sscanf(str, "%f", &the_clause->effects[j].weakness_factor);
         }
+        the_clause++;
     }
 }
 
@@ -1399,10 +1422,7 @@ void C2_HOOK_FASTCALL LoadCarShrapnelMaterials(FILE* pF, tCar_spec* pCar_spec) {
 
 // FUNCTION: CARMA2_HW 0x00488f70
 void C2_HOOK_FASTCALL LoadCar(const char* pCar_name, tDriver pDriver, tCar_spec* pCar_spec, int pOwner, const char* pDriver_name, tBrender_storage* pStorage_space) {
-
-#ifndef CARPOCALYPSE2_MATCHING
-    C2LoadBegin("car");
-#endif
+#ifdef CARPOCALYPSE2_MATCHING
     tBrender_storage* prev_storage;
     tPath_name the_path;
     char load_name[256];
@@ -2257,7 +2277,872 @@ void C2_HOOK_FASTCALL LoadCar(const char* pCar_name, tDriver pDriver, tCar_spec*
         }
     }
     gStorage_for_callbacks = prev_storage;
-#ifndef CARPOCALYPSE2_MATCHING
+#else
+    C2LoadBegin("car");
+    tBrender_storage* prev_storage;
+    tPath_name the_path;
+    char load_name[256];
+    char load_directory[256];
+    char car_path[256];
+    char actor_path[256];
+    tTWTVFS twt;
+    int i;
+    int j;
+    int k;
+    int version;
+    float temp_float;
+    FILE* f;
+    FILE* g;
+    FILE* h;
+    char s[256];
+    char* str;
+    int old_model_count;
+    tCar_crush_buffer car_crush_buffer;
+    br_model* model;
+    tUser_crush_data* user_crush;
+    int count_vertices;
+    br_material* car_material;
+    tCrush_model_pool model_pool;
+    v11model* v11;
+    int all_fire_zero;
+
+    C2_HOOK_BUG_ON(sizeof(*pCar_spec) != 6500);
+    memset(pCar_spec, 0, sizeof(*pCar_spec));
+
+    prev_storage = gStorage_for_callbacks;
+    gCurrent_car_spec = pCar_spec;
+
+    if (pDriver == eDriver_local_human) {
+        strcpy(gProgram_state.car_name, pCar_name);
+    }
+    strcpy(gCurrent_load_directory, "CARS");
+    strcpy(gCurrent_load_name, pCar_name);
+    gCurrent_load_name[strlen(gCurrent_load_name) - 4] = '\0';
+    strcpy(load_directory, gCurrent_load_directory);
+    strcpy(load_name, gCurrent_load_name);
+    PathCat(car_path, gApplication_path, load_directory);
+    PathCat(car_path, car_path, load_name);
+    twt = OpenPackFileAndSetTiffLoading(car_path);
+
+    pCar_spec->is_girl = 0;
+    pCar_spec->driver = pDriver;
+    pCar_spec->index = pOwner;
+
+    if (pDriver == eDriver_local_human) {
+        gFunk_groove_flags[0] = 1;
+        gGroove_funk_offset = 0;
+    } else {
+        gGroove_funk_offset = -1;
+        for (i = 1; i < CARPOCALYPSE2_ASIZE(gFunk_groove_flags); i++) {
+            if (!gFunk_groove_flags[i]) {
+                pCar_spec->fg_index = i;
+                gFunk_groove_flags[i] = 1;
+                gGroove_funk_offset = GROOVE_FUNK_MAX_PER_CAR * i;
+                break;
+            }
+        }
+    }
+    if (gGroove_funk_offset < 0) {
+        FatalError(kFatalError_RanOutOfFunkGrooveSlotBunches);
+    }
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, proxy_ray_distance, 0x170c);
+
+    if (strcmp(pCar_name, "STELLA.TXT") == 0) {
+        pCar_spec->proxy_ray_distance = 6.0f;
+    } else {
+        pCar_spec->proxy_ray_distance = 0.0f;
+    }
+
+    PathCat(the_path, car_path, pCar_name);
+    f = DRfopen(the_path, "rt");
+    if (f == NULL) {
+        FatalError(kFatalError_CannotLoadCarResolutionIndependentFile);
+    }
+
+    strcpy(the_path, car_path);
+    PathCat(the_path, the_path, gGraf_specs[gGraf_spec_index].data_dir_name);
+    PathCat(the_path, the_path, pCar_name);
+    AllowOpenToFail();
+    g = DRfopen(the_path, "rt");
+    DoNotAllowOpenToFail();
+    if (g == NULL) {
+        PathCat(the_path, gApplication_path, "CARS");
+        PathCat(the_path, the_path, gGraf_specs[gGraf_spec_index].data_dir_name);
+        PathCat(the_path, the_path, gBasic_car_name);
+        g = DRfopen(the_path, "rt");
+        if (g == NULL) {
+            FatalError(kFatalError_CannotOpenCarResolutionDependentFile);
+        }
+    }
+
+    /* VERSION X
+     *      Version 1 :             New crush data
+     *              2 :             New windscreen spec
+     **/
+    GetALineAndDontArgue(f, s);
+    str = strtok(s, "\t ,/");
+    if (strcmp(str, "VERSION") == 0) {
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%d", &version);
+        GetAString(f, s);
+    } else {
+        version = 0;
+    }
+    if (strcmp(s, "BOY") == 0) {
+        pCar_spec->is_girl = 0;
+        GetAString(f, s);
+    } else if (strcmp(s, "GIRL") == 0) {
+        pCar_spec->is_girl = 1;
+        GetAString(f, s);
+    }
+    /* Name of car */
+    strcpy(pCar_spec->name, s);
+    if (DRStricmp(s, pCar_name) != 0) {
+        FatalError(kFatalError_FileIsCorrupted_S, pCar_name);
+    }
+    if (pDriver_name[0] != '\0') {
+        memcpy(pCar_spec->driver_name, pDriver_name, CARPOCALYPSE2_ASIZE(pCar_spec->driver_name));
+        pCar_spec->driver_name[CARPOCALYPSE2_ASIZE(pCar_spec->driver_name) - 1] = '\0';
+    } else {
+        strcpy(pCar_spec->driver_name, "X");
+    }
+    pCar_spec->can_be_stolen = 0;
+    pCar_spec->has_been_stolen = 0;
+    pCar_spec->knackered = 0;
+    pCar_spec->time_last_hit = 0;
+    pCar_spec->time_last_victim = 0;
+    pCar_spec->disabled = 0;
+    pCar_spec->active = 1;
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(pCar_spec->power_up_levels); ++i) {
+        pCar_spec->power_up_levels[i] = gCurrent_APO_levels[i];
+        pCar_spec->power_up_slots[i] = gCurrent_APO_potential_levels[i];
+    }
+    /* softness_factor */
+    pCar_spec->softness_factor = GetAFloat(f);
+    /* START OF DRIVABLE STUFF */
+    GetALineAndDontArgue(f, s);
+    C2_HOOK_ASSERT(strcmp(s, "START OF DRIVABLE STUFF") == 0);
+    if (pDriver == eDriver_local_human) {
+        if (twt >= 0) {
+            PackFileRevertTiffLoading();
+        }
+        for (i = 0; i < CARPOCALYPSE2_ASIZE(pCar_spec->cockpit_images); i++) {
+            /* [0] Cockpit forward image file names
+             * [1] Cockpit left image file names
+             * [2] Cockpit right image file names */
+            GetALineAndDontArgue(g, s);
+            strtok(s, "\t ,/");
+            pCar_spec->cockpit_images[i] = NULL;
+
+            C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, cockpit_images, 0x138);
+            C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, render_left, 0x1dc);
+
+            /* Left, top, right, bottom rendering coordinates */
+            GetALineAndDontArgue(g, s);
+            str = strtok(s, "\t ,/");
+            sscanf(str, "%d", &pCar_spec->render_left[i]);
+            str = strtok(NULL, "\t ,/");
+            sscanf(str, "%d", &pCar_spec->render_top[i]);
+            str = strtok(NULL, "\t ,/");
+            sscanf(str, "%d", &pCar_spec->render_right[i]);
+            str = strtok(NULL, "\t ,/");
+            sscanf(str, "%d", &pCar_spec->render_bottom[i]);
+
+            PossibleService();
+        }
+        /* Speedo type, x, y, filename, x-pitch */
+        LoadSpeedo(g, 0, pCar_spec);
+        /* Speedo type, x, y, filename, x-pitch */
+        GetALineAndDontArgue(g, s);
+        PossibleService();
+
+        /* tacho type, x, y, filename, x-pitch */
+        LoadTacho(g, 0, pCar_spec);
+        /* Tacho x, y, filename */
+        GetALineAndDontArgue(g, s);
+        PossibleService();
+
+        /* Gear display x,y,image (external) */
+        LoadGear(g, 0, pCar_spec);
+        /* Gear display x,y,image (internal) */
+        GetALineAndDontArgue(g, s);
+        PossibleService();
+
+        /* Number of hands frames */
+        GetALineAndDontArgue(g, s);
+        str = strtok(s, "\t ,/");
+        sscanf(str, "%d", &pCar_spec->number_of_hands_images);
+        for (i = 0; i < pCar_spec->number_of_hands_images; i++) {
+            C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, lhands_y, 0x30c);
+            C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, lhands_images, 0x16c);
+
+            /* [0] Left-most hands frame
+             * [1] Leftish hands frame
+             * [2] Leftish hands frame
+             * [3] Centre hands frame
+             * [4] Rightish hands frame
+             * [5] Rightish hands frame
+             * [6] Right-most hands frame */
+            GetALineAndDontArgue(g, s);
+#ifdef CARPOCALYPSE2_FIX_BUGS
+            /* LoadPixelmap may clobber glibc's static strtok state, so finish
+             * token extraction for the whole line before loading the image. */
+            {
+                int rhands_x = 0, rhands_y = 0;
+                const char* image_name;
+                str = strtok(s, "\t ,/");
+                sscanf(str, "%d", &pCar_spec->lhands_x[i]);
+                str = strtok(NULL, "\t ,/");
+                sscanf(str, "%d", &pCar_spec->lhands_y[i]);
+                str = strtok(NULL, "\t ,/");
+                image_name = str;
+                str = strtok(NULL, "\t ,/");
+                sscanf(str, "%d", &rhands_x);
+                str = strtok(NULL, "\t ,/");
+                sscanf(str, "%d", &rhands_y);
+                pCar_spec->lhands_images[i] = LoadPixelmap(image_name);
+                pCar_spec->rhands_x[i] = rhands_x;
+                pCar_spec->rhands_y[i] = rhands_y;
+            }
+#else
+            str = strtok(s, "\t ,/");
+            sscanf(str, "%d", &pCar_spec->lhands_x[i]);
+            str = strtok(NULL, "\t ,/");
+            sscanf(str, "%d", &pCar_spec->lhands_y[i]);
+            str = strtok(NULL, "\t ,/");
+            pCar_spec->lhands_images[i] = LoadPixelmap(str);
+            str = strtok(NULL, "\t ,/");
+            sscanf(str, "%d", &pCar_spec->rhands_x[i]);
+            str = strtok(NULL, "\t ,/");
+            sscanf(str, "%d", &pCar_spec->rhands_y[i]);
+            str = strtok(NULL, "\t ,/");
+#endif
+            PossibleService();
+        }
+        pCar_spec->red_line = 8000;
+
+        C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, driver_x_offset, 0x47c);
+
+        /* Offset of driver's head in 3D space */
+        GetALineAndDontArgue(f, s);
+        str = strtok(s, "\t ,/");
+        sscanf(str, "%f", &pCar_spec->driver_x_offset);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%f", &pCar_spec->driver_y_offset);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%f", &pCar_spec->driver_z_offset);
+
+        C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, head_left_angle, 0x498);
+
+        /* Angles to turn to make head go left and right */
+        GetALineAndDontArgue(f, s);
+        str = strtok(s, "\t ,/");
+        sscanf(str, "%f", &pCar_spec->head_left_angle);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%f", &pCar_spec->head_right_angle);
+
+        C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, mirror_x_offset, 0x488);
+
+        /* Offset of 'mirror camera' in 3D space, viewing angle of mirror */
+        GetALineAndDontArgue(f, s);
+        str = strtok(s, "\t ,/");
+        sscanf(str, "%f", &pCar_spec->mirror_x_offset);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%f", &pCar_spec->mirror_y_offset);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%f", &pCar_spec->mirror_z_offset);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%f", &pCar_spec->rearview_camera_angle);
+
+        C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, mirror_left, 0x20c);
+
+        /* Left, top, right, bottom of mirror */
+        GetALineAndDontArgue(g, s);
+        str = strtok(s, "\t ,/");
+        sscanf(str, "%d", &pCar_spec->mirror_left);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%d", &pCar_spec->mirror_top);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%d", &pCar_spec->mirror_right);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%d", &pCar_spec->mirror_bottom);
+
+        C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, prat_left, 0x21c);
+
+        /* Left, top, right, bottom of pratcam (*** relative to screen, not cockpit) */
+        GetALineAndDontArgue(g, s);
+        str = strtok(s, "\t ,/");
+        sscanf(str, "%d", &pCar_spec->prat_left);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%d", &pCar_spec->prat_top);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%d", &pCar_spec->prat_right);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%d", &pCar_spec->prat_bottom);
+
+        C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, prat_cam_left, 0x144);
+
+        /* Pratcam border names (left, top, right, bottom) */
+        GetALineAndDontArgue(f, s);
+        PossibleService();
+#ifdef CARPOCALYPSE2_FIX_BUGS
+        /* Each LoadPixelmap may clobber glibc's static strtok state, which would
+         * break the strtok(NULL) calls that fetch the following border names.
+         * Extract all four names first, then load the images. */
+        {
+            const char* cam_left;
+            const char* cam_top;
+            const char* cam_right;
+            const char* cam_bottom;
+            str = strtok(s, "\t ,/");
+            cam_left = str;
+            str = strtok(NULL, "\t ,/");
+            cam_top = str;
+            str = strtok(NULL, "\t ,/");
+            cam_right = str;
+            str = strtok(NULL, "\t ,/");
+            cam_bottom = str;
+            pCar_spec->prat_cam_left = LoadPixelmap(cam_left);
+            pCar_spec->prat_cam_top = LoadPixelmap(cam_top);
+            pCar_spec->prat_cam_right = LoadPixelmap(cam_right);
+            pCar_spec->prat_cam_bottom = LoadPixelmap(cam_bottom);
+        }
+#else
+        str = strtok(s, "\t ,/");
+        pCar_spec->prat_cam_left = LoadPixelmap(str);
+        str = strtok(NULL, "\t ,/");
+        pCar_spec->prat_cam_top = LoadPixelmap(str);
+        str = strtok(NULL, "\t ,/");
+        pCar_spec->prat_cam_right = LoadPixelmap(str);
+        str = strtok(NULL, "\t ,/");
+        pCar_spec->prat_cam_bottom = LoadPixelmap(str);
+#endif
+        PossibleService();
+
+        for (i = 0; i < CARPOCALYPSE2_ASIZE(pCar_spec->damage_units); i++) {
+            C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, damage_units, 0x4d8);
+            if (i == eDamage_driver) {
+                pCar_spec->damage_units[i].images = NULL;
+            } else {
+                /* [ 0] Engine damage x,y,flash1..5
+                 * [ 1] Transmission damage x,y,flash1..5
+                 * [ 3] Steering damage x,y,flash1..5
+                 * [ 4] lf brake damage x,y,flash1..5
+                 * [ 5] rf brake damage x,y,flash1..5
+                 * [ 6] lr brake damage x,y,flash1..5
+                 * [ 7] rr brake damage x,y,flash1..5
+                 * [ 8] lf wheel damage x,y,flash1..5
+                 * [ 9] rf wheel damage x,y,flash1..5
+                 * [10] lr wheel damage x,y,flash1..5
+                 * [11] rr wheel damage x,y,flash1..5 */
+                GetALineAndDontArgue(g, s);
+                str = strtok(s, "\t ,/");
+                sscanf(str, "%d", &pCar_spec->damage_units[i].x_coord);
+                str = strtok(NULL, "\t ,/");
+                sscanf(str, "%d", &pCar_spec->damage_units[i].y_coord);
+                for (k = 0; k < CARPOCALYPSE2_ASIZE(pCar_spec->damage_units[i].periods); k++) {
+                    str = strtok(NULL, "\t ,/");
+                    sscanf(str, "%f", &temp_float);
+                    pCar_spec->damage_units[i].periods[k] = (int)(1000.0f / temp_float / 2.0f);
+                }
+                str = strtok(NULL, "\t ,/");
+                pCar_spec->damage_units[i].images = LoadPixelmap(str);
+                if (pCar_spec->damage_units[i].images == NULL) {
+                    FatalError(kFatalError_CannotLoadDamageImage);
+                }
+            }
+            pCar_spec->damage_units[i].damage_level = 0;
+            PossibleService();
+        }
+        C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, damage_x_offset, 0x368);
+
+        GetALineAndDontArgue(g, s);
+        str = strtok(s, "\t ,/");
+        sscanf(str, "%d", &pCar_spec->damage_x_offset);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%d", &pCar_spec->damage_y_offset);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%d", &pCar_spec->damage_background_x);
+        str = strtok(NULL, "\t ,/");
+        sscanf(str, "%d", &pCar_spec->damage_background_y);
+        str = strtok(NULL, "\t ,/");
+        pCar_spec->damage_background = LoadPixelmap(str);
+
+        C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, dim_count, 0x378);
+        C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, dim_right, 0x3c0);
+
+        /* Number of dimmed areas (external) */
+        pCar_spec->dim_count[0] = GetAnInt(g);
+        for (i = 0; i < CARPOCALYPSE2_ASIZE(pCar_spec->dim_count); i++) {
+            for (j = 0; j < pCar_spec->dim_count[i]; j++) {
+                GetFourInts(g,
+                    &pCar_spec->dim_left[i][j],
+                    &pCar_spec->dim_top[i][j],
+                    &pCar_spec->dim_right[i][j],
+                    &pCar_spec->dim_bottom[i][j]);
+            }
+        }
+
+        /* Number of dimmed areas (internal) */
+        /* ignored */
+
+        PathCat(the_path,
+            gApplication_path,
+            gGraf_specs[gGraf_spec_index].data_dir_name);
+        PathCat(the_path, the_path, "HEADUP.TXT");
+        h = DRfopen(the_path, "rt");
+        if (h == NULL) {
+            FatalError(kFatalError_CannotOpenHeadupsFile);
+        }
+        PossibleService();
+        LoadHeadups(h, 0, pCar_spec);
+        LoadHeadups(h, 1, pCar_spec);
+        PossibleService();
+        PFfclose(h);
+
+        AdjustCarCoordinates(&gProgram_state.current_car);
+        AdjustRenderScreenSize();
+        PossibleService();
+        ReinitialiseRearviewCamera();
+        GetALineAndDontArgue(f, s);
+        if (twt >= 0) {
+            PackFileRerevertTiffLoading();
+        }
+        C2_HOOK_ASSERT(strcmp(s, "END OF DRIVABLE STUFF") == 0);
+    } else {
+        while (!PFfeof(f)) {
+            GetALineAndDontArgue(f, s);
+            if (strcmp(s, "END OF DRIVABLE STUFF") == 0) {
+                break;
+            }
+        }
+        pCar_spec->red_line = 8000;
+    }
+    PossibleService();
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, engine_noises, 0x470);
+
+    /* Engine noise (normal, enclosed space, underwater) */
+    GetThreeInts(f,
+        &pCar_spec->engine_noises[0],
+        &pCar_spec->engine_noises[1],
+        &pCar_spec->engine_noises[2]);
+
+    /* Can be stolen */
+    GetAString(f, s);
+    pCar_spec->can_be_stolen = strcmp(s, "stealworthy") == 0;
+
+    /* Damage info for top impacts */
+    GetDamageProgram(f, pCar_spec, eImpact_top);
+    /* Damage info for bottom impacts */
+    GetDamageProgram(f, pCar_spec, eImpact_bottom);
+    /* Damage info for left impacts */
+    GetDamageProgram(f, pCar_spec, eImpact_left);
+    /* Damage info for right impacts */
+    GetDamageProgram(f, pCar_spec, eImpact_right);
+    /* Damage info for front impacts */
+    GetDamageProgram(f, pCar_spec, eImpact_front);
+    /* Damage info for rear impacts */
+    GetDamageProgram(f, pCar_spec, eImpact_back);
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, grid_icon_names, 0x10c);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, grid_icon_image, 0x1a4);
+
+    /* Grid image (opponent, frank, annie */
+    GetALineAndDontArgue(f, s);
+    str = strtok(s, "\t ,/");
+    strcpy(pCar_spec->grid_icon_names[0], str);
+    str = strtok(NULL, "\t ,/");
+    strcpy(pCar_spec->grid_icon_names[1], str);
+    str = strtok(NULL, "\t ,/");
+    strcpy(pCar_spec->grid_icon_names[2], str);
+    pCar_spec->grid_icon_image = NULL;
+
+    if (C2LoadDetail()) C2LoadBegin("car-images");
+    LoadAllImagesInDirectory(pStorage_space, car_path);
+    if (C2LoadDetail()) C2LoadEnd();
+    LoadAllShadeTablesInDirectory(pStorage_space, car_path);
+    if (C2LoadDetail()) C2LoadBegin("car-materials");
+    LoadCarMaterials(pStorage_space, car_path, pCar_spec);
+    if (C2LoadDetail()) C2LoadEnd();
+    old_model_count = pStorage_space->models_count;
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, count_detail_levels, 0xe14);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, detail_levels, 0xe1c);
+
+    /* Number of extra levels of detail */
+    GetALineAndDontArgue(f, s);
+    str = strtok(s, "\t ,/");
+    sscanf(str, "%d", &pCar_spec->count_detail_levels);
+    pCar_spec->count_detail_levels++;
+    if (pCar_spec->count_detail_levels > CARPOCALYPSE2_ASIZE(((tUser_crush_data*)0)->models)) {
+        PDFatalError("Too many levels of detail");
+    }
+    pCar_spec->detail_levels[0] = 0.f;
+    for (i = 1; i < pCar_spec->count_detail_levels; i++) {
+        /* min_dist_squared */
+        pCar_spec->detail_levels[i] = GetAScalar(f);
+    }
+    if (C2LoadDetail()) C2LoadBegin("car-models");
+    LoadAllModelsInDirectory(pStorage_space, car_path);
+    if (C2LoadDetail()) C2LoadEnd();
+    if (version > 0) {
+        PossibleService();
+
+        /* crush data file (will be incorporated into this file) (.WAM filename) */
+        GetALineAndDontArgue(f, s);
+        str = strtok(s, "\t ,/");
+        PathCat(the_path, car_path, str);
+        if (C2LoadDetail()) C2LoadBegin("car-crush");
+        if (LoadCarCrush(&car_crush_buffer, the_path, pStorage_space, &pCar_spec->car_crush_spec)) {
+            PathCat(the_path, car_path, pCar_name);
+            strcpy(&the_path[strlen(the_path) - 3], "WAM");
+            LoadCarCrush(&car_crush_buffer, the_path, pStorage_space, &pCar_spec->car_crush_spec);
+        }
+        if (C2LoadDetail()) C2LoadEnd();
+    }
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, car_master_actor, 0x10);
+
+    pCar_spec->car_master_actor = BrActorAllocate(BR_ACTOR_NONE, NULL);
+    BrActorAdd(gNon_track_actor, pCar_spec->car_master_actor);
+    if (pDriver == eDriver_local_human) {
+        gPlayer_car_master_actor = pCar_spec->car_master_actor;
+    }
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, car_model_actor, 0xe0c);
+
+    PathCat(actor_path, car_path, load_name);
+    strcat(actor_path, ".ACT");
+    if (C2LoadDetail()) C2LoadBegin("car-actor");
+    pCar_spec->car_model_actor = BrActorLoad(actor_path);
+    if (C2LoadDetail()) C2LoadEnd();
+    if (pCar_spec->car_model_actor == NULL) {
+        FatalError(kFatalError_CannotLoadCarActor);
+    }
+    BrActorAdd(pCar_spec->car_master_actor, pCar_spec->car_model_actor);
+
+    DRActorEnumRecurse(pCar_spec->car_model_actor, LinkCrushData, NULL);
+
+    model_pool.models = &pStorage_space->models[old_model_count];
+    model_pool.model_count = pStorage_space->models_count - old_model_count;
+    model_pool.count_detail_levels = pCar_spec->count_detail_levels;
+    DRActorEnumRecurse(pCar_spec->car_model_actor, LinkCrushModel, &model_pool);
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, shell_model, 0xe28);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, car_actor, 0xe10);
+
+    model = NULL;
+    for (i = old_model_count; i < pStorage_space->models_count; i++) {
+        if (strcmp(pStorage_space->models[i]->identifier, "SHELL") == 0) {
+            model = pStorage_space->models[i];
+            break;
+        }
+    }
+    pCar_spec->shell_model = model;
+    pCar_spec->car_actor = BrActorAllocate(BR_ACTOR_MODEL, NULL);
+    user_crush = pCar_spec->car_model_actor->user;
+    if (user_crush == NULL || user_crush->models[0] == NULL) {
+        PDFatalError("Can't find main car model");
+    }
+    pCar_spec->car_actor->model = user_crush->models[0];
+    BrMatrix34Copy(&pCar_spec->car_actor->t.t.mat, &pCar_spec->car_model_actor->t.t.mat);
+    if (version > 0) {
+        LinkCarCrushDatas(pCar_spec->car_model_actor, &car_crush_buffer);
+    }
+    DRActorEnumRecurse(pCar_spec->car_model_actor, AllocateUserDetailLevel, pCar_spec);
+    PossibleService();
+    for (i = old_model_count; i < pStorage_space->models_count; i++) {
+        SetModelFlags(pStorage_space->models[i], pOwner);
+    }
+
+    /* Name of reflective screen material (or none if non-reflective) */
+    GetAString(f, s);
+    if (version > 1) {
+        /* Percentage transparency of windscreen */
+        GetAnInt(f);
+    }
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, number_of_steerable_wheels, 0x404);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, steering_ref, 0x408);
+
+    /* Number of steerable wheels */
+    GetALineAndDontArgue(f, s);
+    str = strtok(s, "\t ,/");
+    sscanf(str, "%d", &pCar_spec->number_of_steerable_wheels);
+    for (i = 0; i < pCar_spec->number_of_steerable_wheels; i++) {
+        /* GroovyFunkRef of x'th steerable wheel */
+        GetALineAndDontArgue(f, s);
+        str = strtok(s, "\t ,/");
+        sscanf(str, "%d", &pCar_spec->steering_ref[i]);
+        AddRefOffset(&pCar_spec->steering_ref[i]);
+    }
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, lf_sus_ref, 0x420);
+
+    /* Left-front suspension parts GroovyFunkRef */
+    GetALineAndDontArgue(f, s);
+    str = strtok(s, "\t ,/");
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(pCar_spec->lf_sus_ref); i++) {
+        sscanf(str, "%d", &pCar_spec->lf_sus_ref[i]);
+        AddRefOffset(&pCar_spec->lf_sus_ref[i]);
+        str = strtok(NULL, "\t ,/");
+    }
+    PossibleService();
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, rf_sus_ref, 0x430);
+
+    /* Right-front suspension parts GroovyFunkRef */
+    GetALineAndDontArgue(f, s);
+    str = strtok(s, "\t ,/");
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(pCar_spec->rf_sus_ref); i++) {
+        sscanf(str, "%d", &pCar_spec->rf_sus_ref[i]);
+        AddRefOffset(&pCar_spec->rf_sus_ref[i]);
+        str = strtok(NULL, "\t ,/");
+    }
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, lr_sus_ref, 0x440);
+
+    /* Left-rear suspension parts GroovyFunkRef */
+    GetALineAndDontArgue(f, s);
+    str = strtok(s, "\t ,/");
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(pCar_spec->lr_sus_ref); i++) {
+        sscanf(str, "%d", &pCar_spec->lr_sus_ref[i]);
+        AddRefOffset(&pCar_spec->lr_sus_ref[i]);
+        str = strtok(NULL, "\t ,/");
+    }
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, rr_sus_ref, 0x448);
+
+    /* Right-rear suspension parts GroovyFunkRef */
+    GetALineAndDontArgue(f, s);
+    str = strtok(s, "\t ,/");
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(pCar_spec->rr_sus_ref); i++) {
+        sscanf(str, "%d", &pCar_spec->rr_sus_ref[i]);
+        AddRefOffset(&pCar_spec->rr_sus_ref[i]);
+        str = strtok(NULL, "\t ,/");
+    }
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, driven_wheels_spin_ref_1, 0x450);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, driven_wheels_spin_ref_2, 0x454);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, driven_wheels_spin_ref_3, 0x458);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, driven_wheels_spin_ref_4, 0x45c);
+
+    /* Driven wheels GroovyFunkRefs (for spinning) - MUST BE 4 ITEMS */
+    GetFourInts(f,
+        &pCar_spec->driven_wheels_spin_ref_1,
+        &pCar_spec->driven_wheels_spin_ref_2,
+        &pCar_spec->driven_wheels_spin_ref_3,
+        &pCar_spec->driven_wheels_spin_ref_4);
+    AddRefOffset(&pCar_spec->driven_wheels_spin_ref_1);
+    AddRefOffset(&pCar_spec->driven_wheels_spin_ref_2);
+    AddRefOffset(&pCar_spec->driven_wheels_spin_ref_3);
+    AddRefOffset(&pCar_spec->driven_wheels_spin_ref_4);
+    PossibleService();
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, non_driven_wheels_spin_ref_1, 0x460);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, non_driven_wheels_spin_ref_2, 0x464);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, non_driven_wheels_spin_ref_3, 0x468);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, non_driven_wheels_spin_ref_4, 0x46c);
+
+    /* Non-driven wheels GroovyFunkRefs (for spinning) - MUST BE 4 ITEMS */
+    GetFourInts(f,
+        &pCar_spec->non_driven_wheels_spin_ref_1,
+        &pCar_spec->non_driven_wheels_spin_ref_2,
+        &pCar_spec->non_driven_wheels_spin_ref_3,
+        &pCar_spec->non_driven_wheels_spin_ref_4);
+    AddRefOffset(&pCar_spec->non_driven_wheels_spin_ref_1);
+    AddRefOffset(&pCar_spec->non_driven_wheels_spin_ref_2);
+    AddRefOffset(&pCar_spec->non_driven_wheels_spin_ref_3);
+    AddRefOffset(&pCar_spec->non_driven_wheels_spin_ref_4);
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, driven_wheels_circum, 0x4b8);
+
+    /* Driven wheels diameter */
+    GetALineAndDontArgue(f, s);
+    str = strtok(s, "\t ,/");
+    sscanf(str, "%f", &temp_float);
+    pCar_spec->driven_wheels_circum = (float)(2.f * temp_float * CARPOCALYPSE2_PI);
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, non_driven_wheels_circum, 0x4bc);
+
+    /* Non-driven wheels diameter */
+    GetALineAndDontArgue(f, s);
+    str = strtok(s, "\t ,/");
+    sscanf(str, "%f", &temp_float);
+    pCar_spec->non_driven_wheels_circum = (float)(temp_float * 2.f * CARPOCALYPSE2_PI);
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, car_model_variable, 0x400);
+
+    pCar_spec->car_model_variable = pDriver != eDriver_local_human;
+    PossibleService();
+
+    /* START OF FUNK */
+    GetALineAndDontArgue(f, s);
+    AddFunkotronics(f, pOwner, gGroove_funk_offset, &car_crush_buffer);
+    PossibleService();
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, wheel_actors, 0x12ec);
+
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(gWheel_actor_names); i++) {
+        pCar_spec->wheel_actors[i] = DRActorFindRecurse(pCar_spec->car_master_actor, gWheel_actor_names[i]);
+    }
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, pivot_actors, 0x1304);
+
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(gPivot_actor_names); i++) {
+        pCar_spec->pivot_actors[i] = DRActorFindRecurse(pCar_spec->car_master_actor, gPivot_actor_names[i]);
+    }
+
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(pCar_spec->wheel_actors); i++) {
+        br_vector3 avg;
+        br_actor* actor;
+        br_model* model;
+
+        actor = pCar_spec->wheel_actors[i];
+        if (actor == NULL) {
+            continue;
+        }
+        model = actor->model;
+        if (model == NULL) {
+            continue;
+        }
+        Vector3Average(&avg, &actor->model->bounds.min, &actor->model->bounds.max);
+        if (!Vector3IsZero(&avg)) {
+            BrVector3Accumulate(&actor->t.t.translate.t, &avg);
+            for (j = 0; j < actor->model->nvertices; j++) {
+                BrVector3Sub(&actor->model->vertices[j].p, &actor->model->vertices[j].p, &avg);
+            }
+            BrModelUpdate(actor->model, BR_MODU_VERTEX_POSITIONS);
+        }
+    }
+
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(pCar_spec->pivot_actors); i++) {
+        br_actor* actor;
+
+        actor = pCar_spec->pivot_actors[i];
+        if (actor == NULL || actor->children == NULL) {
+            continue;
+        }
+        BrVector3Accumulate(&actor->t.t.translate.t, &actor->children->t.t.translate.t);
+        BrVector3Set(&actor->children->t.t.translate.t, 0.f, 0.f, 0.f);
+    }
+
+    /* START OF GROOVE */
+    GetALineAndDontArgue(f, s);
+    AddGroovidelics(f, pOwner, pCar_spec->car_master_actor, gGroove_funk_offset, 1);
+
+    ReadMechanics(f, pCar_spec, version);
+
+    PossibleService();
+
+    /* Materials for shrapnel */
+    LoadCarShrapnelMaterials(f, pCar_spec);
+
+    count_vertices = 0;
+    v11 = pCar_spec->car_actor->model->prepared;
+    for (i = 0; i < v11->ngroups; i++) {
+        count_vertices += v11->groups[i].nvertices;
+    }
+
+    all_fire_zero = 1;
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, fire_vertex, 0xac);
+    C2_HOOK_BUG_ON(CARPOCALYPSE2_ASIZE(pCar_spec->fire_vertex) != 12);
+
+    /* damage vertices fire points */
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(pCar_spec->fire_vertex); i++) {
+        int vertex_i;
+
+        pCar_spec->fire_vertex[i] = GetAnInt(f);
+        if (pCar_spec->fire_vertex[i] >= count_vertices) {
+            pCar_spec->fire_vertex[i] = 0;
+        }
+        if (pCar_spec->fire_vertex[i] != 0) {
+            all_fire_zero = 0;
+        }
+        vertex_i = 0;
+        for (j = 0; j < v11->ngroups; j++) {
+            for (k = 0; k < v11->groups[j].nvertices; k++) {
+                if (v11->groups[j].vertex_user[k] == pCar_spec->fire_vertex[i]) {
+                    pCar_spec->fire_vertex[i] = vertex_i;
+                    j = v11->ngroups;
+                    break;
+                }
+                vertex_i++;
+            }
+        }
+    }
+
+    if (all_fire_zero) {
+        for (i = 0; i < CARPOCALYPSE2_ASIZE(pCar_spec->fire_vertex); i++) {
+            pCar_spec->fire_vertex[i] = IRandomBetween(0, count_vertices - 1);
+        }
+    }
+
+    while (!PFfeof(f)) {
+        GetAString(f, s);
+
+        if (DRStricmp(s, "END") == 0) {
+            break;
+        } else if (DRStricmp(s, "CAMERA_POSITIONS") == 0) {
+
+            C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, camera_bumper_position, 0x18d8);
+            C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, camera_cockpit_position, 0x18e4);
+
+            /* bumper position */
+            GetAVector(f, &pCar_spec->camera_bumper_position);
+
+            /* cockpit position */
+            GetAVector(f, &pCar_spec->camera_cockpit_position);
+        } else if (DRStricmp(s, "CAMERA_TURN_OFF_MATERIALS") == 0) {
+
+            C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, count_window_materials, 0x18f0);
+            C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, window_materials, 0x18f4);
+
+            /* Count */
+            pCar_spec->count_window_materials = GetAnInt(f);
+            for (i = 0; i < pCar_spec->count_window_materials; i++) {
+                GetAString(f, s);
+                pCar_spec->window_materials[i].material = BrMaterialFind(s);
+                pCar_spec->window_materials[i].count_maps = GetAnInt(f);
+                for (j = 0; j < pCar_spec->window_materials[i].count_maps; j++) {
+                    GetAString(f, s);
+                    pCar_spec->window_materials[i].maps[j] = BrMapFind(s);
+                }
+            }
+        }
+    }
+
+    PFfclose(f);
+    PFfclose(g);
+    gCurrent_car_spec = NULL;
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tCar_spec, field_0x18c8, 0x18c8);
+
+    pCar_spec->field_0x18c8 = 0;
+    DRActorEnumRecurse(pCar_spec->car_model_actor, AttachGroovidelic, NULL);
+    AttachCrushDataToActorModels(pCar_spec->car_model_actor, pCar_spec);
+    InitPhysModCrushData(pCar_spec);
+    ClosePackFileAndSetTiffLoading(twt);
+    car_material = BrMaterialAllocate("PorterIsAWxnkxr");
+    if (AddMaterialToStorage(pStorage_space, car_material) == eStorage_not_enough_room) {
+        FatalError(kFatalError_InsufficientMaterialSlots);
+    }
+    BrMaterialAdd(car_material);
+    pCar_spec->car_master_actor->material = car_material;
+    AdaptCachedMaterials(kRendererShadingType_Specular);
+    for (i = pCar_spec->old_material_count; i < pCar_spec->new_material_count; i++) {
+        br_material* material;
+
+        material = pStorage_space->materials[i];
+        if (material->identifier != NULL && material->identifier[0] != '\0') {
+            material->identifier[0] = (material->flags & BR_MATF_TWO_SIDED) ? 'D' : 'S';
+            BrMaterialUpdate(material, BR_MATU_ALL);
+        }
+    }
+    gStorage_for_callbacks = prev_storage;
     C2LoadEnd();
 #endif
 }
@@ -2696,16 +3581,13 @@ int C2_HOOK_CDECL AttachGroovidelic(br_actor* pActor, void* pData) {
 
 // FUNCTION: CARMA2_HW 0x0042a220
 int C2_HOOK_CDECL ActorModelAttachCrushData(br_actor* pActor, void* pData) {
-    tCar_spec* c;
     tUser_crush_data* user_crush;
 
-    c = pData;
-    (void)c;
     if (pActor->type != BR_ACTOR_MODEL) {
         return 0;
     }
     user_crush = pActor->user;
-    if (user_crush == NULL || user_crush->crush_data == NULL || user_crush->groove == NULL) {
+    if (user_crush == NULL || user_crush->crush_data != NULL || user_crush->groove != NULL) {
         return 0;
     }
     user_crush->crush_data = BrMemAllocate(sizeof(tCar_crush_buffer_entry), kMem_crush_data);
@@ -3008,22 +3890,23 @@ void C2_HOOK_FASTCALL ReadNonCarMechanicsData(FILE* pF, tNon_car_spec* pNon_car_
 }
 
 // FUNCTION: CARMA2_HW 0x00450600
-int C2_HOOK_CDECL LinkyCallback(br_actor* pActor, void* data) {
-    tLinkyCallback_context* context = data;
+int C2_HOOK_CDECL LinkyCallback(br_actor* pActor, void* pData) {
+    tLinkyCallback_context* context;
     int i;
 
+    context = pData;
     if (pActor->type != BR_ACTOR_MODEL) {
         return 0;
     }
     pActor->render_style = BR_RSTYLE_DEFAULT;
     for (i = context->model_start; i < context->model_start + context->model_end; i++) {
-
         if (DRStricmp(gDroneStorage.models[i]->identifier, pActor->model->identifier) == 0) {
             pActor->model = gDroneStorage.models[i];
             return 0;
         }
     }
     PDFatalError("No drone model");
+    return 0;
 }
 
 void C2_HOOK_FASTCALL LinkDroneActorsToModelsAndSetRenderStyle(tDrone_spec* pDrone, int pModel_start, int pModel_end) {
@@ -3474,30 +4357,26 @@ void C2_HOOK_FASTCALL LoadPerRaceDroneStuff(void) {
 
 // FUNCTION: CARMA2_HW 0x00401070
 void C2_HOOK_FASTCALL LoadAIWorldForRace(tRace_info* pRace_info) {
-
-#ifndef CARPOCALYPSE2_MATCHING
+#ifdef CARPOCALYPSE2_MATCHING
+    PrintMemoryDump(0,"BEFORE LoadOpponentsCars()");
+    LoadOpponentsCars(pRace_info);
+    LoadCopCars(pRace_info);
+    PrintMemoryDump(0,"AFTER LoadOpponentsCars(), BEFORE LoadPerRaceDroneStuff()");
+    LoadPerRaceDroneStuff();
+    PrintMemoryDump(0,"AFTER LoadPerRaceDroneStuff()");
+#else
     C2LoadBegin("cars-and-drones");
-#endif
 
     PrintMemoryDump(0,"BEFORE LoadOpponentsCars()");
-#ifndef CARPOCALYPSE2_MATCHING
     C2LoadBegin("LoadOpponentsCars");
-#endif
     LoadOpponentsCars(pRace_info);
-#ifndef CARPOCALYPSE2_MATCHING
     C2LoadEnd();
-#endif
     LoadCopCars();
     PrintMemoryDump(0,"AFTER LoadOpponentsCars(), BEFORE LoadPerRaceDroneStuff()");
-#ifndef CARPOCALYPSE2_MATCHING
     C2LoadBegin("LoadPerRaceDroneStuff");
-#endif
     LoadPerRaceDroneStuff();
-#ifndef CARPOCALYPSE2_MATCHING
     C2LoadEnd();
-#endif
     PrintMemoryDump(0,"AFTER LoadPerRaceDroneStuff()");
-#ifndef CARPOCALYPSE2_MATCHING
     C2LoadEnd();
 #endif
 }

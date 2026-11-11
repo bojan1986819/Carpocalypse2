@@ -13,6 +13,7 @@
 #include <brassert.h>
 #include <brfont.h>
 #include <string.h>
+#include <stdlib.h>
 
 /*
  * Default dispatch table for device (defined at end of file)
@@ -610,7 +611,20 @@ br_error BREND_CMETHOD_DECL(BREND_CLASS(br_device_pixelmap_), directLock)(br_dev
     self->pm_pixels = root->asBack.lockedPixels;
     self->pm_row_bytes = root->pm_width * 2;
     self->asBack.locked = 1;
-    root->asBack.possiblyDirty = 1;
+    GLBackMarkDirty(self); /* backbuf.c */
+#ifdef __vita__
+    if (getenv("C2_TEST_LOCKLOG") != NULL) {
+        /* test: which pixelmaps the game locks (root or a sub-pixelmap, and its rectangle) */
+        static int logged;
+        extern unsigned C2VitaPerfActiveMask(void);
+        extern void C2VitaLog(const char* format, ...);
+        if (logged++ < 400) {
+            C2VitaLog("TEST LOCK self=%p root=%p sub=%d base=%d,%d size=%dx%d scopes=0x%x ret=%p\n", (void*)self, (void*)root,
+                self != root, self->pm_base_x, self->pm_base_y, self->pm_width, self->pm_height, C2VitaPerfActiveMask(),
+                __builtin_return_address(0));
+        }
+    }
+#endif
     return BRE_OK;
 }
 

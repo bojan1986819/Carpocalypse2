@@ -1,4 +1,5 @@
 #include "loadtif.h"
+#include "loadprof.h"
 
 #include "loading1.h"
 #include "utility.h"
@@ -21,7 +22,6 @@ extern const char* carpocalypse2_fix_path_case(const char* pPath);
 #include <sys/types.h>
 #include <sys/stat.h>
 
-// C2PORT-NONMATCHING: best 34.50% | difftest PASS 2000 trials (spec difftest/specs/00485130_LoadTiffPixelmap.json) | reason vc5-stack-register-codegen
 // FUNCTION: CARMA2_HW 0x00485130
 br_pixelmap* C2_HOOK_FASTCALL LoadTiffPixelmap(const char* path, int flags) {
     TIFF* tif;
@@ -276,6 +276,7 @@ int C2_HOOK_FASTCALL CheckPixOutdated(const char* pDirectory, const char* pStem,
 
 // FUNCTION: CARMA2_HW 0x00485750
 br_pixelmap* C2_HOOK_FASTCALL LoadTiffTexture_Ex2(const char* pDirectory, const char* pFile_stem, br_pixelmap* pPalette, int pFlags, int* pError_code, int pTiff_palette) {
+#ifdef CARPOCALYPSE2_MATCHING
     tPath_name tif_path;
     tPath_name pix_path;
     tPath_name pix_path_target;
@@ -367,6 +368,114 @@ br_pixelmap* C2_HOOK_FASTCALL LoadTiffTexture_Ex2(const char* pDirectory, const 
         *pError_code = 0;
     }
     return pm;
+#else
+    tPath_name tif_path;
+    tPath_name pix_path;
+    tPath_name pix_path_target;
+    tPath_name save_pix_dir_path;
+    tPath_name save_dir_path;
+    tPath_name save_file_path;
+    int pix_path_is_link;
+    int tif_path_is_link;
+    int pix_exists;
+    int tif_exists;
+    br_pixelmap* pm;
+    br_pixelmap* pal;
+    br_filesystem* original_filesystem;
+
+    sprintf(tif_path, "%s%s%s%s%s%s", pDirectory, gDir_separator, pTiff_palette ? "TIFFX" : "TIFFRGB", gDir_separator, pFile_stem, ".TIF");
+    sprintf(pix_path, "%s%s%s%s%s%s", pDirectory, gDir_separator, (pFlags & kLoadTextureFlags_16bbp) ? "PIX16" : "PIX8", gDir_separator, pFile_stem, ".PIX");
+    unsigned long long note_t = C2LoadDetail() ? C2LoadMicros() : 0;
+#define TIF_NOTE(name) do { if (C2LoadDetail()) { unsigned long long now_ = C2LoadMicros(); C2LoadNote(name, now_ - note_t); note_t = now_; } } while (0)
+    tif_path_is_link = ReadFileLink(tif_path, tif_path);
+    pix_path_is_link = ReadFileLink(pix_path_target, pix_path);
+    TIF_NOTE("tex-links");
+    tif_exists = IsValidFile(tif_path);
+    pix_exists = IsValidFile(pix_path_is_link ? pix_path_target : pix_path);
+    TIF_NOTE("tex-exists");
+
+    if (pTiff_palette && pix_exists && !tif_exists) {
+        if (CheckPixOutdated(pDirectory, pFile_stem, pix_path_is_link ? pix_path_target : pix_path)) {
+            return 0;
+        }
+    }
+    if (!tif_exists || (((pFlags & kLoadTextureFlags_16bbp) || pTiff_palette) && !(pFlags & kLoadTextureFlags_ForceTiff) && pix_exists && (br_uint_32)GetLastModificationTime(pix_path_is_link ? pix_path_target : pix_path) >= (br_uint_32)GetLastModificationTime(tif_path))) {
+        TIF_NOTE("tex-mtimes");
+
+        if (pix_exists && ((pFlags & kLoadTextureFlags_16bbp) || pTiff_palette)) {
+            original_filesystem = BrFilesystemSet(&gZlib_filesystem);
+            pm = BrPixelmapLoad(pix_path_is_link ? pix_path_target : pix_path);
+            BrFilesystemSet(original_filesystem);
+            TIF_NOTE("tex-pixload");
+            *pError_code = (pm != NULL) ? 0 : 3;
+            return pm;
+        } else {
+            *pError_code = 1;
+            return NULL;
+        }
+    }
+
+    unsigned long long note_start = C2LoadDetail() ? C2LoadMicros() : 0;
+    if (pTiff_palette) {
+        pm = LoadTiff8bit(tif_path, pFlags, pError_code);
+    } else if (pFlags & kLoadTextureFlags_16bbp) {
+        pm = LoadTiff16bit(tif_path, pFlags, pError_code);
+        if (C2LoadDetail()) C2LoadNote("tiff-decode16", C2LoadMicros() - note_start);
+    } else {
+        pal = pPalette;
+        if (pPalette == NULL) {
+            pal = LoadDefaultPalette(pDirectory, pFlags, pError_code);
+            if (pal == NULL) {
+                pm = LoadTiff16bit(tif_path, pFlags, pError_code);
+                if (pm != NULL) {
+                    *pError_code = 0;
+                }
+                return pm;
+            }
+        }
+        pm = LoadTiffUsingPalette(tif_path, pal, pFlags, pError_code);
+        if (pm != NULL && (pFlags & kLoadTextureFlags_KeepShadeTable)) {
+            pm->map = pal;
+            if (pPalette == NULL) {
+                BrResAdd(pm, pal);
+            }
+        } else {
+            if (pPalette == NULL) {
+                BrPixelmapFree(pal);
+            }
+        }
+    }
+    if (pm != NULL && (pFlags & kLoadTextureFlags_SaveBrenderTexture)) {
+#ifdef __vita__
+        {
+            /* the save below adds a directory and a file IsValidFile may have listed */
+            extern void C2VitaStatCacheInvalidate(void);
+            C2VitaStatCacheInvalidate();
+        }
+#endif
+        if (!pix_path_is_link) {
+            sprintf(save_pix_dir_path, "%s%s%s", pDirectory, gDir_separator, (pFlags & kLoadTextureFlags_16bbp) ? "PIX16" : "PIX8");
+            PDmkdir(save_pix_dir_path);
+            if (tif_path_is_link && !pix_exists) {
+                BuildPathWithDirAndSuffix(save_dir_path, save_file_path, tif_path, (pFlags & kLoadTextureFlags_16bbp) ? "PIX16" : "PIX8", ".TIF", ".PIX");
+                PDmkdir(save_dir_path);
+                WriteFileLink(save_file_path, pix_path);
+                pix_path_is_link = 1;
+            }
+        }
+        if (!(pFlags & kLoadTextureFlags_SaveTextureCompressed)) {
+            original_filesystem = BrFilesystemSet(&gZlib_filesystem);
+        }
+        BrPixelmapSave(pix_path_is_link ? pix_path_target : pix_path, pm);
+        if (!(pFlags & kLoadTextureFlags_SaveTextureCompressed)) {
+            BrFilesystemSet(original_filesystem);
+        }
+    }
+    if (pm != NULL) {
+        *pError_code = 0;
+    }
+    return pm;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004856c0
@@ -405,6 +514,19 @@ int C2_HOOK_FASTCALL ReadFileLink(char* pDest, const char* pPath) {
     size_t len;
     char c;
 
+#ifdef __vita__
+    {
+        /* port: most candidates do not exist, and the rest are the images themselves: a link is
+         * one short line of text (the game writes one only for a linked TIFF; the data has none).
+         * The directory listing answers both without opening the file. */
+        extern int C2VitaStatCached(const char* pPath, unsigned* pMtime, unsigned* pSize);
+        unsigned size;
+        int cached = C2VitaStatCached(pPath, NULL, &size);
+        if ((cached == 0 || (cached == 1 && size > 1024)) && !PFIsInMountedPack(pPath)) {
+            return 0;
+        }
+    }
+#endif
     f = DRfopen(pPath, "rt");
     if (f == NULL) {
         return 0;
@@ -469,15 +591,14 @@ int C2_HOOK_FASTCALL WriteFileLink(const char* pLink_dest, const char* pLink_sou
 
     i = 0;
     strcpy(s, pLink_dest);
-    for (ptr = strstr(s, "DATA") + 5; *ptr != '\0'; i++, ptr++) {
+    for (ptr = strstr(s, "DATA") + 5; *ptr != '\0'; ptr++) {
 
-        if (*ptr == '\\') {
-            rel_dest[i] = *ptr;
-        } else if (*ptr < '\\' && *ptr == ':') {
+        if (*ptr == ':' || *ptr == '\\') {
             rel_dest[i] = '\\';
         } else {
             rel_dest[i] = *ptr;
         }
+        i++;
     }
     rel_dest[i] = '\0';
     f = DRfopen(pLink_source, "wt");

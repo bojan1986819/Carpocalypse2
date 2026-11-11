@@ -2,11 +2,79 @@
 #include "vita_perf.h"
 #include <SDL3/SDL.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <psp2/kernel/threadmgr.h>
 static Uint64 starts[C2VP_COUNT], elapsed[C2VP_COUNT], frame_start;
 static unsigned depths[C2VP_COUNT], frame;
 int C2VitaPerfDetail;
 static unsigned counters[C2VPC_COUNT];
 void C2VitaPerfCount(unsigned counter) { if (counter < C2VPC_COUNT) counters[counter]++; }
+
+int C2VitaTestFrozen(unsigned pRace_ms) {
+    static int freeze_ms = -1;
+    if (freeze_ms < 0) freeze_ms = getenv("C2_TEST_FREEZE") != NULL ? atoi(getenv("C2_TEST_FREEZE")) * 1000 : 0;
+    return freeze_ms > 0 && pRace_ms > (unsigned)freeze_ms && pRace_ms < 0x80000000u;
+}
+
+/* In-run A/B (C2_TEST_AB=<feature>): the named feature is switched on and off every 120-frame
+ * FPS window (logged as ab=0/1), so both variants see the same frozen scene. */
+int C2VitaAB;
+const char* C2VitaABName(void) {
+    static int read;
+    static const char* name;
+    if (!read) {
+        read = 1;
+        name = getenv("C2_TEST_AB");
+    }
+    return name;
+}
+int C2VitaABFeature(const char* pFeature, int pDefault) {
+    const char* name = C2VitaABName();
+    if (name != NULL && strcmp(name, "all61") == 0 && (strcmp(pFeature, "uboskip") == 0 || strcmp(pFeature, "cleanflush") == 0 || strcmp(pFeature, "flagskip") == 0)) {
+        return C2VitaAB; /* the 00.61 overlay/uniform savings together */
+    }
+    return name != NULL && strcmp(name, pFeature) == 0 ? C2VitaAB : pDefault;
+}
+
+volatile unsigned char C2VitaPhase = 255;
+unsigned char C2VitaPhaseStack[32];
+int C2VitaPhaseDepth;
+static SDL_Thread* sampler_thread;
+static SDL_AtomicInt sampler_stop;
+static unsigned sample_hist[256], sample_total;
+static int SDLCALL sampler_main(void* unused) {
+    (void)unused;
+    sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), 0x40000); /* user core 2 */
+    while (!SDL_GetAtomicInt(&sampler_stop)) {
+        sceKernelDelayThread(100);
+        sample_hist[C2VitaPhase]++;
+        sample_total++;
+    }
+    return 0;
+}
+unsigned C2VitaActorCounts[4], C2VitaNonTrackActors;
+static void sampler_log(void) {
+    static const char* const names[] = { "input", "ai", "ped", "physics", "render", "sky", "shadows", "world", "hud", "present",
+        "tint", "damage", "apo", "hud_scene", "hud_geometry", "hud_redraw", "rays", "g_lookup", "g_render", "g_updatemodel", "g_statecopy",
+        "g_props", "g_ubo", "g_draw", "g_actors", "g_model", "g_overlay", "g_transp",
+        "p_fill", "p_cull", "p_tex", "p_texparam", "p_blend", "p_depth", "a_push", "a_onscreen", "a_pop", "w_begin", "w_track", "w_nontrack", "w_limbs", "w_effects", "w_end", "h_dim", "h_headups", "h_instruments", "h_powerups", "h_map", "h_pipe", "w_batchcheck", "w_batchadd", "m_copy", "m_overlays", "m_rotate", "m_markers", "m_status", "h_test", "h_stoppre", "h_stoppost", "t_map", "t_mat", "o_pre", "o_cargfx", "o_net", "o_camera", "o_carmunge", "o_headups", "o_effects", "o_skids", "o_glass", "o_lod" };
+    char line[900];
+    int at = 0;
+    unsigned i, total = sample_total;
+    if (sampler_thread == NULL || total == 0) return;
+    for (i = 0; i < 256; i++) {
+        if (sample_hist[i] * 200u >= total && at < (int)sizeof(line) - 40) { /* phases with >= 0.5% */
+            at += snprintf(line + at, sizeof(line) - at, " %s=%u.%u%%", i < sizeof(names) / sizeof(names[0]) ? names[i] : (i == 255 ? "other" : "?"),
+                sample_hist[i] * 100u / total, sample_hist[i] * 1000u / total % 10);
+        }
+    }
+    { extern void C2VitaLog(const char* format, ...); C2VitaLog("VITA SAMPLE n=%u%s\n", total, line);
+      C2VitaLog("VITA ACTORS per frame: walked=%u models=%u identity=%u batch_skipped=%u non_track=%u\n", C2VitaActorCounts[0] / 600, C2VitaActorCounts[1] / 600, C2VitaActorCounts[2] / 600, C2VitaActorCounts[3] / 600, C2VitaNonTrackActors / 600); C2VitaNonTrackActors = 0;
+      memset(C2VitaActorCounts, 0, sizeof(C2VitaActorCounts)); }
+    memset(sample_hist, 0, sizeof(sample_hist));
+    sample_total = 0;
+}
 /* The monitor never calls GL or inspects a heap that may itself be stuck.
  * Atomics publish only the current main-thread frame, scope mask and heartbeat. */
 static SDL_Thread* watchdog_thread;
@@ -82,6 +150,10 @@ void C2VitaPerfReset(void) {
     SDL_SetAtomicInt(&watchdog_armed, 1);
     if (!watchdog_attempted) {
         watchdog_attempted = 1;
+        if (getenv("C2_TEST_SAMPLER") != NULL && sampler_thread == NULL) {
+            SDL_SetAtomicInt(&sampler_stop, 0);
+            sampler_thread = SDL_CreateThread(sampler_main, "C2 sampler", NULL);
+        }
         SDL_SetAtomicInt(&watchdog_stop, 0);
         watchdog_thread = SDL_CreateThread(watchdog_main, "C2 stall monitor", NULL);
         if (!watchdog_thread) {
@@ -91,6 +163,7 @@ void C2VitaPerfReset(void) {
     }
 }
 void C2VitaPerfBegin(unsigned scope) {
+    C2VitaPhasePush(scope);
     if (scope < C2VP_COUNT && depths[scope]++ == 0) {
         starts[scope] = SDL_GetTicksNS();
         watchdog_mask |= 1u << scope;
@@ -98,6 +171,7 @@ void C2VitaPerfBegin(unsigned scope) {
     }
 }
 void C2VitaPerfEnd(unsigned scope) {
+    C2VitaPhasePop();
     if (scope < C2VP_COUNT && depths[scope] && --depths[scope] == 0) {
         Uint64 now = SDL_GetTicksNS();
         elapsed[scope] += now - starts[scope];
@@ -109,6 +183,7 @@ void C2VitaPerfFinish(void) {
     Uint64 total = SDL_GetTicksNS() - frame_start;
     SDL_SetAtomicInt(&watchdog_armed, 0);
     extern void C2VitaLog(const char* format, ...);
+    if ((frame + 1) % 600 == 0) sampler_log();
     if (++frame <= 30 || frame % 600 == 0)
         C2VitaLog("VITA CPU frame=%u total_us=%llu input_us=%llu ai_us=%llu ped_us=%llu physics_us=%llu render_us=%llu sky_us=%llu shadows_us=%llu world_us=%llu hud_us=%llu present_us=%llu tint_us=%llu damage_us=%llu apo_us=%llu hud_scene_us=%llu hud_geometry_us=%llu hud_redraw_us=%llu\n",
             frame, (unsigned long long)(total/1000), (unsigned long long)(elapsed[C2VP_INPUT]/1000),

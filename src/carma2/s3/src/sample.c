@@ -9,6 +9,8 @@
 #include "carpocalypse2_types.h"
 
 #include "c2_string.h"
+#include <stdlib.h>
+#include <string.h>
 
 #ifdef CARPOCALYPSE2_PLATFORM_WIN32
 #include "../../platform/win32/win32_sound.h"
@@ -30,11 +32,7 @@ tS3_buffer_desc* C2_HOOK_FASTCALL S3GetBufferDescription(int pSample_id) {
 
     C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tS3_descriptor, buffer_description, 0x40);
 
-    if (!gS3_enabled) {
-        return NULL;
-    }
-    descriptor = S3GetDescriptorByID(pSample_id);
-    if (descriptor == NULL) {
+    if (!gS3_enabled || (descriptor = S3GetDescriptorByID(pSample_id)) == NULL) {
         return NULL;
     }
     return descriptor->buffer_description;
@@ -101,7 +99,11 @@ void C2VitaPreloadSamples(void) {
     unsigned loaded = 0, failed = 0, already = 0;
     unsigned long long start = C2VitaGLTicksNS();
     C2VitaLog("VITA SOUND preload start enabled=%d descriptors=%p\n", gS3_enabled, (void*)gS3_state.descriptors);
-    if (!gS3_enabled) return;
+    if (!gS3_enabled) {
+        extern void C2VitaSoundPrefetchFinish(void);
+        C2VitaSoundPrefetchFinish();
+        return;
+    }
     for (desc = gS3_state.descriptors; desc != NULL; desc = desc->next) {
         tS3_buffer_desc* buffer_description;
         if (desc->type != 0) continue;
@@ -121,6 +123,10 @@ void C2VitaPreloadSamples(void) {
     }
     C2VitaLog("VITA SOUND preloaded=%u already=%u skipped=%u in %llu ms\n",
         loaded, already, failed, (C2VitaGLTicksNS() - start) / 1000000ull);
+    {
+        extern void C2VitaSoundPrefetchFinish(void);
+        C2VitaSoundPrefetchFinish(); /* every sample is loaded now: free the files nothing asked for */
+    }
 }
 #endif
 
@@ -265,6 +271,28 @@ void* C2_HOOK_FASTCALL S3BufferWav(const char* pPath, tS3_buffer_desc* pBuffer_d
     locals.buffer_data_size = 0;
 #endif
 
+#ifdef __vita__
+    {
+        /* port: the bytes may already be in memory, read by the boot-time prefetch thread */
+        extern int C2VitaSoundPrefetchTake(const char* pPath, void** pData, int* pSize);
+        void* prefetched;
+        int prefetched_size;
+
+        if (!gS3_low_memory_mode && C2VitaSoundPrefetchTake(pPath, &prefetched, &prefetched_size)) {
+            locals.file_size = prefetched_size;
+            locals.wav_buffer = S3MemAllocate(locals.file_size, kMem_S3_Windows_95_load_WAV_file);
+            if (locals.wav_buffer == NULL) {
+                free(prefetched);
+                gS3_last_error = eS3_error_memory;
+                return NULL;
+            }
+            memcpy(locals.wav_buffer, prefetched, locals.file_size);
+            free(prefetched);
+            strcpy(locals.wav_path, pPath);
+            goto have_wav_buffer;
+        }
+    }
+#endif
     if (gS3_low_memory_mode) {
         sprintf(locals.wav_path, "DATA%sSOUNDS%s%s", gS3_path_separator, gS3_path_separator, pPath);
         locals.f = S3_low_memory_fopen(locals.wav_path, "rb");
@@ -295,6 +323,9 @@ void* C2_HOOK_FASTCALL S3BufferWav(const char* pPath, tS3_buffer_desc* pBuffer_d
     }
     fread(locals.wav_buffer, 1, locals.file_size, locals.f);
     fclose(locals.f);
+#ifdef __vita__
+have_wav_buffer:
+#endif
 
     C2_HOOK_BUG_ON(sizeof(tS3_wav_info) != 0xc);
 

@@ -128,62 +128,15 @@ void C2_HOOK_FASTCALL DisposeJoinableGame(int pIndex) {
 
 // FUNCTION: CARMA2_HW 0x00468d70
 int C2_HOOK_FASTCALL ChooseNetCar(tNet_game_details* pNet_game, tNet_game_options* pOptions, int* pCar_index, int pIm_the_host_so_fuck_off) {
-    int i;
-    int remaining;
-    int candidate_count;
-    int selected_car;
-    int candidates[120];
-    tCar_detail_info* pCar_detail;
-    tOpponent* pOpponent;
 
-    if (pIm_the_host_so_fuck_off == 0) {
+    if (!pIm_the_host_so_fuck_off) {
         return 1;
     }
     gCurrent_net_game_options = pOptions;
-    if (gNumber_of_racers > 0) {
-        pCar_detail = gCar_details;
-        pOpponent = gOpponents;
-        remaining = gNumber_of_racers;
-        do {
-            switch (pOpponent->network_availability) {
-            case eNet_avail_never:
-                pCar_detail->ownership = eCar_owner_not_allowed;
-                break;
-            case eNet_avail_eagle:
-                if (pOptions->car_choice != eNet_car_all && pOptions->car_choice != eNet_car_eagle) {
-                    pCar_detail->ownership = eCar_owner_not_allowed;
-                } else {
-                    pCar_detail->ownership = eCar_owner_none;
-                }
-                break;
-            case eNet_avail_all:
-                if (pOptions->car_choice == eNet_car_all || pOptions->car_choice == eNet_car_novelty) {
-                    pCar_detail->ownership = eCar_owner_none;
-                } else {
-                    pCar_detail->ownership = eCar_owner_not_allowed;
-                }
-                break;
-            }
-            pCar_detail++;
-            pOpponent++;
-            remaining--;
-        } while (remaining != 0);
-    }
-    candidate_count = 0;
-    for (i = 0; i < gNumber_of_racers; i++) {
-        if (gCar_details[i].ownership == eCar_owner_none) {
-            candidates[candidate_count] = i;
-            candidate_count++;
-            if (gOpponents[i].network_availability == eNet_avail_all) {
-                candidates[candidate_count] = i;
-                candidate_count++;
-            }
-        }
-    }
-    selected_car = candidates[IRandomBetween(0, candidate_count - 1)];
-    *pCar_index = selected_car;
-    if (selected_car >= 0) {
-        gCar_details[selected_car].ownership = eCar_owner_someone;
+    SetNetAvailability(pOptions);
+    *pCar_index = PickARandomCar();
+    if (pIm_the_host_so_fuck_off && *pCar_index >= 0) {
+        gCar_details[*pCar_index].ownership = eCar_owner_someone;
     }
     return 1;
 }

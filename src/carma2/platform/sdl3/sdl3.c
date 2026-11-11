@@ -114,6 +114,17 @@ static int find_gamepad_index(SDL_JoystickID which) {
 void SDL3ServiceMessages(void) {
     SDL_Event event;
 #ifdef __vita__
+    {
+        /* SDL's Vita event pump polls both touch panels and the motion/HID devices on every call
+         * (~1 ms a frame); the game reads the pad through sceCtrl and uses none of those events,
+         * so 20 polls a second are enough for the window/system events. */
+        static Uint64 last_poll;
+        Uint64 now = SDL_GetTicks();
+        if (last_poll != 0 && now - last_poll < 50) {
+            return;
+        }
+        last_poll = now;
+    }
     C2VitaPerfBegin(C2VP_INPUT);
 #endif
 
@@ -212,6 +223,11 @@ void SDL3ServiceMessages(void) {
 }
 
 void PDReallyAllocateActionReplayBuffer(void) {
+    /* like Win32AllocateActionReplayBuffer: one buffer for the whole session (every race used to
+     * allocate a new one, 8 MB lost per race; the Vita ran out of memory after a few races) */
+    if (gPDActionReplayBuffer != NULL) {
+        return;
+    }
     gPDActionReplayBufferSize = 8000000;
     gPDActionReplayBuffer = SDL_malloc(gPDActionReplayBufferSize);
     if (gPDActionReplayBuffer == NULL) {
@@ -784,6 +800,10 @@ void PDAllocateScreenAndBack(void) {
     gEnable_perspective_maps = 1;
     gNoTransients = 1;
     gDevious_2d = 1;
+    {
+        extern int carpocalypse2_UseGL(void);
+        gPort_blended_2d = carpocalypse2_UseGL();
+    }
 
     gScreen->origin_x = 0;
     gScreen->origin_y = 0;

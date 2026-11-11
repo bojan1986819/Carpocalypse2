@@ -1504,27 +1504,30 @@ tCollision_shape_polyhedron* C2_HOOK_FASTCALL AllocateShapeWireframePolyhedron(i
 }
 
 // FUNCTION: CARMA2_HW 0x004c5d70
-tCollision_shape_polyhedron* C2_HOOK_FASTCALL AllocateShapePolyhedron(int pCount_points, br_uint_8 pType) {
+tCollision_shape_polyhedron* C2_HOOK_FASTCALL AllocateShapePolyhedron(int pCount_points, int pType) {
     tCollision_shape_polyhedron* result;
     tU8* raw_memory;
+    int count_edges;
 
     C2_HOOK_BUG_ON(sizeof(tCollision_shape_polyhedron) != 80);
     C2_HOOK_BUG_ON(sizeof(tPolyhedron_edge_indexes) != 2);
+    count_edges = (pCount_points - 2) * 3;
 #ifdef __vita__
-    result = BrMemAllocate(sizeof(*result) + pCount_points * sizeof(br_vector3)
-        + (pCount_points - 2) * (3 * sizeof(tPolyhedron_edge_indexes) + 2 * sizeof(br_vector4)) + 3, pType);
+    /* port: 3 more bytes so the planes can start on a 4-byte boundary (an odd edge count leaves them only
+     * 2-byte aligned, and the VFP loads of the plane floats need 4) */
+    result = BrMemAllocate(sizeof(tCollision_shape_polyhedron) + pCount_points * sizeof(br_vector3)
+        + count_edges * sizeof(tPolyhedron_edge_indexes) + (pCount_points - 2) * 2 * sizeof(br_vector4) + 3, (br_uint_8)pType);
 #else
-    result = BrMemAllocate(sizeof(tCollision_shape_polyhedron) * pCount_points * sizeof(br_vector3) + (pCount_points + -2) * 38, pType); /* FIXME: 38? */
+    result = BrMemAllocate(sizeof(tCollision_shape_polyhedron) + pCount_points * sizeof(br_vector3)
+        + count_edges * sizeof(tPolyhedron_edge_indexes) + (pCount_points - 2) * 2 * sizeof(br_vector4), (br_uint_8)pType);
 #endif
-    raw_memory = (tU8*)result;
-
-    raw_memory += sizeof(tCollision_shape_polyhedron);
+    raw_memory = (tU8*)result + sizeof(tCollision_shape_polyhedron);
 
     result->polyhedron.points = (br_vector3*)raw_memory;
     raw_memory += pCount_points * sizeof(br_vector3);
 
     result->polyhedron.edges = (tPolyhedron_edge_indexes*)raw_memory;
-    raw_memory += (pCount_points - 2) * 3 * sizeof(tPolyhedron_edge_indexes);
+    raw_memory += count_edges * sizeof(tPolyhedron_edge_indexes);
 
 #ifdef __vita__
     raw_memory = (tU8*)(((uintptr_t)raw_memory + 3) & ~(uintptr_t)3);
@@ -1537,7 +1540,6 @@ tCollision_shape_polyhedron* C2_HOOK_FASTCALL AllocateShapePolyhedron(int pCount
     result->common.type = kCollisionShapeType_Polyhedron;
     return result;
 }
-
 // FUNCTION: CARMA2_HW 0x004c5dc0
 tCollision_shape_wireframe* C2_HOOK_FASTCALL AllocateWireFrameCollisionShape(int pCount_points, int pCount_lines, br_uint_8 pType) {
     tCollision_shape_wireframe* result;
@@ -3905,9 +3907,114 @@ int C2_HOOK_FASTCALL PHILMakeObjectActive(tPhysics_object* pObject, const br_vec
 }
 
 #pragma auto_inline(off)
-// C2PORT-NONMATCHING: best 36.02% | difftest PASS 2000 trials (spec difftest/specs/004ba190_CheckForObjectHierachyTouchingObjectList.json) | reason duplicated-bounds-checks,register-allocation,stack-layout
 // FUNCTION: CARMA2_HW 0x004ba190
 void C2_HOOK_FASTCALL CheckForObjectHierachyTouchingObjectList(tPhysics_object* pObject, tPhysics_object* pList, tPhysics_object* pList_original) {
+#ifdef CARPOCALYPSE2_MATCHING
+    tPhysics_object* list_cur;
+    tPhysics_object* obj;
+    tPhysics_object* child;
+    tPhysics_object* sib;
+    int face;
+
+    if (pList == NULL) {
+        return;
+    }
+    for (list_cur = pList; list_cur != NULL; list_cur = list_cur->next) {
+        if (list_cur->disable_move_rotate == 0) {
+            continue;
+        }
+        if (!(pObject->field_0xf4.min.v[0] - list_cur->field_0xf4.max.v[0] > 0.01
+            || pObject->field_0xf4.min.v[1] - list_cur->field_0xf4.max.v[1] > 0.01
+            || pObject->field_0xf4.min.v[2] - list_cur->field_0xf4.max.v[2] > 0.01
+            || list_cur->field_0xf4.min.v[0] - pObject->field_0xf4.max.v[0] > 0.01
+            || list_cur->field_0xf4.min.v[1] - pObject->field_0xf4.max.v[1] > 0.01
+            || list_cur->field_0xf4.min.v[2] - pObject->field_0xf4.max.v[2] > 0.01)) {
+            obj = list_cur;
+            while (obj->parent != NULL) {
+                if (obj->physics_joint1 == NULL) {
+                    break;
+                }
+                if (obj->physics_joint1->type == eJoint_none) {
+                    break;
+                }
+                obj = obj->parent;
+            }
+            face = gFace_num__car - 2;
+            obj->disable_move_rotate = 0;
+            obj->box_face_ref = face;
+            if (obj->child != NULL || obj->physics_joint1 != NULL || obj->physics_joint2 != NULL) {
+                if (obj->field_0x218 == 0) {
+                    MoveJointedObject(obj, (undefined4)list_cur, 0.f);
+                }
+                child = obj->child;
+                if (child != NULL) {
+                    do {
+                        if (child->disable_move_rotate) {
+                            child->disable_move_rotate = 0;
+                            child->box_face_ref = gFace_num__car - 2;
+                        }
+                        if (child->child != NULL) {
+                            MakeObjectListDoSomething(child->child);
+                        }
+                        child = child->next;
+                    } while (child != NULL);
+                }
+            }
+            CheckForObjectHierachyTouchingObjectList(obj, pList_original, pList_original);
+        }
+        sib = pObject->child;
+        if (sib != NULL && list_cur->disable_move_rotate != 0) {
+            do {
+                if (sib->field_0xf4.min.v[0] - list_cur->field_0xf4.max.v[0] > 0.01
+                    || sib->field_0xf4.min.v[1] - list_cur->field_0xf4.max.v[1] > 0.01
+                    || sib->field_0xf4.min.v[2] - list_cur->field_0xf4.max.v[2] > 0.01
+                    || list_cur->field_0xf4.min.v[0] - sib->field_0xf4.max.v[0] > 0.01
+                    || list_cur->field_0xf4.min.v[1] - sib->field_0xf4.max.v[1] > 0.01
+                    || list_cur->field_0xf4.min.v[2] - sib->field_0xf4.max.v[2] > 0.01) {
+                    sib = sib->next;
+                    continue;
+                }
+                obj = list_cur;
+                while (obj->parent != NULL) {
+                    if (obj->physics_joint1 == NULL) {
+                        break;
+                    }
+                    if (obj->physics_joint1->type == eJoint_none) {
+                        break;
+                    }
+                    obj = obj->parent;
+                }
+                face = gFace_num__car - 2;
+                child = obj->child;
+                obj->disable_move_rotate = 0;
+                obj->box_face_ref = face;
+                if (child != NULL || obj->physics_joint1 != NULL || obj->physics_joint2 != NULL) {
+                    if (obj->field_0x218 == 0) {
+                        MoveJointedObject(obj, (undefined4)list_cur, 0.f);
+                    }
+                    child = obj->child;
+                    if (child != NULL) {
+                        do {
+                            if (child->disable_move_rotate) {
+                                child->disable_move_rotate = 0;
+                                child->box_face_ref = gFace_num__car - 2;
+                            }
+                            if (child->child != NULL) {
+                                MakeObjectListDoSomething(child->child);
+                            }
+                            child = child->next;
+                        } while (child != NULL);
+                    }
+                }
+                CheckForObjectHierachyTouchingObjectList(obj, pList_original, pList_original);
+                break;
+            } while (sib != NULL);
+        }
+        if (list_cur->child != NULL) {
+            CheckForObjectHierachyTouchingObjectList(pObject, list_cur->child, pList_original);
+        }
+    }
+#else
     tPhysics_object* root;
     tPhysics_object* child;
     tPhysics_object* list_child;
@@ -3991,6 +4098,7 @@ void C2_HOOK_FASTCALL CheckForObjectHierachyTouchingObjectList(tPhysics_object* 
         item = item->next;
     } while (item != NULL);
 #undef OBJECT_BOUNDS_OVERLAP
+#endif
 }
 #pragma auto_inline(on)
 
@@ -4102,7 +4210,6 @@ void C2_HOOK_FASTCALL AddObjectToReducedList(tPhysics_object* pObject, tPhysics_
 }
 
 #pragma auto_inline(off)
-// C2PORT-NONMATCHING: best 10.32% | difftest PASS 2000 trials (spec difftest/specs/004b9770_PrepareObject.json) | reason helper-inline and VC5 register allocation
 // FUNCTION: CARMA2_HW 0x004b9770
 void C2_HOOK_FASTCALL PrepareObject(tPhysics_object* pObject, tPhysics_object** pList) {
 
@@ -4381,10 +4488,116 @@ extern unsigned long long C2VitaGLTicksNS(void);
 unsigned long long C2VitaPhysCollideNS, C2VitaPhysChangedNS;
 unsigned long long C2VitaPhysPreNS, C2VitaPhysMungeNS, C2VitaPhysPostNS, C2VitaPhysFlushNS;
 unsigned C2VitaPhysIterations;
+/* inside DoCollisions (FUN_004bd9e0): track faces near each object, object-vs-faces, object-vs-object */
+unsigned long long C2VitaPhysBoxNS, C2VitaPhysFaceCollNS, C2VitaPhysObjCollNS;
+unsigned C2VitaPhysBoxFaces, C2VitaPhysDetects, C2VitaPhysPairs, C2VitaPhysHinges, C2VitaPhysPasses;
 #define C2_PHYS_T(acc, stmt) do { unsigned long long c2_t = C2VitaGLTicksNS(); stmt; acc += C2VitaGLTicksNS() - c2_t; } while (0)
 #else
 #define C2_PHYS_T(acc, stmt) stmt
 #endif
+
+#ifndef CARPOCALYPSE2_MATCHING
+/* port: an object whose matrix turned NaN (seen on wasted opponents, which then vanished) breaks the x-sorted object
+ * list: every comparison with it is false, so the sweep in AppendOverlappingObjects stops at it and the sort can no
+ * longer move objects past it. From then on cars and peds on the far side of it never meet the player (playtests
+ * 00.73/00.74: player drove through every car and ped after an opponent was wasted). Each physics tick the object
+ * list is checked; a non-finite object gets its last finite matrix back, with its motion stopped. */
+static int C2PortBadFloat(float f) {
+    union { float f; tU32 u; } b;
+
+    b.f = f;
+    return (b.u & 0x7f800000u) == 0x7f800000u;
+}
+
+static int C2PortBadFloats(const float* p, int n) {
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (C2PortBadFloat(p[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+#define C2PORT_GOOD_SLOTS 1024
+static struct {
+    tPhysics_object* object;
+    br_matrix34 mat;
+    br_vector3 pos;
+} C2PortGood[C2PORT_GOOD_SLOTS];
+static int C2PortNanRepairs;
+
+static int C2PortGoodSlot(tPhysics_object* pObject, int pInsert) {
+    unsigned h;
+    int k;
+
+    h = ((unsigned)(size_t)pObject >> 4) * 2654435761u;
+    for (k = 0; k < 16; k++) {
+        int i = (int)((h + (unsigned)k) & (C2PORT_GOOD_SLOTS - 1));
+        if (C2PortGood[i].object == pObject) {
+            return i;
+        }
+        if (C2PortGood[i].object == NULL) {
+            if (!pInsert) {
+                return -1;
+            }
+            C2PortGood[i].object = pObject;
+            return i;
+        }
+    }
+    /* full run: reuse the first slot of the run */
+    if (!pInsert) {
+        return -1;
+    }
+    k = (int)(h & (C2PORT_GOOD_SLOTS - 1));
+    C2PortGood[k].object = pObject;
+    return k;
+}
+
+static void C2PortSanitizeObject(tPhysics_object* pObject, const char* pWhere) {
+    int slot;
+
+    for (; pObject != NULL; pObject = pObject->next) {
+        if (!C2PortBadFloats(&pObject->transform_matrix.m[0][0], 12) && !C2PortBadFloats(pObject->pos.v, 3)
+            && !C2PortBadFloats(pObject->v.v, 3) && !C2PortBadFloats(pObject->omega.v, 3)) {
+            slot = C2PortGoodSlot(pObject, 1);
+            C2PortGood[slot].mat = pObject->transform_matrix;
+            C2PortGood[slot].pos = pObject->pos;
+        } else {
+            slot = C2PortGoodSlot(pObject, 0);
+            C2PortNanRepairs++;
+            if (C2PortNanRepairs <= 40) {
+                dr_dprintf("PHYSNAN %s obj=%p actor='%s' parent=%p passive=%d flags=0x%x t=(%g,%g,%g) pos=(%g,%g,%g) v=(%g,%g,%g) "
+                           "omega=(%g,%g,%g) M=%g restored=%d repairs=%d",
+                    pWhere, (void*)pObject,
+                    (pObject->actor != NULL && pObject->actor->identifier != NULL) ? pObject->actor->identifier : "-",
+                    (void*)pObject->parent, pObject->disable_move_rotate, pObject->flags,
+                    pObject->transform_matrix.m[3][0], pObject->transform_matrix.m[3][1], pObject->transform_matrix.m[3][2],
+                    pObject->pos.v[0], pObject->pos.v[1], pObject->pos.v[2], pObject->v.v[0], pObject->v.v[1], pObject->v.v[2],
+                    pObject->omega.v[0], pObject->omega.v[1], pObject->omega.v[2], pObject->M, slot >= 0, C2PortNanRepairs);
+            }
+            if (slot >= 0) {
+                pObject->transform_matrix = C2PortGood[slot].mat;
+                pObject->pos = C2PortGood[slot].pos;
+            } else {
+                /* never seen finite: identity, far below the track */
+                BrMatrix34Identity(&pObject->transform_matrix);
+                pObject->transform_matrix.m[3][1] = -1000.f;
+                BrVector3Copy(&pObject->pos, (br_vector3*)pObject->transform_matrix.m[3]);
+            }
+            BrVector3Set(&pObject->v, 0.f, 0.f, 0.f);
+            BrVector3Set(&pObject->omega, 0.f, 0.f, 0.f);
+            BrVector3Set(&pObject->rotate_omega, 0.f, 0.f, 0.f);
+            BrVector3Set(&pObject->velocity_car_space, 0.f, 0.f, 0.f);
+        }
+        if (pObject->child != NULL) {
+            C2PortSanitizeObject(pObject->child, pWhere);
+        }
+    }
+}
+#endif
+
 // FUNCTION: CARMA2_HW 0x004b6630
 void C2_HOOK_FASTCALL PHILDoPhysics(tPhysics_callbacks* pCallbacks, tU32 pLast_tick_time, tU32 pFrame_period) {
     tU32 now;
@@ -4420,9 +4633,15 @@ void C2_HOOK_FASTCALL PHILDoPhysics(tPhysics_callbacks* pCallbacks, tU32 pLast_t
                 unsigned long long c2_t0 = C2VitaGLTicksNS();
                 ++C2VitaPhysIterations;
 #endif
+#ifndef CARPOCALYPSE2_MATCHING
+            C2PortSanitizeObject(gList_collision_infos, "before");
+#endif
             if (gList_collision_infos != NULL) {
                 DoCollisions(&gList_collision_infos, pCallbacks->world_callbacks);
             }
+#ifndef CARPOCALYPSE2_MATCHING
+            C2PortSanitizeObject(gList_collision_infos, "after");
+#endif
 #ifdef __vita__
                 C2VitaPhysCollideNS += C2VitaGLTicksNS() - c2_t0;
             }
@@ -6190,9 +6409,119 @@ const br_scalar gFLOAT_0058a7b8 = 0.0004f;
 const double gDOUBLE_0058a7c0 = 0.999;
 
 #pragma auto_inline(off)
-// C2PORT-NONMATCHING: best 44.78% | difftest PASS 2000 trials (spec difftest/specs/004baa00_AddDoubleTorqueToMatrix.json) | reason x87-order
 // FUNCTION: CARMA2_HW 0x004baa00
 int C2_HOOK_FASTCALL AddDoubleTorqueToMatrix(tPhysics_object* pObject) {
+#ifdef CARPOCALYPSE2_MATCHING
+    tPhysics_object* obj;
+    int acc;
+    int child_acc;
+    float X;
+    float Y;
+    float Z;
+    float eAng;
+    float eLin;
+    float len;
+    float nx;
+    float ny;
+    float nz;
+    float d1;
+    float d2;
+    float bx;
+    float by;
+    float bz;
+    float cx;
+    float cy;
+    float cz;
+    float vx;
+    float vy;
+    float vz;
+    int i;
+    int new1df;
+
+    obj = pObject;
+    acc = 1;
+    if (obj != NULL) {
+    for (; obj != NULL; obj = obj->next) {
+        if (obj->field_0x21c != 1.0f) {
+            obj->I.v[0] /= obj->field_0x21c;
+            obj->I.v[1] /= obj->field_0x21c;
+            obj->I.v[2] /= obj->field_0x21c;
+        }
+        if (obj->field_0xf0 != 0) {
+            obj->field_0xf0 = 0;
+            obj->disable_move_rotate = (tU8)(((tU32)obj->flags >> 5) & 1);
+        }
+        {
+            int f = obj->flags;
+            f = (f & ~0x100) | ((f >> 1) & 0x100);
+            obj->flags = f;
+        }
+        new1df = 0;
+        if (obj->disable_move_rotate == 0) {
+            if (obj->field_0x1df != 0 && obj->field183_0x1d8 == obj) {
+                obj->field_0x1df = 0;
+            }
+            X = obj->field_0x1cc.v[0] + obj->omega.v[0];
+            Y = obj->field_0x1cc.v[1] + obj->omega.v[1];
+            Z = obj->field_0x1cc.v[2] + obj->omega.v[2];
+            eAng = (obj->I.v[0] * X * X + obj->I.v[1] * Y * Y + obj->I.v[2] * Z * Z) / obj->M;
+            if (obj->collision_flag != 0 || obj->field_0x1df == 0) {
+                eLin = obj->v.v[0] * obj->v.v[0] + obj->v.v[1] * obj->v.v[1] + obj->v.v[2] * obj->v.v[2];
+            } else {
+                eLin = 0.0f;
+            }
+            if (eLin < 0.001 && eAng < 0.00009) {
+                len = sqrtf(obj->field_0x54.v[0] * obj->field_0x54.v[0] + obj->field_0x54.v[1] * obj->field_0x54.v[1] + obj->field_0x54.v[2] * obj->field_0x54.v[2]);
+                nx = obj->field_0x54.v[0] / len;
+                ny = obj->field_0x54.v[1] / len;
+                nz = obj->field_0x54.v[2] / len;
+                d1 = -(obj->v.v[0] * nx + obj->v.v[1] * ny + obj->v.v[2] * nz);
+                d2 = -(obj->field_0x1b4.v[0] * nx + obj->field_0x1b4.v[1] * ny + obj->field_0x1b4.v[2] * nz);
+                if (obj->field_0x1df == 0) {
+                    if (d1 < 0.012f && (d1 - d2) > 0.9f * len) {
+                        bx = obj->omega.v[1] * obj->cmpos.v[2] - obj->omega.v[2] * obj->cmpos.v[1] + obj->velocity_car_space.v[0];
+                        by = obj->omega.v[2] * obj->cmpos.v[0] - obj->omega.v[0] * obj->cmpos.v[2] + obj->velocity_car_space.v[1];
+                        bz = obj->omega.v[0] * obj->cmpos.v[1] - obj->omega.v[1] * obj->cmpos.v[0] + obj->velocity_car_space.v[2];
+                        for (i = 0; i < 8; i++) {
+                            cx = (i & 2) ? obj->bb1.min.v[0] : obj->bb1.max.v[0];
+                            cy = (i & 1) ? obj->bb1.min.v[1] : obj->bb1.max.v[1];
+                            cz = (i & 4) ? obj->bb1.min.v[2] : obj->bb1.max.v[2];
+                            vx = obj->omega.v[1] * cz - obj->omega.v[2] * cy + bx;
+                            vy = obj->omega.v[2] * cx - obj->omega.v[0] * cz + by;
+                            vz = obj->omega.v[0] * cy - obj->omega.v[1] * cx + bz;
+                            if (vx * vx + vy * vy + vz * vz > 0.0004f) {
+                                goto copy;
+                            }
+                        }
+                    } else {
+                        goto copy;
+                    }
+                }
+                if (obj->physics_joint2 == NULL || obj->collision_flag != 0 || obj->transform_matrix.m[1][1] > 0.999) {
+                    new1df = 1;
+                    BrVector3SetFloat(&obj->v, 0.0f, 0.0f, 0.0f);
+                    BrVector3SetFloat(&obj->omega, 0.0f, 0.0f, 0.0f);
+                    BrVector3SetFloat(&obj->rotate_omega, 0.0f, 0.0f, 0.0f);
+                }
+            }
+        }
+copy:
+        obj->field_0x1df = (tU8)new1df;
+        BrMatrix34Copy(&obj->transform_matrix, &obj->actor->t.t.mat);
+        BrMatrix34ApplyP(&obj->pos, &obj->cmpos, &obj->transform_matrix);
+        if (obj->child != NULL) {
+            child_acc = AddDoubleTorqueToMatrix(obj->child);
+            if (obj->field_0x1df != 0) {
+                obj->field_0x1df = (tU8)((child_acc << 1) + obj->field_0x1df);
+            }
+        } else {
+            obj->field_0x1df = (tU8)(obj->field_0x1df * 3);
+        }
+        acc &= ((tU32)obj->field_0x1df >> 1) & 1;
+    }
+    }
+    return acc;
+#else
     tPhysics_object* obj;
     int all_stable;
     int stable;
@@ -6350,6 +6679,7 @@ finish_stability_check:
         obj = obj->next;
     } while (obj != NULL);
     return all_stable;
+#endif
 }
 #pragma auto_inline(on)
 
@@ -7739,11 +8069,15 @@ int C2_HOOK_FASTCALL FUN_004bd9e0(tPhysics_object* pObject, tPhysics_object** pR
         + pObject_register->field_0x1b4.v[1] * pObject_register->field_0x1b4.v[1]
         + pObject_register->field_0x1b4.v[0] * pObject_register->field_0x1b4.v[0] == gFLOAT_0058a768;
     gReduced_object_list = pReduced_register;
-    GetFacesInBox(pObject_register, pWorld_callbacks);
+    C2_PHYS_T(C2VitaPhysBoxNS, GetFacesInBox(pObject_register, pWorld_callbacks));
+#ifdef __vita__
+    C2VitaPhysDetects++;
+    C2VitaPhysBoxFaces += pObject_register->box_face_end - pObject_register->box_face_start;
+#endif
     gReduced_object_list = NULL;
     gINT_006940ac = 0;
 
-    iVar6 = FUN_004228b0(pObject_register, pCollision_contacts, pCollision_count);
+    C2_PHYS_T(C2VitaPhysFaceCollNS, iVar6 = FUN_004228b0(pObject_register, pCollision_contacts, pCollision_count));
     if (iVar6 != 0) {
         if (pObject_register->field_0xf0 == 2) {
             iVar1 = (int)pObject_register->parent;
@@ -7783,7 +8117,15 @@ int C2_HOOK_FASTCALL FUN_004bd9e0(tPhysics_object* pObject, tPhysics_object** pR
             } else {
                 bVar4 = 1;
             }
+#ifdef __vita__
+            if (!bVar4) {
+                C2VitaPhysPairs++;
+                C2_PHYS_T(C2VitaPhysObjCollNS, *(int*)&local_4 = FUN_00425ca0(pObject_register, fVar2, pCollision_contacts, iVar6));
+            }
+            if (!bVar4 && *(int*)&local_4 != 0) {
+#else
             if (!bVar4 && (*(int*)&local_4 = FUN_00425ca0(pObject_register, fVar2, pCollision_contacts, iVar6), *(int*)&local_4 != 0)) {
+#endif
                 if (pObject_register->field_0xf0 == 2) {
                     iVar1 = (int)pObject_register->parent;
                     fVar3 = pObject_register;
@@ -8613,7 +8955,6 @@ void C2_HOOK_FASTCALL FUN_004b77b0(int* pDestination, int* pJoint_data, int pCou
 #pragma auto_inline(on)
 
 #pragma auto_inline(off)
-// C2PORT-NONMATCHING: best 35.02% | difftest PASS 2000 trials (spec difftest/specs/004be350_FUN_004be350.json) | reason vc5-x87-scheduling
 // FUNCTION: CARMA2_HW 0x004be350
 void C2_HOOK_FASTCALL FUN_004be350(float* pDestination, const float* pSource) {
     float fVar1;
@@ -10010,6 +10351,9 @@ void C2_HOOK_FASTCALL DoCollisions(tPhysics_object** pObject_list, tWorld_callba
 
     do {
         gPrepared_objects = 0;
+#ifdef __vita__
+        C2VitaPhysPasses++;
+#endif
         for (obj = *pObject_list; obj != NULL; obj = obj->next) {
             if (obj->field_0x1dc != 0) {
                 continue;
@@ -10029,9 +10373,15 @@ void C2_HOOK_FASTCALL DoCollisions(tPhysics_object** pObject_list, tWorld_callba
             }
             loops = 0;
             gINT_006940a4 = 0;
+#ifdef __vita__
+            C2VitaPhysHinges++;
+#endif
             r = SetUpQuickHingeData(pObject_list, obj, pBuf1, pBuf2, 0, pWorld_callbacks);
             while (r != 0) {
                 loops++;
+#ifdef __vita__
+                C2VitaPhysHinges++;
+#endif
                 tmp = pBuf1;
                 pBuf1 = pBuf2;
                 pBuf2 = tmp;

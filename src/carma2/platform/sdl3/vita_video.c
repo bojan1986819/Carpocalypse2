@@ -3,12 +3,17 @@
 #include "vita_video.h"
 #include "vita_gl.h"
 #include "vita_perf.h"
+#include "vita_glqueue.h"
+#include <stdint.h>
 #include <vitaGL.h>
 #include <brender/brender.h>
 #include <string.h>
 #include <malloc.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <psp2/display.h>
+#include <psp2/kernel/processmgr.h>
+#include <psp2/io/fcntl.h>
 
 extern void C2VitaLog(const char* format, ...);
 extern int gGLFrameHasWorld;
@@ -37,6 +42,7 @@ void C2VitaVideoLoadingProgress(void) {
     if (!initialized || !loading) return;
     if (last_progress && now - last_progress < 100) return;
     last_progress = now;
+    C2VitaGLQueueSync(); /* direct vitaGL use below */
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     C2VitaGLResetBindings();
     glUseProgram(0);
@@ -96,8 +102,16 @@ int C2VitaVideoInit(SDL_Window* window) {
      * 256 bytes for 16 default float4s; 1 KiB avoids 64 KiB per temporary model. */
     vglSetVertexAttribPoolSize(256 * 1024, 1024);
     vglSetupScratchMemory(GL_TRUE, GL_TRUE);
+    {
+        extern void C2VitaBootMark(const char* pStage);
+        C2VitaBootMark("vglInitExtended starting");
+    }
     resolution_clamped = vglInitExtended(64*1024,960,544,32*1024*1024,SCE_GXM_MULTISAMPLE_NONE);
     C2VitaLog("VitaGL initialization returned: resolution_clamped=%u\n", (unsigned)resolution_clamped);
+    {
+        extern void C2VitaBootMark(const char* pStage);
+        C2VitaBootMark("vglInitExtended returned");
+    }
     if (!C2VitaGLValidate()) {
         SDL_SetError("VitaGL is missing a required renderer function. See VITA_BOOT.LOG.");
         return 0;
@@ -140,6 +154,10 @@ int C2VitaGetFrameMode(void) {
         FILE* f = fopen(C2_FRAMERATE_CFG, "rb");
         int c = f != NULL ? fgetc(f) : EOF;
         if (f) fclose(f);
+        /* remote benchmarks: C2_TEST_FRAMEMODE=0/1/2 for this run only, the saved setting is kept */
+        if (getenv("C2_TEST_FRAMEMODE") != NULL && getenv("C2_TEST_FRAMEMODE")[0] >= '0' && getenv("C2_TEST_FRAMEMODE")[0] <= '2') {
+            c = getenv("C2_TEST_FRAMEMODE")[0];
+        }
         if (c >= '0' && c <= '2') {
             frame_mode = c - '0';
         } else {
@@ -185,15 +203,47 @@ static void pace_frame(void) {
     have_last = 1;
 }
 
-void C2VitaVideoSwap(int ready) {
-    Uint64 swap_start;
-    if (!initialized) return;
-    if (!ready) {
-        last_progress = 0;
-        C2VitaVideoLoadingProgress();
-        return;
+/* The frame swap; runs on the render thread when the GL queue is active (it must only use vitaGL
+ * directly). pHas_world is the main thread's gGLFrameHasWorld for this frame. */
+/* Test screenshots (C2_TEST_SHOTS=<n>, C2_TEST_SHOTAT=<s since start>): from then on the 60th frame of
+ * each 120-frame FPS window is read back before the swap and saved as SHOT_<k>_AB<state>.RGBA (960x544
+ * RGBA, bottom row first), so the two in-run A/B variants of a frozen scene can be compared. */
+static void test_shot(void) {
+    static int count = -1, taken;
+    static unsigned long long at_ms;
+    static unsigned char* pixels;
+    extern unsigned C2VitaGLWindowFrames;
+    extern int C2VitaAB;
+    char name[96];
+    SceUID fd;
+    if (count < 0) {
+        count = getenv("C2_TEST_SHOTS") != NULL ? atoi(getenv("C2_TEST_SHOTS")) : 0;
+        at_ms = getenv("C2_TEST_SHOTAT") != NULL ? (unsigned long long)atoi(getenv("C2_TEST_SHOTAT")) * 1000ull : 0;
     }
-    loading = 0;
+    if (getenv("C2_TEST_TOURSHOTS") != NULL) {
+        /* one shot 40 frames after each C2_TEST_TOUR stop */
+        extern int C2TestTourStop;
+        static int last_stop = -1, wait;
+        if (C2TestTourStop != last_stop) {
+            last_stop = C2TestTourStop;
+            wait = 40;
+        }
+        if (taken >= count || wait <= 0 || --wait != 0) return;
+    } else if (taken >= count || SDL_GetTicks() < at_ms || C2VitaGLWindowFrames != 59) return;
+    if (pixels == NULL && (pixels = malloc(960 * 544 * 4)) == NULL) return;
+    glReadPixels(0, 0, 960, 544, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    snprintf(name, sizeof(name), "ux0:/data/c2port/SHOT_%d_AB%d.RGBA", taken, C2VitaAB);
+    fd = sceIoOpen(name, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+    if (fd >= 0) {
+        sceIoWrite(fd, pixels, 960 * 544 * 4);
+        sceIoClose(fd);
+    }
+    C2VitaLog("TEST SHOT %s\n", name);
+    ++taken;
+}
+static void swap_frame(void* pHas_world) {
+    Uint64 swap_start;
+    test_shot();
     pace_frame();
     swap_start = SDL_GetTicks();
     vglSwapBuffers(GL_FALSE);
@@ -205,12 +255,72 @@ void C2VitaVideoSwap(int ready) {
                 frames, (unsigned long long)now, (unsigned long long)(last_swap ? now-last_swap : 0),
                 (unsigned)memory.uordblks);
         }
-        C2VitaGLFrameStats(frames, gGLFrameHasWorld, last_swap ? now-last_swap : 0, now-swap_start);
+        if (frames % 900 == 0) {
+            extern void C2VitaMemTally(const char* pWhy);
+            C2VitaMemTally("periodic");
+        }
+        C2VitaGLFrameStats(frames, (int)(intptr_t)pHas_world, last_swap ? now-last_swap : 0, now-swap_start);
         last_swap = now;
     }
 }
 
+void C2VitaVideoSwap(int ready) {
+    static int queue_tried;
+    static unsigned queued_frames;
+    static Uint64 last_power_tick;
+    if (!initialized) return;
+    /* The system suspends an application after the auto-standby time without button input (an
+     * attract-mode race, a replay, a long load); the game keeps it awake, the screen may still dim. */
+    if (SDL_GetTicks() - last_power_tick >= 1000) {
+        last_power_tick = SDL_GetTicks();
+        sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
+    }
+    if (!ready) {
+        last_progress = 0;
+        C2VitaGLQueueSync();
+        C2VitaVideoLoadingProgress();
+        return;
+    }
+    loading = 0;
+    {
+        extern void C2VitaTestQuitCheck(void);
+        extern void C2VitaGLQueueProfileLog(unsigned int pFrames);
+        static unsigned prof_frames;
+        extern int gGLModelUboValid;
+        gGLModelUboValid = 0; /* next frame: the model block's transient memory may be recycled */
+        C2VitaGLQueueDirectFrame(); /* the direct-mode GL state mirror restarts each frame */
+        { extern void C2VitaGlyphFrameEnd(void); C2VitaGlyphFrameEnd(); } /* HUD text slots are free again */
+        C2VitaTestQuitCheck();
+        if (++prof_frames == 600) {
+            C2VitaGLQueueProfileLog(prof_frames);
+            { extern void C2VitaGlyphLog(unsigned pFrames); C2VitaGlyphLog(prof_frames); }
+            prof_frames = 0;
+        }
+    }
+    if (C2VitaGLQueueActive()) {
+        C2VitaGLQueueFrame(swap_frame, (void*)(intptr_t)gGLFrameHasWorld);
+        if (++queued_frames % 600 == 0) C2VitaGLQueueFrameLog(queued_frames);
+        /* in-run A/B of the render thread (C2_TEST_AB=glthread): stopped in the off windows */
+        if (C2VitaABName() != NULL && strcmp(C2VitaABName(), "glthread") == 0 && !C2VitaAB) C2VitaGLQueueStop();
+        return;
+    }
+    swap_frame((void*)(intptr_t)gGLFrameHasWorld);
+    if (C2VitaABName() != NULL && strcmp(C2VitaABName(), "glthread") == 0 && C2VitaAB) C2VitaGLQueueStart();
+    if (!queue_tried) {
+        /* Experimental: GLTHREAD.ON moves vitaGL work to a render thread from the first full frame
+         * on (it hung the main menu in 00.59, so it stays opt-in until a playtest confirms it). */
+        FILE* on = fopen("ux0:/data/c2port/GLTHREAD.ON", "rb");
+        queue_tried = 1;
+        if (on != NULL) {
+            fclose(on);
+            C2VitaLog("VITA GLQ enabled by GLTHREAD.ON\n");
+            C2VitaGLQueueStart();
+        }
+    }
+}
+
 void C2VitaVideoShutdown(void) {
+    C2VitaGLQueueStop();
     C2VitaPerfShutdown();
     if (!initialized) return;
     glDeleteTextures(1,&font_texture);

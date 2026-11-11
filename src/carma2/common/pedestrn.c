@@ -13,6 +13,7 @@
 #include "globvrpb.h"
 #include "graphics.h"
 #include "loading.h"
+#include "packfile.h"
 #include "physics.h"
 #include "phil.h"
 #include "pratcam.h"
@@ -1486,7 +1487,17 @@ tPed_personality* C2_HOOK_FASTCALL FindOrOpenPersonality(const char* pName) {
         ppersonality++;
         i++;
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    {
+        tPed_personality* result;
+        if (C2LoadDetail()) C2LoadBegin("ReadPersonality");
+        result = ReadPersonality(pName);
+        if (C2LoadDetail()) C2LoadEnd();
+        return result;
+    }
+#else
     return ReadPersonality(pName);
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004079a0
@@ -5717,17 +5728,54 @@ void C2_HOOK_FASTCALL CBDisposeForm(undefined4* pArg1) {
 
 // FUNCTION: CARMA2_HW 0x004cc950
 void C2_HOOK_FASTCALL CBLoadPersonality(tPed_personality* pPersonality, FILE* pF) {
+#ifdef CARPOCALYPSE2_MATCHING
+    char s[256];
+    tPath_name path;
+    FILE* sound_f;
+    tPed_personality_sounds* sounds;
+    int i;
+    int j;
+
+
+    /* Name of sound definition file */
+    GetAString(pF, s);
+
+    PathCat(path, gApplication_path, gPedsFolder);
+    PathCat(path, path, "SOUND");
+    PathCat(path, path, s);
+    sound_f = DRfopen(path, "rt");
+    if (sound_f == NULL) {
+        FatalError(kFatalError_CannotOpenPedFile_S, s);
+    }
+
+    sounds = BrMemAllocate(sizeof(*sounds), kMem_misc_poly_ped);
+    pPersonality->sounds = sounds;
+    for (i = 0; i < CARPOCALYPSE2_ASIZE(sounds->sounds); i++) {
+        sounds->sounds[i].count_sounds = (tU16)GetAnInt(sound_f);
+        for (j = 0; j < sounds->sounds[i].count_sounds; j++) {
+            sounds->sounds[i].sounds[j] = (tU16)LoadSingleSound(&gPedStorage, GetAnInt(sound_f));
+        }
+    }
+    PFfclose(sound_f);
+
+    pPersonality->jump_height = 0.f;
+    if (!PFfeof(pF)) {
+        GetAString(pF, s);
+        if (DRStricmp(s, "JUMPHEIGHT") == 0) {
+            pPersonality->jump_height = GetAScalar(pF);
+        }
+    }
+    ClosePackFileAndSetTiffLoading(gTwtPeds);
+#else
     char s[256];
     tPath_name path;
     FILE* sound_f;
     int i;
 
-#ifndef CARPOCALYPSE2_MATCHING
     C2_HOOK_BUG_ON(sizeof(tPed_personality_sounds) != 0x84);
     C2_HOOK_BUG_ON(CARPOCALYPSE2_ASIZE(((tPed_personality_sounds*)NULL)->sounds) != 11);
     C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tPed_personality, sounds, 0x64)
     C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tPed_personality, jump_height, 0x50)
-#endif
 
     /* Name of sound definition file */
     GetAString(pF, s);
@@ -5760,6 +5808,7 @@ void C2_HOOK_FASTCALL CBLoadPersonality(tPed_personality* pPersonality, FILE* pF
         }
     }
     ClosePackFileAndSetTiffLoading(gTwtPeds);
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004ccaa0
@@ -5959,7 +6008,18 @@ FILE* C2_HOOK_FASTCALL BonerOpenMoves(const char* pName) {
     PathCat(path, gApplication_path, gPedsFolder);
     PathCat(path, path, "MOVES");
     PathCat(path, path, pName);
+#ifndef CARPOCALYPSE2_MATCHING
+    {
+        /* ReadMove reads it through the PF functions only, seeking once per bone */
+        FILE* f;
+        gPF_loose_into_memory = 1;
+        f = DRfopen(path, "rb");
+        gPF_loose_into_memory = 0;
+        return f;
+    }
+#else
     return DRfopen(path, "rb");
+#endif
 }
 #pragma auto_inline(on)
 
@@ -6002,7 +6062,17 @@ tPed_remap* C2_HOOK_FASTCALL FindOrOpenRemap(const char* pName) {
             return gPed_remaps[i];
         }
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    {
+        tPed_remap* result;
+        if (C2LoadDetail()) C2LoadBegin("ReadRemap");
+        result = ReadRemap(pName);
+        if (C2LoadDetail()) C2LoadEnd();
+        return result;
+    }
+#else
     return ReadRemap(pName);
+#endif
 }
 
 void C2_HOOK_FASTCALL Flip3DStoBRaxes(br_matrix34* pMat) {
@@ -6052,7 +6122,13 @@ tPed_move* C2_HOOK_FASTCALL ReadMove(const char* pName, tPed_form* pForm, const 
     BrVector3Set(&rot_pos, 0.f, 0.f, 0.f);
 #endif
 
+#ifndef CARPOCALYPSE2_MATCHING
+    unsigned long long note_start = C2LoadDetail() ? C2LoadMicros() : 0, note_read = 0, note_t;
+#endif
     f = BonerOpenMoves(pName);
+#ifndef CARPOCALYPSE2_MATCHING
+    if (C2LoadDetail()) C2LoadNote("move-open", C2LoadMicros() - note_start);
+#endif
     if (f == NULL) {
         FatalError(kFatalError_BonerError_UnableToOpenFile_S, pName);
     }
@@ -6075,6 +6151,14 @@ tPed_move* C2_HOOK_FASTCALL ReadMove(const char* pName, tPed_form* pForm, const 
         int j;
 
         frame->axis = BrMemAllocate(pForm->count_bones * sizeof(tPed_move_frame_axis), kBoner_mem_type_frame_2);
+#ifndef CARPOCALYPSE2_MATCHING
+        /* port: the frame's bone matrices (12 floats each, in file order) in one read instead of
+         * one read per float: a race loads about 1.1 million of them */
+        static float frame_floats[50 * 12];
+        note_t = C2LoadDetail() ? C2LoadMicros() : 0;
+        PFfread(frame_floats, sizeof(float) * 12, count_bones_in_anim_file <= 50 ? count_bones_in_anim_file : 50, f);
+        if (C2LoadDetail()) note_read += C2LoadMicros() - note_t;
+#endif
         bone_name = (char*)bone_names;
         for (j = count_bones_in_anim_file; j > 0; j--) {
             br_matrix34 mat;
@@ -6082,6 +6166,9 @@ tPed_move* C2_HOOK_FASTCALL ReadMove(const char* pName, tPed_form* pForm, const 
             float flip_component;
             int k = 0;
 
+#ifndef CARPOCALYPSE2_MATCHING
+            memcpy(mat.m, &frame_floats[(count_bones_in_anim_file - j) * 12], sizeof(mat.m));
+#else
             for (k = 0; k < 4; k++) {
                 int l;
 
@@ -6089,6 +6176,7 @@ tPed_move* C2_HOOK_FASTCALL ReadMove(const char* pName, tPed_form* pForm, const 
                     mat.m[k][l] = ReadF32(f);
                 }
             }
+#endif
             for (k = 0, form_bone = pForm->bones; k < pForm->count_bones; k++, form_bone++) {
                 if (strcmp(form_bone->name, bone_name) == 0) {
                     br_euler e;
@@ -6184,6 +6272,12 @@ tPed_move* C2_HOOK_FASTCALL ReadMove(const char* pName, tPed_form* pForm, const 
         BrVector3Set(&move->field_0x34, 0.f, 0.f, 0.f);
     }
     move->move_flags = pFlags;
+#ifndef CARPOCALYPSE2_MATCHING
+    if (C2LoadDetail()) {
+        C2LoadNote("move-frame-reads", note_read);
+        C2LoadNote("move-total", C2LoadMicros() - note_start);
+    }
+#endif
     PFfclose(f);
     strcpy(move->name, pName);
 
@@ -6201,6 +6295,18 @@ tPed_move* C2_HOOK_FASTCALL ReadMove(const char* pName, tPed_form* pForm, const 
 
 // FUNCTION: CARMA2_HW 0x004047b0
 tPed_move* C2_HOOK_FASTCALL FindOrOpenMove(const char* pName, tPed_form* pForm, const char* pLooping_reset_flags, const br_vector3* pMovement_direction, tU32 flags) {
+#ifdef CARPOCALYPSE2_MATCHING
+    int i;
+
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gPed_moves); i++) {
+        if (gPed_moves[i] != NULL) {
+            if (strcmp(pName, gPed_moves[i]->name) == 0) {
+                return gPed_moves[i];
+            }
+        }
+    }
+    return ReadMove(pName, pForm, pLooping_reset_flags, pMovement_direction, flags);
+#else
     int i;
 
     for (i = 0; i < CARPOCALYPSE2_ASIZE(gPed_moves); i++) {
@@ -6210,7 +6316,14 @@ tPed_move* C2_HOOK_FASTCALL FindOrOpenMove(const char* pName, tPed_form* pForm, 
             }
         }
     }
-    return ReadMove(pName, pForm, pLooping_reset_flags, pMovement_direction, flags);
+    {
+        tPed_move* result;
+        if (C2LoadDetail()) C2LoadBegin("ReadMove");
+        result = ReadMove(pName, pForm, pLooping_reset_flags, pMovement_direction, flags);
+        if (C2LoadDetail()) C2LoadEnd();
+        return result;
+    }
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00404f60
@@ -6554,7 +6667,17 @@ tPed_form* C2_HOOK_FASTCALL FindOrOpenForm(const char* pName) {
             }
         }
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    {
+        tPed_form* result;
+        if (C2LoadDetail()) C2LoadBegin("SetUpCharacterForm");
+        result = SetUpCharacterForm(pName);
+        if (C2LoadDetail()) C2LoadEnd();
+        return result;
+    }
+#else
     return SetUpCharacterForm(pName);
+#endif
 }
 
 void C2_HOOK_FASTCALL RemapModelAxis(br_model* pModel, const tPed_remap_bone* pRemap) {
@@ -6655,6 +6778,9 @@ tPed_personality* C2_HOOK_FASTCALL ReadPersonality(const char* pName) {
     C2_HOOK_BUG_ON(sizeof(tPed_personality) != 0x68);
     C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tPed_personality, form, 0x28);
 
+#ifndef CARPOCALYPSE2_MATCHING
+    unsigned long long note_t = C2LoadDetail() ? C2LoadMicros() : 0;
+#endif
     f = BonerOpenPersonality(pName);
     if (f == NULL) {
         FatalError(kFatalError_BonerError_UnableToOpenFile_S, pName);
@@ -6667,6 +6793,9 @@ tPed_personality* C2_HOOK_FASTCALL ReadPersonality(const char* pName) {
     /* Form file to use */
     GetALineAndDontArgue(f, s);
     personality->form = FindOrOpenForm(s);
+#ifndef CARPOCALYPSE2_MATCHING
+    if (C2LoadDetail()) { unsigned long long now_ = C2LoadMicros(); C2LoadNote("pers-form", now_ - note_t); note_t = now_; }
+#endif
     if (personality->form == NULL) {
         FatalError(kFatalError_BonerError_UnableToLinkForm_to_personality_S, s);
     }
@@ -6674,6 +6803,9 @@ tPed_personality* C2_HOOK_FASTCALL ReadPersonality(const char* pName) {
     /* Default moves file to use */
     GetALineAndDontArgue(f, default_moves_file);
     BonerReadPersonalityModels(pName);
+#ifndef CARPOCALYPSE2_MATCHING
+    if (C2LoadDetail()) { unsigned long long now_ = C2LoadMicros(); C2LoadNote("pers-models-dir", now_ - note_t); note_t = now_; }
+#endif
 
     GetALineAndDontArgue(f, s);
     if (strcmp(s, "START OF BONES") != 0) {
@@ -6752,6 +6884,9 @@ tPed_personality* C2_HOOK_FASTCALL ReadPersonality(const char* pName) {
             }
         }
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    if (C2LoadDetail()) { unsigned long long now_ = C2LoadMicros(); C2LoadNote("pers-bones", now_ - note_t); note_t = now_; }
+#endif
     personality->M = personality->form->simple_physicing[0].collision_info->M;
     GetALineAndDontArgue(f, s);
     if (strcmp(s, "END OF BONES") != 0) {
@@ -6863,6 +6998,9 @@ tPed_personality* C2_HOOK_FASTCALL ReadPersonality(const char* pName) {
             break;
         }
     }
+#ifndef CARPOCALYPSE2_MATCHING
+    if (C2LoadDetail()) { unsigned long long now_ = C2LoadMicros(); C2LoadNote("pers-moves", now_ - note_t); note_t = now_; }
+#endif
     return personality;
 }
 

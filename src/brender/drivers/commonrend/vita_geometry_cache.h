@@ -11,8 +11,10 @@
 #include <arm_neon.h>
 #endif
 #define VITA_GEO_SLOTS 512
-#define VITA_GEO_BUDGET (2u*1024u*1024u)
-#define VITA_GEO_MAX_MODEL (128u*1024u)
+/* The merged static track (trackbatch.c) is one model of about 1 MB: above the old 128 KB limit it
+ * was rebuilt and uploaded every frame (1.5 MB of buffer data per frame in 00.59). */
+#define VITA_GEO_BUDGET (6u*1024u*1024u)
+#define VITA_GEO_MAX_MODEL (2u*1024u*1024u)
 /* C2VitaStaticGeometry (set around RenderTrack) is kept for the logs; trust now uses the per-model
  * update stamp below for all geometry. */
 int C2VitaStaticGeometry;
@@ -56,12 +58,14 @@ static unsigned short vita_geo_stamp(const struct v11model* m) {
 #define VITA_GEO_TRUST_NS 1000000000ull
 unsigned long long C2VitaGeometryStampMisses;
 static unsigned vita_geo_sample;
+/* the time of the last frame swap: reading the clock per lookup cost a kernel call each */
+extern unsigned long long C2VitaGLFrameNS;
 static int vita_geo_current(vita_geo_entry* e, const struct v11model* model) {
     unsigned long long now;
     unsigned short stamp;
     if (e->size != model->size) return 0;
     stamp = vita_geo_stamp(model);
-    now = C2VitaGLTicksNS();
+    now = C2VitaABFeature("geofast", 1) ? C2VitaGLFrameNS : C2VitaGLTicksNS();
     if (stamp != 0 && e->verified_generation == stamp && now - e->verified_ns < VITA_GEO_TRUST_NS) {
         if ((++vita_geo_sample & 63) != 0 || vita_geo_equal(e->snapshot, model, model->size)) {
             ++C2VitaGeometryStaticTrusted;
@@ -120,7 +124,14 @@ static int vita_geo_equal(const void* a, const void* b, size_t n) {
     return n == 0 || memcmp(x, y, n) == 0;
 }
 static size_t vita_geo_bytes;
-static unsigned long long vita_geo_clock, vita_geo_hits, vita_geo_misses;
+static unsigned long long vita_geo_clock, vita_geo_hits, vita_geo_misses, vita_geo_refreshes;
+/* why misses happen: changed layout of a cached model, evictions for a slot / for the byte budget */
+static unsigned long long vita_geo_miss_changed, vita_geo_evict_slot, vita_geo_evict_budget, vita_geo_resized;
+void StoredGLRefresh(br_geometry_stored* geometry, int rebuild_indices);
+void StoredGLMarkRefresh(br_geometry_stored* geometry, int rebuild_indices);
+void StoredGLApplyRefresh(br_geometry_stored* geometry);
+int C2VitaABFeature(const char* pFeature, int pDefault);
+void C2VitaRefreshProfile(unsigned bytes);
 static int vita_geo_inside(const struct v11model* m, const void* p, size_t n) {
     uintptr_t base=(uintptr_t)m, addr=(uintptr_t)p;
     return addr>=base && addr-base<=m->size && n<=m->size-(addr-base);
@@ -164,9 +175,11 @@ static vita_geo_entry* vita_geo_oldest(void) {
 static br_geometry_stored* GLVitaGeometryCacheGet(br_geometry_v1_model* owner,
         br_renderer* renderer, struct v11model* model, br_token type) {
     vita_geo_entry* slot=NULL;
-    if (!vita_geo_eligible(model)) return NULL;
+    int fast=C2VitaABFeature("geofast", 1);
+    if (!fast && !vita_geo_eligible(model)) return NULL;
     ++vita_geo_clock;
-    {   /* fast path: the slot this model used last time */
+    {   /* fast path: the slot this model used last time (an entry is only made for an eligible
+         * model, and a current one has the same bytes, so it needs no eligibility check) */
         unsigned h=vita_geo_hash(model);
         vita_geo_entry* e=vita_geo_entries+vita_geo_hint[h];
         if(e->geometry && e->owner==owner && e->renderer==renderer && e->model==model && e->type==type
@@ -175,6 +188,7 @@ static br_geometry_stored* GLVitaGeometryCacheGet(br_geometry_v1_model* owner,
             return e->geometry;
         }
     }
+    if (fast && !vita_geo_eligible(model)) return NULL;
     for (unsigned i=0;i<VITA_GEO_SLOTS;i++) {
         vita_geo_entry* e=vita_geo_entries+i;
         if (!e->geometry) {if (!slot) slot=e;continue;}
@@ -184,17 +198,48 @@ static br_geometry_stored* GLVitaGeometryCacheGet(br_geometry_v1_model* owner,
                 vita_geo_hint[vita_geo_hash(model)]=(unsigned short)i;
                 if (vita_geo_clock%1000==0) {
                     extern void C2VitaLog(const char*,...);
-                    C2VitaLog("VITA GEOMETRY lookups=%llu hits=%llu misses=%llu snapshot_bytes=%u\n",
-                        vita_geo_clock,vita_geo_hits,vita_geo_misses,(unsigned)vita_geo_bytes);
+                    C2VitaLog("VITA GEOMETRY lookups=%llu hits=%llu misses=%llu refreshes=%llu miss_changed=%llu resized=%llu evict_slot=%llu evict_budget=%llu snapshot_bytes=%u\n",
+                        vita_geo_clock,vita_geo_hits,vita_geo_misses,vita_geo_refreshes,vita_geo_miss_changed,vita_geo_resized,vita_geo_evict_slot,vita_geo_evict_budget,(unsigned)vita_geo_bytes);
                 }
                 return e->geometry;
             }
-            vita_geo_drop(e);slot=e;break;
+            /* Same model, changed bytes (animated/deformed geometry): when the group table still
+             * fits, refill the existing GL buffers instead of creating new ones. */
+            if((type==BRT_TRIANGLE || C2VitaABFeature("linerefill", 1)) && ((const struct v11model*)e->snapshot)->ngroups==model->ngroups) {
+                /* Skinned/animated models move vertices but keep their faces: then the index
+                 * buffer stays (same block size and layout, identical face bytes). */
+                int same_faces=e->size==model->size;
+                for (unsigned g=0;same_faces && g<model->ngroups;g++) {
+                    const struct v11group* ng=model->groups+g;
+                    size_t goff=(size_t)((const char*)model->groups-(const char*)model)+g*sizeof(*ng);
+                    size_t foff=(size_t)((const char*)ng->faces-(const char*)model);
+                    const struct v11group* og=(const struct v11group*)(e->snapshot+goff);
+                    same_faces=og->nfaces==ng->nfaces && og->faces==ng->faces
+                        && !memcmp(e->snapshot+foff,ng->faces,(size_t)ng->nfaces*sizeof(*ng->faces));
+                }
+                if(e->size!=model->size) {
+                    /* effect models change their face/vertex counts: resize the snapshot */
+                    unsigned char* resized=realloc(e->snapshot,model->size);
+                    if(!resized) {++vita_geo_miss_changed;vita_geo_drop(e);return NULL;}
+                    vita_geo_bytes=vita_geo_bytes-e->size+model->size;
+                    e->snapshot=resized;e->size=model->size;
+                    ++vita_geo_resized;
+                }
+                memcpy(e->snapshot,model,model->size);
+                StoredGLMarkRefresh(e->geometry,!same_faces);
+                if (!C2VitaABFeature("lazyrefill", 1)) StoredGLApplyRefresh(e->geometry);
+                C2VitaRefreshProfile((unsigned)model->size);
+                e->age=vita_geo_clock;e->verified_generation=vita_geo_stamp(model);e->verified_ns=C2VitaGLTicksNS();
+                vita_geo_hint[vita_geo_hash(model)]=(unsigned short)i;
+                ++vita_geo_refreshes;
+                return e->geometry;
+            }
+            ++vita_geo_miss_changed;vita_geo_drop(e);slot=e;break;
         }
     }
     ++vita_geo_misses;
-    if (!slot) {slot=vita_geo_oldest();vita_geo_drop(slot);}
-    while(vita_geo_bytes+model->size>VITA_GEO_BUDGET) vita_geo_drop(vita_geo_oldest());
+    if (!slot) {slot=vita_geo_oldest();vita_geo_drop(slot);++vita_geo_evict_slot;}
+    while(vita_geo_bytes+model->size>VITA_GEO_BUDGET) {vita_geo_drop(vita_geo_oldest());++vita_geo_evict_budget;}
     unsigned char* snapshot=malloc(model->size);
     if(!snapshot) return NULL; /* optional: ordinary immediate rendering remains */
     memcpy(snapshot,model,model->size);

@@ -675,24 +675,46 @@ void C2_HOOK_FASTCALL RenderAFrame(int pDepth_mask_on) {
     C2VitaPerfEnd(C2VP_TINT);
 #endif
     if (gMap_view != 2) {
+#ifdef __vita__
+        C2VitaPhasePush(C2VP_H_DIM);
+#endif
         DimAFewBits();
 #ifdef __vita__
+        C2VitaPhasePop();
         C2VitaPerfBegin(C2VP_DAMAGE);
 #endif
         DoDamageScreen(the_time);
 #ifdef __vita__
         C2VitaPerfEnd(C2VP_DAMAGE);
+        C2VitaPhasePush(C2VP_H_HEADUPS);
 #endif
         if (!gAction_replay_mode || gAR_fudge_headups) {
             DoHeadups(the_time);
         }
+#ifdef __vita__
+        C2VitaPhasePop();
+        C2VitaPhasePush(C2VP_H_INSTRUMENTS);
+#endif
         DoInstruments(the_time);
+#ifdef __vita__
+        C2VitaPhasePop();
+        C2VitaPhasePush(C2VP_H_POWERUPS);
+#endif
         if (!gAction_replay_mode || gAR_fudge_headups) {
             DrawPowerups(the_time);
         }
+#ifdef __vita__
+        C2VitaPhasePop();
+#endif
     }
     if (gMap_view != 2 && (!gAction_replay_mode || gAR_fudge_headups)) {
+#ifdef __vita__
+        C2VitaPhasePush(C2VP_H_TEST);
+#endif
         DoTestHeadup();
+#ifdef __vita__
+        C2VitaPhasePop();
+#endif
 #ifdef __vita__
         C2VitaPerfBegin(C2VP_APO);
 #endif
@@ -701,7 +723,13 @@ void C2_HOOK_FASTCALL RenderAFrame(int pDepth_mask_on) {
         C2VitaPerfEnd(C2VP_APO);
 #endif
     }
+#ifdef __vita__
+    C2VitaPhasePush(C2VP_H_MAP);
+#endif
     MapStuffAfterRender();
+#ifdef __vita__
+    C2VitaPhasePop();
+#endif
     if (gNet_mode != eNet_mode_none) {
         DisplayUserMessage();
     }
@@ -718,11 +746,17 @@ void C2_HOOK_FASTCALL RenderAFrame(int pDepth_mask_on) {
 #ifdef __vita__
     C2VitaPerfEnd(C2VP_HUD_SCENE);
 #endif
+#ifdef __vita__
+    C2VitaPhasePush(C2VP_H_PIPE);
+#endif
     if (gAction_replay_mode) {
         SynchronizeActionReplay();
     } else {
         PipeSingleFrameFinish();
     }
+#ifdef __vita__
+    C2VitaPhasePop();
+#endif
     gRender_screen->pixels = old_pixels;
 #ifdef __vita__
     C2VitaPerfEnd(C2VP_HUD);
@@ -1166,6 +1200,128 @@ void C2_HOOK_FASTCALL MapStuffBeforeRender(void) {
 
 // FUNCTION: CARMA2_HW 0x004e5680
 void C2_HOOK_FASTCALL DoARenderPass(br_matrix34* pMat34, br_actor* pCamera, br_pixelmap* pColour, br_pixelmap* pDepth, float pYon_factor, int pShadows, int pEffects, int pEffects_extra) {
+#ifdef CARPOCALYPSE2_MATCHING
+    br_camera* camera_data = (br_camera*)pCamera->type_data;
+    br_scalar original_yon = camera_data->yon_z;
+    int count;
+    int i;
+    int j;
+    tCar_spec* fox_car;
+    br_pixelmap* sky_pixelmap;
+    int bgnd_col;
+    camera_data->yon_z *= pYon_factor;
+    BrPixelmapFill(pDepth, 0xffffffff);
+    if (!gAFE) {
+        count = 0;
+        if (gNet_mode != eNet_mode_none && (gCurrent_net_game->type == eNet_game_type_6 || gCurrent_net_game->type == eNet_game_type_foxy)) {
+            BrZbsSceneRenderBegin(gUniverse_actor, pCamera, pColour, pDepth);
+            for (i = 0; i < gNumber_of_net_players; i++) {
+                tNet_game_player_info* net_player = &gNet_players[i];
+                if ((net_player->field_0x80 || i == gIt_or_fox) && !IsCarCloaked(net_player->car)) {
+                    fox_car = net_player->car;
+
+                    if (fox_car->car_master_actor->render_style != BR_RSTYLE_NONE) {
+                        br_actor** wheel_actors;
+
+                        count += 1;
+                        wheel_actors = fox_car->wheel_actors;
+                        for (j = 0; j < CARPOCALYPSE2_ASIZE(fox_car->wheel_actors); j++) {
+                            if (wheel_actors[j] != NULL) {
+                                wheel_actors[j]->render_style = BR_RSTYLE_NONE;
+                            }
+                        }
+                        BrZbsSceneRenderAdd(fox_car->car_master_actor);
+                    }
+                }
+            }
+            BrZbsSceneRenderEnd();
+            if (count != 0) {
+                if (gHud_tinted4 == -1) {
+                    gHud_tinted4 = CreateTintedPoly(0, 0, 640, 480, 3, 2, 0, 0);
+                }
+                TurnTintedPolyOn(gHud_tinted4);
+                ProcessTintedPoly(gHud_tinted4);
+                RenderTintedPolys();
+                TurnTintedPolyOff(gHud_tinted4);
+                BrZbsSceneRenderBegin(gUniverse_actor, pCamera, pColour, pDepth);
+                for (i = 0; i < gNumber_of_net_players; i++) {
+                    tNet_game_player_info* net_player = &gNet_players[i];
+                    if ((net_player->field_0x80 || i == gIt_or_fox)) {
+                        fox_car = net_player->car;
+
+                        if (fox_car->car_master_actor->render_style != BR_RSTYLE_NONE) {
+                            br_actor** wheel_actors;
+
+                            wheel_actors = fox_car->wheel_actors;
+                            for (j = 0; j < CARPOCALYPSE2_ASIZE(fox_car->wheel_actors); j++) {
+                                if (wheel_actors[j] != NULL) {
+                                    wheel_actors[j]->render_style = BR_RSTYLE_DEFAULT;
+                                    BrZbsSceneRenderAdd(wheel_actors[j]);
+                                }
+                            }
+                        }
+                    }
+                }
+                BrZbsSceneRenderEnd();
+                fox_car->car_master_actor->render_style = BR_RSTYLE_NONE;
+            }
+        }
+    }
+    sky_pixelmap = (pColour->width == gBack_screen->width) ? gBack_screen : pColour;
+    if (gProgram_state.current_depth_effect.sky_texture != NULL && (gLast_camera_special_volume == NULL || gLast_camera_special_volume->sky_col <= -1)) {
+        BrZbsSceneRenderBegin(gUniverse_actor, pCamera, pColour, pDepth);
+        DepthEffectSky(pColour, pDepth, pCamera, pMat34);
+        BrZbsSceneRenderEnd();
+    } else {
+        if (gProgram_state.current_depth_effect.type == eDepth_effect_fog || gSwap_depth_effect_type == eDepth_effect_fog) {
+            bgnd_col = 0xff;
+        } else if (gProgram_state.current_depth_effect.type == eDepth_effect_darkness || gSwap_depth_effect_type == eDepth_effect_darkness) {
+            bgnd_col = 0x00;
+        } else if (gLast_camera_special_volume != NULL && gLast_camera_special_volume->sky_col >= 0) {
+            bgnd_col = gLast_camera_special_volume->sky_col;
+        } else {
+            bgnd_col = 0x00;
+        }
+        if (gNet_mode != eNet_mode_none && (gCurrent_net_game->type == eNet_game_type_6 || gCurrent_net_game->type == eNet_game_type_foxy)) {
+            SetSkyColour(((tU32*)gRender_palette->pixels)[bgnd_col]);
+            BrZbsSceneRenderBegin(gUniverse_actor, pCamera, pColour, pDepth);
+            DepthEffectSky(pColour, pDepth, pCamera, pMat34);
+            BrZbsSceneRenderEnd();
+        } else {
+            if (sky_pixelmap->type != BR_PMT_INDEX_8) {
+                bgnd_col = PaletteEntry16Bit(gRender_palette, bgnd_col);
+                bgnd_col = (bgnd_col << 16) | bgnd_col;
+            }
+            BrPixelmapFill(sky_pixelmap, bgnd_col);
+        }
+    }
+    DoSpecialCameraEffect(pCamera, pMat34);
+    if (pShadows) {
+        RenderShadows(gUniverse_actor, &gProgram_state.track_spec, pCamera, pMat34);
+    }
+    FixificateClipulatingPlaneyThings();
+    BrZbsSceneRenderBegin(gUniverse_actor, pCamera, pColour, pDepth);
+    for (i = CARPOCALYPSE2_ASIZE(gOther_selfs); i > 0; i--) {
+        if (i != 2) {
+            BrSetScreenZOffset(i);
+            BrZbsSceneRenderAdd(gOther_selfs[i - 1]);
+        }
+    }
+    BrSetScreenZOffset(0);
+    ProcessTrack(gUniverse_actor, &gProgram_state.track_spec, pCamera, pMat34);
+    BrZbsSceneRenderAdd(gNon_track_actor);
+    RenderLimbs();
+    RenderLollipops(pColour, pDepth, pCamera, pMat34);
+    /* FIXME: DepthEffect(pColour, pDepth) in software render mode? */
+    if (pEffects) {
+        RenderSparks(pColour, pDepth, pCamera, pMat34, gFrame_period);
+        RenderSmoke(pColour, pDepth, pCamera, pMat34, gFrame_period);
+        RenderElectroBastardRays(pColour, pDepth, pCamera, pMat34, gFrame_period);
+    }
+    BrZbsSceneRenderEnd();
+    CancelificateClipulatingPlaneyThings();
+    camera_data->yon_z = original_yon;
+#else
     br_camera* camera_data = (br_camera*)pCamera->type_data;
     br_scalar original_yon = camera_data->yon_z;
     int count;
@@ -1177,6 +1333,16 @@ void C2_HOOK_FASTCALL DoARenderPass(br_matrix34* pMat34, br_actor* pCamera, br_p
 #ifdef CARPOCALYPSE2_PLATFORM_SDL3
     br_scalar original_aspect = camera_data->aspect;
     int old_world_rendering;
+#if defined(__vita__) || defined(C2_FAST_OVERLAY)
+    /* clean pass (see below): C2VitaOverlayBeginClean flushes the overlay itself */
+    int clean_pass = gNet_mode == eNet_mode_none && (pColour == gRender_screen || pColour == gBack_screen);
+#ifdef __vita__
+    int skip_flushes = clean_pass && C2VitaABFeature("cleanflush", 1);
+#else
+    int skip_flushes = clean_pass;
+#endif
+    if (!skip_flushes)
+#endif
     PDDisplayFlush(pColour);
     old_world_rendering = PDSetWorldRendering(1);
     if (pColour == gRender_screen || (pColour->width == gBack_screen->width && pColour->height == gBack_screen->height))
@@ -1189,7 +1355,7 @@ void C2_HOOK_FASTCALL DoARenderPass(br_matrix34* pMat34, br_actor* pCamera, br_p
     /* The 3D part of the pass (sky, shadows, track, cars, peds, sparks, smoke, rays) writes no CPU 2D
      * pixels (audited 2026-10-21), so its scene begins need not rescan the overlay (~1.3 ms each).
      * Not in the net 'foxy' variant, which renders tinted polys in between. */
-    if (gNet_mode == eNet_mode_none && (pColour == gRender_screen || pColour == gBack_screen)) {
+    if (clean_pass) {
         extern void C2VitaOverlayBeginClean(void* pm);
         C2VitaOverlayBeginClean(pColour);
     }
@@ -1292,8 +1458,14 @@ void C2_HOOK_FASTCALL DoARenderPass(br_matrix34* pMat34, br_actor* pCamera, br_p
     C2VitaPerfEnd(C2VP_SHADOWS);
     C2VitaPerfBegin(C2VP_WORLD);
 #endif
+#ifdef __vita__
+    C2VitaPhasePush(C2VP_W_BEGIN);
+#endif
     FixificateClipulatingPlaneyThings();
     BrZbsSceneRenderBegin(gUniverse_actor, pCamera, pColour, pDepth);
+#ifdef __vita__
+    C2VitaPhasePop();
+#endif
     for (i = CARPOCALYPSE2_ASIZE(gOther_selfs); i > 0; i--) {
         if (i != 2) {
             BrSetScreenZOffset(i);
@@ -1301,32 +1473,68 @@ void C2_HOOK_FASTCALL DoARenderPass(br_matrix34* pMat34, br_actor* pCamera, br_p
         }
     }
     BrSetScreenZOffset(0);
+#ifdef __vita__
+    C2VitaPhasePush(C2VP_W_TRACK);
+#endif
     ProcessTrack(gUniverse_actor, &gProgram_state.track_spec, pCamera, pMat34);
+#ifdef __vita__
+    C2VitaPhasePop();
+    C2VitaPhasePush(C2VP_W_NONTRACK);
+#endif
+#if defined(__vita__) && !defined(CARPOCALYPSE2_MATCHING)
+    {
+        extern unsigned C2VitaActorCounts[4], C2VitaNonTrackActors;
+        unsigned before = C2VitaActorCounts[0];
+        BrZbsSceneRenderAdd(gNon_track_actor);
+        C2VitaNonTrackActors += C2VitaActorCounts[0] - before; /* test: actors walked under the non-track root */
+    }
+#else
     BrZbsSceneRenderAdd(gNon_track_actor);
+#endif
+#ifdef __vita__
+    C2VitaPhasePop();
+    C2VitaPhasePush(C2VP_W_LIMBS);
+#endif
     RenderLimbs();
     RenderLollipops(pColour, pDepth, pCamera, pMat34);
+#ifdef __vita__
+    C2VitaPhasePop();
+    C2VitaPhasePush(C2VP_W_EFFECTS);
+#endif
     /* FIXME: DepthEffect(pColour, pDepth) in software render mode? */
     if (pEffects) {
         RenderSparks(pColour, pDepth, pCamera, pMat34, gFrame_period);
         RenderSmoke(pColour, pDepth, pCamera, pMat34, gFrame_period);
         RenderElectroBastardRays(pColour, pDepth, pCamera, pMat34, gFrame_period);
     }
+#ifdef __vita__
+    C2VitaPhasePop();
+    C2VitaPhasePush(C2VP_W_END);
+#endif
     BrZbsSceneRenderEnd();
+#ifdef __vita__
+    C2VitaPhasePop();
+#endif
     CancelificateClipulatingPlaneyThings();
 #if defined(__vita__) || defined(C2_FAST_OVERLAY)
     {
+        /* the overlay stayed all key through the clean pass: its closing flush would only rescan it */
         extern void C2VitaOverlayEndClean(void);
+        if (!skip_flushes) PDDisplayFlush(pColour);
         C2VitaOverlayEndClean();
     }
 #endif
     camera_data->yon_z = original_yon;
 #ifdef CARPOCALYPSE2_PLATFORM_SDL3
+#if !defined(__vita__) && !defined(C2_FAST_OVERLAY)
     PDDisplayFlush(pColour);
+#endif
     camera_data->aspect = original_aspect;
     PDSetWorldRendering(old_world_rendering);
 #endif
 #ifdef __vita__
     C2VitaPerfEnd(C2VP_WORLD);
+#endif
 #endif
 }
 
@@ -1752,6 +1960,18 @@ void C2_HOOK_FASTCALL DrawBevelledRectangle(br_pixelmap* pMap, int pLeft, int pT
     BrPixelmapLine(pMap, pLeft, pTop, pLeft + pWidth - 1, pTop, pColour + 2);
     BrPixelmapLine(pMap, pLeft, pTop + pHeight - 1, pLeft + pWidth - 1, pTop + pHeight - 1, pColour - 2);
 }
+
+// FUNCTION: CARMA2_HW 0x0047d510
+void C2_HOOK_FASTCALL RectangleFill_LeftRightLine(br_pixelmap* pMap, int pX, int pY, int pWidth, int pHeight, br_colour pColour) {
+
+    if (gBack_screen->type != BR_PMT_INDEX_8) {
+        pColour = PaletteEntry16Bit(gRender_palette, pColour);
+    }
+    BrPixelmapRectangleFill(pMap, pX + 1, pY, pWidth - 2, pHeight, pColour);
+    BrPixelmapLine(pMap, pX, pY, pX, pY + pHeight - 1, pColour + 2);
+    BrPixelmapLine(pMap, pX + pWidth - 1, pY, pX + pWidth - 1, pY + pHeight - 1, pColour - 2);
+}
+
 
 // C2PORT-NONMATCHING: best 35.34% | difftest PASS 2000 trials (spec difftest/specs/0047d0d0_DR16BitPixelmapRotatedAndFeatheredCopy.json) | reason corrected stack signature; remaining VC5 x87 and loop layout
 // FUNCTION: CARMA2_HW 0x0047d0d0

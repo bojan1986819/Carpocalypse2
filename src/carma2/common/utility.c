@@ -103,65 +103,64 @@ float C2_HOOK_STDCALL tandeg(float pAngle) {
 }
 
 // FUNCTION: CARMA2_HW 0x00518b00
-int C2_HOOK_CDECL DumpVisibleActorsCB(br_actor* pActor, void* pData) {
+intptr_t C2_HOOK_CDECL DumpVisibleActorsCB(br_actor* pActor, void* pData) {
 
     if (pActor->render_style != BR_RSTYLE_NONE) {
         const char* str;
 
         switch (pActor->type) {
         case BR_ACTOR_NONE:
-            str = "DUMMY ACTOR\n";
+            printf("DUMMY ACTOR\n");
             break;
         case BR_ACTOR_MODEL:
-            str = "MODEL ACTOR\n";
+            printf("MODEL ACTOR\n");
             break;
         case BR_ACTOR_LIGHT:
-            str = "LIGHT ACTOR\n";
+            printf("LIGHT ACTOR\n");
             break;
         case BR_ACTOR_CAMERA:
-            str = "CAMERA ACTOR\n";
+            printf("CAMERA ACTOR\n");
             break;
         case BR_ACTOR_BOUNDS:
-            str = "BOUNDS ACTOR\n";
+            printf("BOUNDS ACTOR\n");
             break;
         case BR_ACTOR_BOUNDS_CORRECT:
-            str = "BOUNDS-CORRECT ACTOR\n";
+            printf("BOUNDS-CORRECT ACTOR\n");
             break;
         case BR_ACTOR_CLIP_PLANE:
-            str = "CLIP-PLANE ACTOR\n";
+            printf("CLIP-PLANE ACTOR\n");
             break;
         default:
-            str = "******** UNKNOWN ********\n";
+            printf("******** UNKNOWN ********\n");
             break;
         }
-        printf(str);
         str = pActor->identifier;
         if (str == NULL) {
             str = "No Identifier";
         }
         printf("\tName:\t\t\"%s\"\n", str);
-        printf("\tAddress:\t%p\n", pActor);
-        printf("\tParent:\t\t%p\n", pActor->parent);
+        printf("\tAddress:\t%08x\n", (unsigned int)(uintptr_t)pActor);
+        printf("\tParent:\t\t%08x\n", (unsigned int)(uintptr_t)pActor->parent);
         printf("\tDepth:\t\t%i\n", pActor->depth);
-        printf("\tModelPtr:\t0x%p", pActor->model);
-        if (pActor->model == NULL) {
-            printf("\n");
-        } else {
+        printf("\tModelPtr:\t0x%08x", (unsigned int)(uintptr_t)pActor->model);
+        if (pActor->model != NULL) {
             str = pActor->model->identifier;
             if (str == NULL) {
                 str = "No Identifier";
             }
             printf(" (\"%s\")\n", str);
-        }
-        printf("\tMaterialPtr:\t0x%p", pActor->material);
-        if (pActor->material == NULL) {
-            printf("\n");
         } else {
+            printf("\n");
+        }
+        printf("\tMaterialPtr:\t0x%08x", (unsigned int)(uintptr_t)pActor->material);
+        if (pActor->material != NULL) {
             str = pActor->material->identifier;
             if (str == NULL) {
                 str = "No Identifier";
             }
             printf(" (\"%s\")\n", str);
+        } else {
+            printf("\n");
         }
         switch (pActor->render_style) {
         case BR_RSTYLE_DEFAULT:
@@ -414,20 +413,17 @@ void C2_HOOK_FASTCALL Uppercaseificate(char* dest, const char* src) {
 int C2_HOOK_FASTCALL CheckQuit(void) {
     int result;
 
-    // GLOBAL: CARMA2_HW 0x006abee0
-    static int active;
-
     result = 0;
-    if (!active) {
+    if (!gIn_check_quit) {
         if (KeyIsDown(1) && KeyIsDown(7)) {
-            active = 1;
+            gIn_check_quit = 1;
             do {
             } while (AnyKeyDown());
             result = 1;
             if (DoVerifyQuit(1)) {
                 QuitGame();
             }
-            active = 0;
+            gIn_check_quit = 0;
         }
     }
     return result;
@@ -2019,7 +2015,6 @@ LAB_005180d2:
     return (tU8*)extraout_EAX_01;
 }
 
-// C2PORT-NONMATCHING: best 48.34% | difftest PASS 2000 trials (spec difftest/specs/005182f0_GlorifyMaterial.json) | reason exception-scan-register-scheduling
 // FUNCTION: CARMA2_HW 0x005182f0
 void C2_HOOK_FASTCALL GlorifyMaterial(br_material** pMaterials, int pCount, tRendererShadingType pShading) {
     int i;
@@ -2200,26 +2195,28 @@ void C2_HOOK_FASTCALL PrintScreen(void) {
 }
 
 
-// C2PORT-NONMATCHING: best 46.79% | difftest PASS 2000 trials (spec difftest/specs/00518d60_FudgeBRenderIntoTheNinetiesWithSomeProperFuckingColourSupport.json) | reason VC5 switch-table layout after correcting green-channel packing
 // FUNCTION: CARMA2_HW 0x00518d60
 tU32 C2_HOOK_FASTCALL FudgeBRenderIntoTheNinetiesWithSomeProperFuckingColourSupport(br_pixelmap* pm, tU32 red, tU32 grn, tU32 blu, tU32 alp) {
+    tU32 colour;
 
     switch (pm->type) {
-
     case BR_PMT_RGB_555:
-        return (((red & 0xf8) >> 3) << 10) | (((grn & 0xf8) >> 3) << 5) | (((blu & 0xf8) >> 3) << 0);
+        colour = red & 0xf8;
+        break;
     case BR_PMT_RGB_565:
-        return (((red & 0xf8) >> 3) << 11) | (((grn & 0xfc) >> 2) << 5) | (((blu & 0xf8) >> 3) << 0);
+        return ((((red & 0xf8) << 5) | (grn & 0xfc)) << 3) | ((blu >> 3) & 0x1f);
     case BR_PMT_RGBA_8888:
-        return (alp << 24) | (red << 16) | (grn << 8) | (blu << 0);
+        return (((((alp << 8) | red) << 8) | grn) << 8) | blu;
     case BR_PMT_RGBA_4444:
-        return ((((alp & 0xfffffff0) << 4) | (red & 0xfffffff0)) << 4) | (blu >> 4) | (grn & 0xfffffff0);
+        /* The original masks AL only, retaining the upper alpha bits. */
+        return ((((alp & 0xfffffff0u) << 4) | (red & 0xfffffff0u)) << 4) | (blu >> 4) | (grn & 0xfffffff0u);
     case BR_PMT_ARGB_1555:
-        return (((red & 0xf8) >> 3) << 10) | (((grn & 0xf8) >> 3) << 5) | (((blu & 0xf8) >> 3) << 0) | (((alp & 0x80) >> 7) << 15);
-    case BR_PMT_RGB_888:
+        colour = ((alp & 0xffffff80u) << 1) | (red & 0xf8);
+        break;
     default:
-        return (red << 16) | (grn << 8) | (blu << 0);
+        return (((red << 8) | grn) << 8) | blu;
     }
+    return (((colour << 5) | (grn & 0xf8)) << 2) | ((blu >> 3) & 0x1f);
 }
 
 // GetBlenficatiousnessOfMaterialTablishly

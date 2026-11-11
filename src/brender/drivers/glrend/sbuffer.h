@@ -59,6 +59,17 @@ typedef struct br_buffer_stored {
     br_uint_32 palette_revision;
     struct br_device_clut *palette_pointer;
 
+    /* port: hash of the pixels last uploaded from a non-paletted memory pixelmap, so updates
+     * that change nothing (the HUD re-sends several textures every frame) skip the upload */
+    br_boolean content_valid;
+    br_uint_32 content_hash;
+
+    /* port: RGBA4444 sources updated after their first upload (HUD maps redrawn by the game): the
+     * converted pixels last uploaded, compared with the new ones as they are converted */
+    br_uint_16* shadow;
+    int shadow_w, shadow_h;
+    int updates_4444;
+
 } br_buffer_stored;
 
 #endif

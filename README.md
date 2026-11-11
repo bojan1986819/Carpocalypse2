@@ -7,7 +7,7 @@
 A native **PS Vita** port of *Carmageddon II: Carpocalypse Now* (1998), built on
 the Carpocalypse 2 decompilation by
 [Link4Electronics/Carpocalypse2](https://github.com/Link4Electronics/Carpocalypse2).
-This fork's main focus is the Vita build (v1.0). Along the way it also continued
+This fork's main focus is the Vita build (v1.1). Along the way it also continued
 the decompilation, fixed a number of bugs in the game code, and extended the
 PC (Windows) port; see [Changes in this fork](#changes-in-this-fork).
 
@@ -34,7 +34,7 @@ through [SDL3](https://github.com/libsdl-org/SDL).
 
 ### Installation
 
-1. Download `carpocalypse2-vita-v1.0.vpk` from the [Releases](../../releases)
+1. Download `carpocalypse2-vita-v1.1.vpk` from the [Releases](../../releases)
    page and install it with VitaShell.
 2. Copy the game files from your PC install to the memory card so that you get:
 
@@ -62,7 +62,8 @@ VPK keeps them.
 | Triangle | Change camera | |
 | D-pad up | Use the selected power-up | Navigate |
 | D-pad down | Next power-up | Navigate |
-| Right stick | Look around | |
+| Right stick left, right | Swing the camera round the car | |
+| Right stick up, down | Zoom the camera in / out | |
 | Select (tap) | Full-screen map | |
 | Select + Square / Triangle / Circle | Buy armour / power / offence | |
 | Start | Pause / options | Back |
@@ -79,9 +80,12 @@ Options > Graphics has three extra settings on the Vita:
   distances look better but lower the frame rate on the bigger tracks.
 - **FPS COUNTER**: shows the frame rate under the speedometer while racing.
 
+The chase camera starts further back for long vehicles, and the zoom you leave
+it at when a race ends is remembered for that vehicle (`CAMZOOM.CFG`).
+
 ### Known issues
 
-- Long loading times when a race starts.
+- Loading a race still takes several seconds.
 - The HUD is drawn in a 4:3 area in the middle of the widescreen display.
 
 ### Reporting bugs
@@ -115,6 +119,24 @@ Host-side checks for the Vita code live in `scripts/packaging/test-vita-*.py`
 and `test-vitagl*.py`. Notes on the HUD text batching are in
 [packaging/vita/glyph-batching.md](packaging/vita/glyph-batching.md).
 
+### Changes since v1.0
+
+- **Faster**: startup about 10.5 -> 3 s and race loading about 16.5 -> 6.5 s
+  (sound bank and pedestrian animations from cache files, packed archives read
+  without a card access per text line); the static track and the smashable
+  scenery are drawn in a few big batches; fewer state changes and texture
+  uploads per frame.
+- **Fixed crashes and freezes**: a power-up state overflow, an endless
+  shrapnel loop on ARM, an opponent teleport search that could loop forever, and memory leaks between
+  races (action replay buffer, GL sub-pixelmaps).
+- **Fixed gameplay bugs**: cars and pedestrians that could be driven through
+  after an opponent's physics went invalid (NaN), wrong direction lines on the
+  mini map, flickering skid marks, the loading screen not fitting the display.
+- **Camera**: the right stick now swings the camera round the car and zooms;
+  the chase camera adapts to the vehicle's size and remembers your zoom.
+- Bigger power-up texts, keep-awake while playing, and many decompiled
+  functions updated from the original project.
+
 ## Changes in this fork
 
 Besides the Vita platform layer (`src/carma2/platform/sdl3/vita_*.c`), this
@@ -127,8 +149,8 @@ Progress against the original `CARMA2_HW.EXE`, measured with
 
 | | Original project (fork point) | This fork |
 |---|---|---|
-| Implemented functions | 3915 / 5162 (75.84%) | 4781 / 5162 (92.62%) |
-| Accuracy | 60.72% | 85.74% |
+| Implemented functions | 3915 / 5162 (75.84%) | 4791 / 5162 (92.81%) |
+| Accuracy | 60.72% | 87.65% |
 
 <img width="50%" src="reccmp-report/progress.svg">
 

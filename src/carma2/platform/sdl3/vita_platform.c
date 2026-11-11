@@ -8,6 +8,7 @@
 #include <psp2/ctrl.h>
 #include <psp2/power.h>
 #include <psp2/kernel/threadmgr.h>
+#include <psp2/kernel/processmgr.h>
 #include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
 #include <unistd.h>
@@ -25,67 +26,139 @@ static int boot_log_ready;
 static SceUID boot_log_fd = -1;
 static char boot_error[256] = "Vita boot log is not ready";
 
-/* Periodic performance lines ("VITA ..."/"VGL ...") from the main thread are collected and
- * written in one go: every sceIoWrite is a synchronous memory-card write, and ~8 of them every
- * 120 frames showed up as hitches. Any other line flushes the collection first and is written
- * immediately, so ordering and crash-time diagnostics are kept. */
-static char log_pending[16384];
-static int log_pending_length;
-static SceUID log_main_thread = -1;
-static void log_write(const char* text, int length) {
+/* Every sceIoWrite is a synchronous memory-card write (~8 ms on a slow card: the ~660 lines of a
+ * boot and a race load cost 5.5 s). Lines go to a ring that a writer thread empties in order, so
+ * no thread waits for the card; C2VitaLogFlush (quit, the stall monitor's deliberate crash) still
+ * writes everything out before returning. Before the writer starts, lines are written directly. */
+#define LOG_RING_BYTES (256 * 1024)
+static char log_ring[LOG_RING_BYTES];
+static unsigned log_head, log_tail; /* bytes ever queued / ever taken; the ring holds head - tail */
+static SceKernelLwMutexWork log_ring_mutex, log_io_mutex;
+static SceUID log_sema = -1;
+static int log_async;
+static unsigned long long log_write_ns, log_writes;
+static void log_write_now(const char* text, int length) {
     int offset = 0;
+    unsigned long long start = sceKernelGetProcessTimeWide();
+    log_writes++;
     while (offset < length) {
         int written = sceIoWrite(boot_log_fd, text + offset, length - offset);
         if (written <= 0) return;
         offset += written;
     }
+    log_write_ns += (sceKernelGetProcessTimeWide() - start) * 1000ull;
+}
+/* Writes out what the ring holds; the caller holds log_io_mutex, so chunks stay in order. */
+static void log_drain(void) {
+    static char chunk[16384];
+    for (;;) {
+        unsigned count, at, first;
+        sceKernelLockLwMutex(&log_ring_mutex, 1, NULL);
+        count = log_head - log_tail;
+        if (count > sizeof(chunk)) count = sizeof(chunk);
+        at = log_tail % LOG_RING_BYTES;
+        first = count < LOG_RING_BYTES - at ? count : LOG_RING_BYTES - at;
+        memcpy(chunk, log_ring + at, first);
+        memcpy(chunk + first, log_ring, count - first);
+        log_tail += count;
+        sceKernelUnlockLwMutex(&log_ring_mutex, 1);
+        if (count == 0) return;
+        if (boot_log_fd >= 0) log_write_now(chunk, (int)count);
+    }
+}
+static int log_writer_thread(SceSize args, void* argp) {
+    (void)args;
+    (void)argp;
+    for (;;) {
+        sceKernelWaitSema(log_sema, 1, NULL);
+        /* a card write costs ~7 ms whatever its size and holds up the game's reads: collect half a
+         * second of lines into one write */
+        sceKernelDelayThread(500000);
+        sceKernelLockLwMutex(&log_io_mutex, 1, NULL);
+        log_drain();
+        sceKernelUnlockLwMutex(&log_io_mutex, 1);
+    }
+    return 0;
+}
+static void log_start_writer(void) {
+    SceUID thread;
+    if (sceKernelCreateLwMutex(&log_ring_mutex, "C2 log ring", 0, 0, NULL) < 0
+        || sceKernelCreateLwMutex(&log_io_mutex, "C2 log io", 0, 0, NULL) < 0) return;
+    log_sema = sceKernelCreateSema("C2 log", 0, 0, 0x7fffffff, NULL);
+    if (log_sema < 0) return;
+    thread = sceKernelCreateThread("C2 log writer", log_writer_thread, 0x10000100, 0x4000, 0, 0, NULL);
+    if (thread < 0 || sceKernelStartThread(thread, 0, NULL) < 0) return;
+    log_async = 1;
+}
+static void log_write(const char* text, int length) {
+    unsigned at, first;
+    if (!log_async) {
+        log_write_now(text, length);
+        return;
+    }
+    sceKernelLockLwMutex(&log_ring_mutex, 1, NULL);
+    if (log_head - log_tail + (unsigned)length > LOG_RING_BYTES) {
+        /* the card is far behind: write it out here, in order */
+        sceKernelUnlockLwMutex(&log_ring_mutex, 1);
+        sceKernelLockLwMutex(&log_io_mutex, 1, NULL);
+        log_drain();
+        log_write_now(text, length);
+        sceKernelUnlockLwMutex(&log_io_mutex, 1);
+        return;
+    }
+    at = log_head % LOG_RING_BYTES;
+    first = (unsigned)length < LOG_RING_BYTES - at ? (unsigned)length : LOG_RING_BYTES - at;
+    memcpy(log_ring + at, text, first);
+    memcpy(log_ring, text + first, length - first);
+    log_head += length;
+    sceKernelUnlockLwMutex(&log_ring_mutex, 1);
+    sceKernelSignalSema(log_sema, 1);
 }
 void C2VitaLogFlush(void) {
-    if (boot_log_fd >= 0 && log_pending_length > 0) log_write(log_pending, log_pending_length);
-    log_pending_length = 0;
+    if (!log_async) return;
+    sceKernelLockLwMutex(&log_io_mutex, 1, NULL);
+    log_drain();
+    sceKernelUnlockLwMutex(&log_io_mutex, 1);
 }
 void C2VitaLog(const char* format, ...) {
     char text[1024];
     va_list args;
     int length;
-    int periodic;
     if (boot_log_fd < 0) return;
     va_start(args, format);
     length = vsnprintf(text, sizeof(text), format, args);
     va_end(args);
     if (length < 0) return;
     if (length >= (int)sizeof(text)) length = sizeof(text) - 1;
-    if (log_main_thread < 0) log_main_thread = sceKernelGetThreadId();
-    if (sceKernelGetThreadId() != log_main_thread) {
-        log_write(text, length); /* other threads (music) write through */
-        return;
-    }
-    periodic = (strncmp(text, "VITA ", 5) == 0 || strncmp(text, "VGL ", 4) == 0)
-        && strncmp(text, "VITA PHYS SPIKE", 15) != 0;
-    if (!periodic) {
-        C2VitaLogFlush();
-        log_write(text, length);
-        return;
-    }
-    if (log_pending_length + length > (int)sizeof(log_pending)) C2VitaLogFlush();
-    memcpy(log_pending + log_pending_length, text, length);
-    log_pending_length += length;
-    if (log_pending_length >= 12288) C2VitaLogFlush();
+    log_write(text, length);
 }
 
 const char* C2VitaBootError(void) {
     return boot_error;
 }
 
+/* boot stages before the game's own checkpoints, in process time like the load phases */
+void C2VitaBootMark(const char* pStage) {
+    C2VitaLog("BOOT %llu ms: %s\n", sceKernelGetProcessTimeWide() / 1000ull, pStage);
+}
+
 void C2VitaCheckpoint(const char* title) {
     static unsigned int checkpoint_count;
+    static Uint64 mallinfo_ns, progress_ns;
+    Uint64 t0 = SDL_GetTicksNS(), t1;
     if (checkpoint_count++ < 256) {
         struct mallinfo memory = mallinfo();
-        C2VitaLog("INIT %llu ms: %s; heap arena=%u used=%u free_in_arena=%u\n",
+        t1 = SDL_GetTicksNS();
+        mallinfo_ns += t1 - t0;
+        C2VitaLog("INIT %llu ms: %s; heap arena=%u used=%u free_in_arena=%u (mallinfo %llu ms, progress %llu ms so far)\n",
             (unsigned long long)SDL_GetTicks(), title, (unsigned)memory.arena,
-            (unsigned)memory.uordblks, (unsigned)memory.fordblks);
+            (unsigned)memory.uordblks, (unsigned)memory.fordblks, (unsigned long long)(mallinfo_ns / 1000000),
+            (unsigned long long)(progress_ns / 1000000));
+        C2VitaLog("INIT log writes=%llu %llu ms so far\n", log_writes, log_write_ns / 1000000);
     }
+    t1 = SDL_GetTicksNS();
     C2VitaVideoLoadingProgress();
+    progress_ns += SDL_GetTicksNS() - t1;
 }
 
 static void SDLCALL vita_sdl_log(void* context, int category, SDL_LogPriority priority, const char* message) {
@@ -93,16 +166,134 @@ static void SDLCALL vita_sdl_log(void* context, int category, SDL_LogPriority pr
     C2VitaLog("SDL category=%d priority=%d: %s\n", category, (int)priority, message);
 }
 
+/* vita-elf-create appends ~5 KB of SCE data after the code segment, and the linker starts the data
+ * segment at the next 64 KB boundary. When the code ends within those few KB of a boundary the
+ * VELF cannot be built ("segment 1 overlaps"). This padding in the code segment moves the data
+ * segment one boundary further; if the error comes back after code growth, change its size. */
+const unsigned char gC2_vita_segment_pad[16384] = { 1 };
+
+/* Remote test runs (vitacompanion): TESTENV.TXT holds NAME=VALUE lines that become the C2_TEST_*
+ * environment of the desktop harness. It is renamed to TESTENV.USED on the way in, so a test
+ * setup applies to exactly one launch and never to the next normal play session. */
+static unsigned long long test_quit_ms;
+/* C2_TEST_DUMPAT=<seconds since start>: crash on purpose then, so the system writes a core dump of a
+ * hang outside race frames (the stall monitor only watches those). */
+static unsigned test_dump_ms;
+static int test_dump_thread(SceSize args, void* argp) {
+    (void)args;
+    (void)argp;
+    sceKernelDelayThread(test_dump_ms * 1000u);
+    /* no logging: a hang may hold the log's lock */
+    *(volatile int*)0 = 0xD0D0;
+    return 0;
+}
+/* C2_TEST_CTXPROBE: can a thread read the main thread's registers (for a PC sampling profiler)? */
+extern int sceKernelGetThreadContextForVM(SceUID thid, void* cpu, void* vfp);
+static SceUID test_main_thread;
+static int test_ctx_probe_thread(SceSize args, void* argp) {
+    static unsigned cpu[64], vfp[160];
+    int i, k, result;
+    (void)args;
+    (void)argp;
+    for (k = 0; k < 3; k++) {
+        sceKernelDelayThread(3000000);
+        memset(cpu, 0, sizeof(cpu));
+        cpu[0] = sizeof(cpu);
+        vfp[0] = sizeof(vfp);
+        result = sceKernelGetThreadContextForVM(test_main_thread, cpu, vfp);
+        C2VitaLog("TEST CTXPROBE result=0x%08x main=0x%08x probe_fn=%p\n", (unsigned)result, (unsigned)test_main_thread,
+            (void*)test_ctx_probe_thread);
+        for (i = 0; i < 24; i += 6) {
+            C2VitaLog("TEST CTXPROBE w%02d: %08x %08x %08x %08x %08x %08x\n", i, cpu[i], cpu[i + 1], cpu[i + 2], cpu[i + 3],
+                cpu[i + 4], cpu[i + 5]);
+        }
+    }
+    return 0;
+}
+static int test_awake_thread(SceSize args, void* argp) {
+    (void)args;
+    (void)argp;
+    for (;;) {
+        sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DEFAULT);
+        sceKernelDelayThread(1000000);
+    }
+    return 0;
+}
+static void load_test_env(void) {
+    char line[512];
+    FILE* f = fopen("ux0:/data/c2port/TESTENV.TXT", "rb");
+    if (f == NULL) return;
+    while (fgets(line, sizeof(line), f) != NULL) {
+        char* value = strchr(line, '=');
+        char* end;
+        if (line[0] == '#' || value == NULL) continue;
+        *value++ = '\0';
+        end = value + strlen(value);
+        while (end > value && (end[-1] == '\n' || end[-1] == '\r')) *--end = '\0';
+        setenv(line, value, 1);
+        C2VitaLog("TESTENV %s=%s\n", line, value);
+    }
+    fclose(f);
+    sceIoRemove("ux0:/data/c2port/TESTENV.USED");
+    sceIoRename("ux0:/data/c2port/TESTENV.TXT", "ux0:/data/c2port/TESTENV.USED");
+    if (getenv("C2_TEST_QUIT") != NULL) test_quit_ms = (unsigned long long)(atof(getenv("C2_TEST_QUIT")) * 1000.0);
+    if (getenv("C2_TEST_DUMPAT") != NULL) {
+        SceUID thread;
+        test_dump_ms = (unsigned)(atof(getenv("C2_TEST_DUMPAT")) * 1000.0);
+        thread = sceKernelCreateThread("C2 test dump", test_dump_thread, 0x10000100, 0x4000, 0, 0, NULL);
+        if (thread >= 0) sceKernelStartThread(thread, 0, NULL);
+    }
+    if (getenv("C2_TEST_QUIT") != NULL) {
+        /* unattended runs: keep the display on, or the lock screen freezes the game (~30 s in) */
+        SceUID thread = sceKernelCreateThread("C2 test awake", test_awake_thread, 0x10000100, 0x1000, 0, 0, NULL);
+        if (thread >= 0) sceKernelStartThread(thread, 0, NULL);
+    }
+    if (getenv("C2_TEST_IOBENCH") != NULL) {
+        /* test: raw card read speed of one file by chunk size (C2_TEST_IOBENCH=<path>) */
+        static const int chunks[] = { 4096, 65536, 1048576 };
+        static char buffer[1048576];
+        int c;
+        for (c = 0; c < 3; c++) {
+            SceUID fd = sceIoOpen(getenv("C2_TEST_IOBENCH"), SCE_O_RDONLY, 0);
+            unsigned long long start = sceKernelGetProcessTimeWide(), total = 0;
+            int got;
+            if (fd < 0) break;
+            while (total < 8u * 1048576u && (got = sceIoRead(fd, buffer, chunks[c])) > 0) total += (unsigned)got;
+            sceIoClose(fd);
+            C2VitaLog("TEST IOBENCH chunk=%d bytes=%llu us=%llu\n", chunks[c], total, sceKernelGetProcessTimeWide() - start);
+        }
+    }
+    if (getenv("C2_TEST_CTXPROBE") != NULL) {
+        SceUID thread;
+        test_main_thread = sceKernelGetThreadId();
+        thread = sceKernelCreateThread("C2 ctx probe", test_ctx_probe_thread, 0x10000100, 0x4000, 0, 0, NULL);
+        if (thread >= 0) sceKernelStartThread(thread, 0, NULL);
+    }
+}
+
+/* C2_TEST_QUIT=<seconds since start>: write the logs and leave, so a remote run ends by itself. */
+void C2VitaTestQuitCheck(void) {
+    if (test_quit_ms != 0 && SDL_GetTicks() >= test_quit_ms) {
+        C2VitaLog("TEST QUIT after %llu ms\n", (unsigned long long)SDL_GetTicks());
+        C2VitaLogFlush();
+        sceIoClose(boot_log_fd);
+        boot_log_fd = -1;
+        sceKernelExitProcess(0);
+    }
+}
+
 int C2VitaOpenBootLog(void) {
+    volatile unsigned char keep_pad = gC2_vita_segment_pad[0]; /* referenced, so --gc-sections keeps it */
     int mkdir_data, mkdir_game, stat_result, directory_result, directory_error;
+    (void)keep_pad;
     SceIoStat info;
     FILE* probe;
     void* allocation;
     int written;
 #ifdef C2_VITA_UNCAPPED
-    static const char heading[] = "C2 Vita startup diagnostic v1.0 UNCAPPED; native boot log\n";
+    static const char heading[] = "C2 Vita startup diagnostic v1.1 UNCAPPED; native boot log\n";
 #else
-    static const char heading[] = "C2 Vita startup diagnostic v1.0; native boot log\n";
+    static const char heading[] = "C2 Vita startup diagnostic v1.1; native boot log\n";
 #endif
     if (boot_log_ready) return 1;
     mkdir_data = sceIoMkdir("ux0:/data", 0777);
@@ -173,6 +364,8 @@ int C2VitaOpenBootLog(void) {
     }
     fclose(probe);
     C2VitaLog("Native file I/O and C runtime file I/O OK\n");
+    load_test_env();
+    log_start_writer();
     boot_log_ready = 1;
     return 1;
 }

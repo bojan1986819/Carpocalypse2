@@ -642,9 +642,74 @@ br_uint_32 C2_HOOK_STDCALL DfStructReadBinary(br_datafile* df, br_file_struct* s
     return 1;
 }
 
-// C2PORT-NONMATCHING: best 24.24% | difftest PASS 2000 trials (spec difftest/specs/0052ab30_DfStructSizeBinary.json) | reason scalar-type dispatch compiles to different jump tables
 // FUNCTION: CARMA2_HW 0x0052ab30
 int C2_HOOK_STDCALL DfStructSizeBinary(br_datafile* df, br_file_struct* str, void* base) {
+#ifdef CARPOCALYPSE2_MATCHING
+    unsigned char* mp;
+    unsigned int m;
+    br_file_struct_member* sm;
+    int bytes;
+
+    bytes = 0;
+    for (m = 0; m < str->nmembers; m++) {
+        sm = &str->members[m];
+
+        mp = ((unsigned char*)base) + sm->offset;
+
+        switch (scalarTypeConvert(df, sm->type)) {
+        case DF_TYPE_BR_INT_8:
+        case DF_TYPE_BR_UINT_8:
+        case DF_TYPE_ENUM_8:
+            bytes += 1;
+            break;
+        case DF_TYPE_BR_INT_16:
+        case DF_TYPE_BR_UINT_16:
+        case DF_TYPE_BR_ANGLE:
+        case DF_TYPE_ENUM_16:
+            bytes += 2;
+            break;
+        case DF_TYPE_BR_COLOUR:
+            bytes += 4;
+            break;
+        case DF_TYPE_BR_INT_32:
+        case DF_TYPE_BR_UINT_32:
+        case DF_TYPE_FLOAT:
+        case DF_TYPE_ENUM_32:
+        case DF_TYPE_BR_FRACTION_F:
+        case DF_TYPE_BR_UFRACTION_F:
+        case DF_TYPE_BR_FIXED:
+        case DF_TYPE_BR_FRACTION_X:
+        case DF_TYPE_BR_UFRACTION_X:
+            bytes += 4;
+            break;
+        case DF_TYPE_DOUBLE:
+            bytes += 8;
+            break;
+        case DF_TYPE_STRUCT:
+            bytes += DfStructSizeBinary(df, sm->extra, mp);
+            break;
+        case DF_TYPE_ASCIZ:
+            if (*(char**)mp != NULL) {
+                bytes += BrStrLen(*(char**)mp);
+            }
+            break;
+        case DF_TYPE_BR_VECTOR2_X:
+        case DF_TYPE_BR_VECTOR2_F:
+            bytes += 8;
+            break;
+        case DF_TYPE_BR_VECTOR3_X:
+        case DF_TYPE_BR_VECTOR3_F:
+            bytes += 12;
+            break;
+        case DF_TYPE_BR_VECTOR4_X:
+        case DF_TYPE_BR_VECTOR4_F:
+            bytes += 16;
+            break;
+        }
+    }
+
+    return bytes;
+#else
     unsigned char* mp;
     unsigned int m;
     br_file_struct_member* sm;
@@ -708,6 +773,7 @@ int C2_HOOK_STDCALL DfStructSizeBinary(br_datafile* df, br_file_struct* str, voi
     }
 
     return bytes;
+#endif
 }
 
 int C2_HOOK_STDCALL EnumFromString(br_file_enum* e, char* str) {
@@ -1577,8 +1643,9 @@ int C2_HOOK_CDECL DfFileIdentify(const br_uint_8* magics, br_size_t n_magics) {
 // FUNCTION: CARMA2_HW 0x0052ca50
 br_datafile* C2_HOOK_STDCALL DfOpen(const char* name, int write, br_token scalar_type) {
     int mode;
-    br_datafile* df;
     void* h;
+    br_datafile* df;
+    br_file_primitives* prims;
 
     mode = fw.open_mode;
     if (write != 0) {
@@ -1590,44 +1657,53 @@ br_datafile* C2_HOOK_STDCALL DfOpen(const char* name, int write, br_token scalar
         return NULL;
     }
     df = BrResAllocate(fw.res, sizeof(br_datafile), BR_MEMORY_DATAFILE);
-    df->prims = &_BrFilePrimsNull;
     df->h = h;
+    df->prims = &_BrFilePrimsNull;
     df->scalar_type = scalar_type;
 
-    if (mode == BR_FS_MODE_BINARY) {
-        if (write != 0) {
-            df->prims = &_BrFilePrimsWriteBinary;
+    switch (mode) {
+    case BR_FS_MODE_BINARY:
+        if (write) {
+            prims = &_BrFilePrimsWriteBinary;
         } else {
-            df->prims = &_BrFilePrimsReadBinary;
+            prims = &_BrFilePrimsReadBinary;
         }
-    } else {
-        if (write != 0)
-            df->prims = &_BrFilePrimsWriteText;
-        else
-            df->prims = &_BrFilePrimsReadText;
+        df->prims = prims;
+        break;
+    case BR_FS_MODE_TEXT:
+        if (write) {
+            prims = &_BrFilePrimsWriteText;
+        } else {
+            prims = &_BrFilePrimsReadText;
+        }
+        df->prims = prims;
+        break;
     }
-    DfPush(BR_MEMORY_FILE, df, 1); // Wrong enum -> should be DF_STACK_FILE (see comment in src/BRSRC13/CORE/V1DB/v1dbfile.c)
+    if (DatafileStackTop >= (int)BR_ASIZE(DatafileStack)) {
+        BrFailure("DatafileStack Overflow");
+    }
+    DatafileStack[DatafileStackTop].type = BR_MEMORY_FILE;
+    DatafileStack[DatafileStackTop].value = df;
+    DatafileStack[DatafileStackTop].count = 1;
+    DatafileStackTop++;
     return df;
 }
 
 // FUNCTION: CARMA2_HW 0x0052cb80
 void C2_HOOK_STDCALL DfClose(br_datafile* df) {
-    int type;
+    br_datafile* dfp;
 
     while (1) {
         if (DatafileStackTop > 0) {
-            type = DatafileStack[DatafileStackTop - 1].type;
-        } else {
-            type = 0;
+            if (DatafileStack[DatafileStackTop - 1].type == BR_MEMORY_FILE) {
+                break;
+            }
+            DfPop(DatafileStack[DatafileStackTop - 1].type, NULL);
         }
-        if (type == BR_MEMORY_FILE) {
-            break;
-        }
-        DfPop(type, NULL);
     }
-    DfPop(BR_MEMORY_FILE, NULL);
-    BrFileClose(df->h);
-    BrResFree(df);
+    dfp = DfPop(BR_MEMORY_FILE, NULL);
+    BrFileClose(dfp->h);
+    BrResFree(dfp);
 }
 
 // FUNCTION: CARMA2_HW 0x0052cc50

@@ -285,6 +285,27 @@ int C2_HOOK_FASTCALL DRActorToRoot(br_actor* a, br_actor* world, br_matrix34* m)
 
 // FUNCTION: CARMA2_HW 0x004e36f0
 int C2_HOOK_FASTCALL DRScenePick2DXY(br_actor* world, br_actor* camera, br_pixelmap* viewport, int pick_x, int pick_y, dr_pick2d_cbfn* callback, void* arg) {
+#ifdef CARPOCALYPSE2_MATCHING
+    br_matrix34 camera_tfm;
+    br_scalar scale;
+    br_scalar cos_angle;
+    br_scalar sin_angle;
+    br_angle view_over_2;
+    br_camera* camera_data;
+
+    camera_data = (br_camera*)camera->type_data;
+    DRActorToRoot(camera, world, &camera_tfm);
+    BrMatrix34Inverse(&gPick_model_to_view__raycast, &camera_tfm);
+    view_over_2 = camera_data->field_of_view / 2;
+    cos_angle = BR_COS(view_over_2);
+    sin_angle = BR_SIN(view_over_2);
+    scale = cos_angle / sin_angle;
+    BrMatrix34PostScale(&gPick_model_to_view__raycast, scale / camera_data->aspect, scale, 1.f);
+    BrMatrix34PostShearZ(&gPick_model_to_view__raycast,
+                         (float)(2 * pick_x) / (float)viewport->width,
+                         (float)(-2 * pick_y) / (float)viewport->height);
+    return ActorPick2D(world, NULL, gBlack_material, callback, arg);
+#else
     br_matrix34 camera_tfm;
     br_scalar scale;
     br_scalar cos_angle;
@@ -304,6 +325,7 @@ int C2_HOOK_FASTCALL DRScenePick2DXY(br_actor* world, br_actor* camera, br_pixel
                          (float)(2 * pick_x) / (float)viewport->width,
                          (float)(-2 * pick_y) / (float)viewport->height);
     return ActorPick2D(world, NULL, gBlack_material, callback, arg);
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x004e45b0

@@ -23,7 +23,7 @@ extern int gInventory[20];
 extern int gINT_006a0a6c;
 extern int gINT_006a0a5c;
 extern tPowerup* gPowerup_array;
-extern int gPowerup_net_state[56];
+extern int gPowerup_net_state[128];
 extern tRespawn_powerup gRespawn_powerups[100];
 extern int gInventory_selected;
 extern int gNumber_of_icons;

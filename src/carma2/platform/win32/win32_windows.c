@@ -48,6 +48,7 @@ finish:
 
 // FUNCTION: CARMA2_HW 0x0044c830
 void C2_HOOK_FASTCALL PDDisposeActionReplayBuffer(void) {
+
     if (gActionReplayBufferFile != NULL) {
         PFfclose(gActionReplayBufferFile);
         gActionReplayBufferFile = NULL;

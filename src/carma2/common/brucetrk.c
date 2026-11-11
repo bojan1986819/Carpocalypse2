@@ -16,6 +16,7 @@
 
 #include "carpocalypse2_macros.h"
 #include "brucetrk.h"
+#include "trackbatch.h"
 #include "carpocalypse2_types.h"
 // GLOBAL: CARMA2_HW 0x00655e60
 extern br_scalar gYon_factor;
@@ -155,7 +156,6 @@ intptr_t C2_HOOK_CDECL FindNonCarsCB(br_actor* pActor, void* pData) {
     return BrActorEnum(pActor, FindNonCarsCB, pTrack_spec);
 }
 
-// C2PORT-NONMATCHING: best 31.13% | difftest PASS 2000 trials (spec 004f5ae0_GetModelTextureArea.json) | reason correct double offset; remaining differences are compiler loop and register layout
 // FUNCTION: CARMA2_HW 0x004f5ae0
 void C2_HOOK_FASTCALL GetModelTextureArea(br_model* pModel, int* pArea_1, int* pArea_2) {
     int i;
@@ -165,38 +165,39 @@ void C2_HOOK_FASTCALL GetModelTextureArea(br_model* pModel, int* pArea_1, int* p
 
     for (i = 0; i < V11MODEL(pModel)->ngroups; i++) {
         int j;
-        v11group* v11g = &V11MODEL(pModel)->groups[i];
+        fmt_vertex* vertices = V11MODEL(pModel)->groups[i].vertices;
+        v11face* v11f = V11MODEL(pModel)->groups[i].faces;
 
-        for (j = 0; j < v11g->nfaces; j++) {
+        for (j = V11MODEL(pModel)->groups[i].nfaces; j > 0; j--, v11f++) {
             int k;
-            float min_x =  10000.f;
-            float max_x = -10000.f;
-            float min_y =  10000.f;
-            float max_y = -10000.f;
-            v11face* v11f = &v11g->faces[j];
+            br_vector2 min = {{ 10000.f, 10000.f }};
+            br_vector2 max = {{ -10000.f, -10000.f }};
             int dx;
             int dy;
+            int area;
 
             for (k = 0; k < 3; k++) {
-                br_uint_16 vertex_i = v11f->vertices[k];
+                fmt_vertex* vertex = vertices + v11f->vertices[k];
 
-                if (v11g->vertices[vertex_i].map.v[0] < min_x) {
-                    min_x = v11g->vertices[vertex_i].map.v[0];
+                if (vertex->map.v[0] < min.v[0]) {
+                    min.v[0] = vertex->map.v[0];
                 }
-                if (v11g->vertices[vertex_i].map.v[0] > max_x) {
-                    max_x = v11g->vertices[vertex_i].map.v[0];
+                if (vertex->map.v[0] > max.v[0]) {
+                    max.v[0] = vertex->map.v[0];
                 }
-                if (v11g->vertices[vertex_i].map.v[1] < min_y) {
-                    min_y = v11g->vertices[vertex_i].map.v[1];
+                if (vertex->map.v[1] < min.v[1]) {
+                    min.v[1] = vertex->map.v[1];
                 }
-                if (v11g->vertices[vertex_i].map.v[1] > max_y) {
-                    max_y = v11g->vertices[vertex_i].map.v[1];
+                if (vertex->map.v[1] > max.v[1]) {
+                    max.v[1] = vertex->map.v[1];
                 }
             }
-            dy = (int)(max_y - min_y + 0.9);
-            dx = (int)(max_x - min_x + 0.9);
-            *pArea_1 += dx * dy;
-            *pArea_2 += dx * dy;
+            /* The originals subtract a negative double-precision constant. */
+            dy = (int)(max.v[1] - min.v[1] - -0.9);
+            dx = (int)(max.v[0] - min.v[0] - -0.9);
+            area = dx * dy;
+            *pArea_1 += area;
+            *pArea_2 += area;
         }
     }
     *pArea_1 += 50;
@@ -233,47 +234,48 @@ void C2_HOOK_FASTCALL GetGlassFragmentCounts(int* pVisible_count, int* pActive_c
 // FUNCTION: CARMA2_HW 0x004f5cb0
 void C2_HOOK_FASTCALL SetSmashableModel(br_actor* pActor) {
     int i;
+    tSmashable_item_spec* spec;
 
     if (pActor->model == NULL || pActor->model->identifier == NULL) {
         return;
     }
-    for (i = 0; i < gCount_track_smashable_environment_specs; i++) {
-        tSmashable_item_spec* spec;
+    i = 0;
+    if (i < gCount_track_smashable_environment_specs) {
+        spec = gTrack_smashable_environment_specs;
+        do {
+            if (spec->trigger_type == kSmashableTrigger_Model
+                    && spec->trigger_object.model == pActor->model) {
+                char s[64];
+                char s2[64];
+                int len;
 
-        spec = &gTrack_smashable_environment_specs[i];
-        if (spec->trigger_type == kSmashableTrigger_Model && spec->trigger_object.model == pActor->model) {
-            char s[64];
-            char s2[64];
-            size_t len;
+                strcpy(s, pActor->identifier);
+                len = strlen(s);
+                if (len < 4) {
+                    sprintf(s, "Smash material %s has a name that is less than 4 characters long", pActor->identifier);
+                    PDFatalError(s);
+                }
+                strcpy(s2, &s[len - 4]);
+                sprintf(&s[len - 4], "        ");
+                sprintf(&s[5], "%cx", '|');
+                s[6] = i + 1;
+                strcat(s, s2);
+                s[11] = '\0';
+                if (strlen(pActor->identifier) < 12) {
+                    BrResFree(pActor->identifier);
+                    pActor->identifier = BrResStrDup(pActor, s);
+                } else {
+                    strcpy(pActor->identifier, s);
+                }
 
-            strcpy(s, pActor->identifier);
-            len = strlen(s);
-            if (len < 4) {
-                sprintf(s, "Smash material %s has a name that is less than 4 characters long", pActor->identifier);
-                PDFatalError(s);
+                if ((gCurrent_race.race_spec->race_type >= kRaceType_Smash && (tU16)spec->mode_data.shrapnel.connotations.variable_changes.runtime_changes[0].field_0x2 == gCurrent_race.race_spec->options.smash_and_peds.var_smash_number)
+                        || (gNet_mode != eNet_mode_none && gCurrent_net_game->type == eNet_game_type_2 && spec->mode_data.shrapnel.connotations.variable_changes.runtime_changes[0].field_0x2 == 1)) {
+                    AddSmashableRaceTarget(pActor->model, pActor, -1);
+                }
             }
-            strcpy(s2, &s[len - 4]);
-            sprintf(&s[len - 4], "        ");
-            sprintf(&s[5], "%cx", '|');
-            s[6] = i + 1;
-            strcat(s, s2);
-            s[11] = '\0';
-            if (strlen(pActor->identifier) < 12) {
-                BrResFree(pActor->identifier);
-                pActor->identifier = BrResStrDup(pActor, s);
-            } else {
-                strcpy(pActor->identifier, s);
-            }
-
-            /* A race target is a smashable whose first run-time variable change (spec + 0x2ac in the
-             * retail binary) bumps the race's smash counter (options + 0x214 aliases the smash variable). */
-            if ((gCurrent_race.race_spec->race_type > 3
-                        && (tU16)spec->mode_data.shrapnel.connotations.variable_changes.runtime_changes[0].field_0x2 == (tU32)gCurrent_race.race_spec->options.cars.count_opponents)
-                    || (gNet_mode != eNet_mode_none && gCurrent_net_game->type == eNet_game_type_2
-                        && spec->mode_data.shrapnel.connotations.variable_changes.runtime_changes[0].field_0x2 == 1)) {
-                AddSmashableRaceTarget(pActor->model, pActor, -1);
-            }
-        }
+            i++;
+            spec++;
+        } while (i < gCount_track_smashable_environment_specs);
     }
 }
 
@@ -470,14 +472,31 @@ void C2_HOOK_FASTCALL DisposeActorMatrix(tTrack_spec* pTrack_spec, tTrack_square
 
 // FUNCTION: CARMA2_HW 0x0040ca90
 void C2_HOOK_FASTCALL DisposeColumns(tTrack_spec* pTrack_spec) {
+    int z;
+    int x;
+    tTrack_square** columns;
+    tU16 row;
+    int i;
 
-    DisposeRuntimeBuiltModels(pTrack_spec);
-    DisposeActorMatrix(pTrack_spec, pTrack_spec->columns);
+    for (z = 0; z != pTrack_spec->ncolumns_z; z++) {
+        for (x = 0; x != pTrack_spec->ncolumns_x; x++) {
+            br_actor* actor = pTrack_spec->columns[z][x].actor_0x8;
+
+            if (actor != NULL && actor->model != NULL) {
+                BrModelRemove(actor->model);
+                BrModelFree(actor->model);
+            }
+        }
+    }
+    columns = pTrack_spec->columns;
+    if (columns != NULL) {
+        for (row = 0; row != pTrack_spec->ncolumns_z; row++) {
+            BrMemFree(columns[row]);
+        }
+        BrMemFree(columns);
+    }
     if (pTrack_spec->non_car_list != NULL) {
-        int i;
-
         for (i = gCount_track_non_cars; i < pTrack_spec->count_non_cars; i++) {
-
             if (pTrack_spec->non_car_list[i] != NULL && pTrack_spec->non_car_list[i]->parent != gNon_track_actor) {
                 BrActorRemove(pTrack_spec->non_car_list[i]);
                 BrActorFree(pTrack_spec->non_car_list[i]);
@@ -586,90 +605,60 @@ void C2_HOOK_FASTCALL ProcessNearbyActors(tTrack_spec* pTrack, br_vector3* pPos,
     }
 }
 
-// C2PORT-NONMATCHING: best 42.60% | difftest PASS 2000 trials (spec difftest/specs/0040e290_FoundAnActor.json) | reason original actor-name predicates differ in control-flow layout
 // FUNCTION: CARMA2_HW 0x0040e290
 intptr_t C2_HOOK_CDECL FoundAnActor(br_actor* pActor, void* pContext) {
-    tFoundAnActor_context* c = pContext;
-    br_vector3* pos = c->pos;
+    tFoundAnActor_context* context = pContext;
+    char* identifier;
 
-    if (fabsf(pActor->t.t.translate.t.v[0] - pos->v[0]) > c->max_dist_axis) {
-        goto fail;
+    if ((float)fabs(pActor->t.t.mat.m[3][0] - context->pos->v[0]) > context->max_dist_axis
+            || (float)fabs(pActor->t.t.mat.m[3][1] - context->pos->v[1]) > context->max_dist_axis
+            || (float)fabs(pActor->t.t.mat.m[3][2] - context->pos->v[2]) > context->max_dist_axis) {
+        return 0;
     }
-    if (fabsf(pActor->t.t.translate.t.v[1] - pos->v[1]) > c->max_dist_axis) {
-        goto fail;
+    if (pActor->type != BR_ACTOR_MODEL && (context->match_flags & 0x1000)) {
+        return 0;
     }
-    if (fabsf(pActor->t.t.translate.t.v[2] - pos->v[2]) > c->max_dist_axis) {
-        goto fail;
+    identifier = pActor->identifier;
+    if (identifier == NULL && !(context->match_flags & 0x4)) {
+        return 0;
     }
-
-    {
-        char actor_type = (char)pActor->type;
-        char* name = pActor->identifier;
-
-        if (actor_type != 1 && (c->match_flags & 0x1000) != 0) {
-            goto fail;
+    if (identifier != NULL && identifier[0] == '&' && !(context->match_flags & 0x3)) {
+        return 0;
+    }
+    if (identifier != NULL && identifier[0] != '&' && !(context->match_flags & 0x4)) {
+        return 0;
+    }
+    if (context->match_type == 1) {
+        if (pActor->type != BR_ACTOR_MODEL || pActor->model == NULL || pActor->model->identifier == NULL) {
+            return 0;
         }
-        if (name == NULL) {
-            if ((c->match_flags & 4) == 0) {
-                goto fail;
-            }
-        } else if (*name == 0x26) {
-            if ((c->match_flags & 3) == 0) {
-                goto fail;
-            }
-        } else if ((c->match_flags & 4) == 0) {
-            goto fail;
+        if (context->identifier_index >= 0 && pActor->model->identifier[context->identifier_index] != context->identifier_value) {
+            return 0;
         }
-
-        if (c->match_type == 1) {
-            char* s;
-            if (actor_type != 1) {
-                goto fail;
-            }
-            s = pActor->model->identifier;
-            if (s == NULL) {
-                goto fail;
-            }
-            if (c->identifier_index >= 0) {
-                if (s[c->identifier_index] != c->identifier_value) {
-                    goto fail;
-                }
-            } else {
-                if (s[strlen(s) + c->identifier_index] != c->identifier_value) {
-                    goto fail;
-                }
-            }
-        }
-        if (c->match_type == 2) {
-            if (name == NULL) {
-                goto fail;
-            }
-            if (c->identifier_index >= 0) {
-                if (name[c->identifier_index] != c->identifier_value) {
-                    goto fail;
-                }
-            } else {
-                if (name[strlen(name) + c->identifier_index] != c->identifier_value) {
-                    goto fail;
-                }
-            }
+        if (context->identifier_index < 0 && pActor->model->identifier[strlen(pActor->model->identifier) + context->identifier_index] != context->identifier_value) {
+            return 0;
         }
     }
-
-    {
-        float x0 = pos->v[0] - pActor->t.t.translate.t.v[0];
-        float y0 = pos->v[1] - pActor->t.t.translate.t.v[1];
-        float z0 = pos->v[2] - pActor->t.t.translate.t.v[2];
-        if (x0 * x0 + y0 * y0 + z0 * z0 < c->max_dist_squared) {
-            return c->callback(pActor, c->callback_context);
+    if (context->match_type == 2) {
+        if (identifier == NULL) {
+            return 0;
+        }
+        if (context->identifier_index >= 0 && identifier[context->identifier_index] != context->identifier_value) {
+            return 0;
+        }
+        if (context->identifier_index < 0 && pActor->identifier[strlen(pActor->identifier) + context->identifier_index] != context->identifier_value) {
+            return 0;
         }
     }
-fail:
-    return 0;
+    if (Vector3DistanceSquared(context->pos, (br_vector3*)pActor->t.t.mat.m[3]) >= context->max_dist_squared) {
+        return 0;
+    }
+    return context->callback(pActor, context->callback_context);
 }
 
 // FUNCTION: CARMA2_HW 0x0040d7c0
 void C2_HOOK_FASTCALL RenderTrack(br_actor* pWorld, tTrack_spec* pTrack_spec, br_actor* pCamera, br_matrix34* pCamera_to_world) {
+#ifdef CARPOCALYPSE2_MATCHING
     tU8 column_x;
     tU8 column_z;
     tU8 min_x;
@@ -796,6 +785,138 @@ void C2_HOOK_FASTCALL RenderTrack(br_actor* pWorld, tTrack_spec* pTrack_spec, br
             }
         }
     }
+#else
+    tU8 column_x;
+    tU8 column_z;
+    tU8 min_x;
+    tU8 max_x;
+    tU8 min_z;
+    tU8 max_z;
+    br_vector3 edge_before;
+    br_vector3 edge_after;
+    br_camera* camera;
+    br_scalar tan_fov_ish;
+    tU8 x;
+    tU8 z;
+//    br_actor* result;
+
+    camera = (br_camera*)pCamera->type_data;
+    if (pTrack_spec->columns == NULL) {
+        BrZbSceneRenderAdd(pWorld);
+    } else {
+        XZToColumnXZ(&column_x, &column_z, pCamera_to_world->m[3][0], pCamera_to_world->m[3][2], pTrack_spec);
+        min_x = column_x;
+        max_x = column_x;
+        min_z = column_z;
+        max_z = column_z;
+        tan_fov_ish = BR_SIN(camera->field_of_view / 2) / BR_COS(camera->field_of_view / 2);
+
+        edge_after.v[0] = tan_fov_ish * camera->aspect;
+        edge_after.v[1] = tan_fov_ish;
+        edge_after.v[2] = -1.0;
+        BrVector3Scale(&edge_before, &edge_after, camera->yon_z * gYon_factor);
+        BrMatrix34ApplyV(&edge_after, &edge_before, pCamera_to_world);
+        XZToColumnXZ(&column_x, &column_z, pCamera_to_world->m[3][0] + edge_after.v[0], pCamera_to_world->m[3][2] + edge_after.v[2], pTrack_spec);
+        if (column_x < min_x) {
+            min_x = column_x;
+        } else if (column_x > max_x) {
+            max_x = column_x;
+        }
+        if (column_z < min_z) {
+            min_z = column_z;
+        } else if (column_z > max_z) {
+            max_z = column_z;
+        }
+        edge_before.v[0] = -edge_before.v[0];
+        BrMatrix34ApplyV(&edge_after, &edge_before, pCamera_to_world);
+        XZToColumnXZ(&column_x, &column_z, pCamera_to_world->m[3][0] + edge_after.v[0], pCamera_to_world->m[3][2] + edge_after.v[2], pTrack_spec);
+        if (column_x < min_x) {
+            min_x = column_x;
+        } else if (column_x > max_x) {
+            max_x = column_x;
+        }
+        if (column_z < min_z) {
+            min_z = column_z;
+        } else {
+            if (column_z > max_z) {
+                max_z = column_z;
+            }
+        }
+        edge_before.v[1] = -edge_before.v[1];
+        BrMatrix34ApplyV(&edge_after, &edge_before, pCamera_to_world);
+        XZToColumnXZ(&column_x, &column_z, pCamera_to_world->m[3][0] + edge_after.v[0], pCamera_to_world->m[3][2] + edge_after.v[2], pTrack_spec);
+        if (column_x < min_x) {
+            min_x = column_x;
+        } else if (column_x > max_x) {
+            max_x = column_x;
+        }
+        if (column_z < min_z) {
+            min_z = column_z;
+        } else if (column_z > max_z) {
+            max_z = column_z;
+        }
+        edge_before.v[0] = -edge_before.v[0];
+        BrMatrix34ApplyV(&edge_after, &edge_before, pCamera_to_world);
+        XZToColumnXZ(&column_x, &column_z, pCamera_to_world->m[3][0] + edge_after.v[0], pCamera_to_world->m[3][2] + edge_after.v[2], pTrack_spec);
+        if (column_x < min_x) {
+            min_x = column_x;
+        } else if (column_x > max_x) {
+            max_x = column_x;
+        }
+        if (column_z < min_z) {
+            min_z = column_z;
+        } else if (column_z > max_z) {
+            max_z = column_z;
+        }
+        if (min_x > 0) {
+            min_x--;
+        }
+        if (pTrack_spec->ncolumns_x - 1 > max_x) {
+            max_x++;
+        }
+        if (min_z > 0) {
+            min_z--;
+        }
+        if (pTrack_spec->ncolumns_z - 1 > max_z) {
+            max_z++;
+        }
+        if ((float)fabs(pCamera_to_world->m[2][0]) <= (float)fabs(pCamera_to_world->m[2][2])) {
+            for (z = min_z; z <= max_z; z++) {
+                for (x = min_x; x <= max_x; x++) {
+                    tU8 idx_x = pCamera_to_world->m[2][0] > 0.f ? x : (max_x + min_x - x);
+                    tU8 idx_z = pCamera_to_world->m[2][2] > 0.f ? z : (max_z + min_z - z);
+                    br_actor* a = pTrack_spec->columns[idx_z][idx_x].actor_0x0;
+                    if (a != NULL) {
+                        if (gRender_alternative_track_actors) {
+                            BrZbsSceneRenderAdd(a);
+                        } else {
+                            BrZbsSceneRenderAdd(pTrack_spec->columns[idx_z][idx_x].actor_0x4);
+                        }
+                    }
+                }
+            }
+        } else {
+            for (x = min_x; x <= max_x; x++) {
+                for (z = min_z; z <= max_z; z++) {
+                    tU8 idx_x = pCamera_to_world->m[2][0] > 0.f ? x : (max_x + min_x - x);
+                    tU8 idx_z = pCamera_to_world->m[2][2] > 0.f ? z : (max_z + min_z - z);
+                    br_actor* a = pTrack_spec->columns[idx_z][idx_x].actor_0x0;
+                    if (a != NULL) {
+                        if (gRender_alternative_track_actors) {
+                            BrZbsSceneRenderAdd(a);
+                        } else {
+                            BrZbsSceneRenderAdd(pTrack_spec->columns[idx_z][idx_x].actor_0x4);
+                        }
+                    }
+                }
+            }
+        }
+        if (gRender_alternative_track_actors) {
+            /* port: the merged fixed track geometry of the visible columns (trackbatch.c) */
+            C2TrackBatchRender(min_x, max_x, min_z, max_z);
+        }
+    }
+#endif
 }
 // AssertNoncars
 
@@ -812,9 +933,11 @@ void C2_HOOK_FASTCALL RenderTrack(br_actor* pWorld, tTrack_spec* pTrack_spec, br
 void C2_HOOK_FASTCALL XZToColumnXZ(tU8* pColumn_x, tU8* pColumn_z, br_scalar pX, br_scalar pZ, tTrack_spec* pTrack_spec) {
     br_scalar x;
     br_scalar z;
+    br_scalar size_x = pTrack_spec->column_size_x;
+    br_scalar size_z = pTrack_spec->column_size_z;
 
-    x = (pX - pTrack_spec->origin_x) / pTrack_spec->column_size_x;
-    z = (pZ - pTrack_spec->origin_z) / pTrack_spec->column_size_z;
+    x = (pX - pTrack_spec->origin_x) / size_x;
+    z = (pZ - pTrack_spec->origin_z) / size_z;
     if (x < 0.0f) {
         x = 0.0f;
     }

@@ -147,9 +147,52 @@ void C2_HOOK_FASTCALL ReadCrushSettings(FILE* pF) {
 
 // RemoveCarFromCrushLists
 
-// C2PORT-NONMATCHING: best 62.01% | difftest PASS 2000 trials (spec difftest/specs/00429fa0_InitCrushSystems.json) | reason regalloc-loop,stack-layout
 // FUNCTION: CARMA2_HW 0x00429fa0
 void C2_HOOK_FASTCALL InitCrushSystems(void) {
+#ifdef CARPOCALYPSE2_MATCHING
+    int i;
+
+    memset(gCrush_array_0067a190, 0, sizeof(gCrush_array_0067a190));
+    gDAT_00679440 = 0;
+    gDetached_bit_crush_info_buffer.capacity = 16;
+    gDetached_bit_crush_info_buffer.crush_infos = BrMemAllocate(gDetached_bit_crush_info_buffer.capacity * sizeof(tCrush_info), kMem_crush_data);
+    gDetached_bit_collision_infos = BrMemAllocate(gDetached_bit_crush_info_buffer.capacity * sizeof(tPhysics_object), kMem_crush_data);
+    for (i = 0; i < gDetached_bit_crush_info_buffer.capacity; i++) {
+        gDetached_bit_crush_info_buffer.crush_infos[i].field_0xdc = 1.f;
+        gDetached_bit_crush_info_buffer.crush_infos[i].field_0xe0 = 0.28985506f;
+        gDetached_bit_crush_info_buffer.crush_infos[i].collision_object = &gDetached_bit_collision_infos[i];
+        gDetached_bit_collision_infos[i].shape = (tPhysics_shape*)AllocateShapePolyhedron(16, kMem_crush_data);
+    }
+    gDetached_bit_driver = eDriver_detached_bit;
+    for (i = 0; i < (int)CARPOCALYPSE2_ASIZE(gTrack_crush_joints); i++) {
+        gTrack_crush_joints[i] = AllocatePhysicsJoint(3, kMem_crush_data);
+    }
+    gSplit_car_crush_info_buffer.capacity = 3;
+    gSplit_car_crush_info_buffer.crush_infos = BrMemAllocate(gSplit_car_crush_info_buffer.capacity * sizeof(tCrush_info), kMem_crush_data);
+    gSplit_car_collision_infos = BrMemAllocate(gSplit_car_crush_info_buffer.capacity * sizeof(tPhysics_object), kMem_crush_data);
+    for (i = 0; i < gSplit_car_crush_info_buffer.capacity; i++) {
+        int j;
+        tPhysics_shape* shape = NULL;
+
+        gSplit_car_crush_info_buffer.crush_infos[i].field_0xdc = 0.f;
+        gSplit_car_crush_info_buffer.crush_infos[i].collision_object = &gSplit_car_collision_infos[i];
+        for (j = 0; j < 4; j++) {
+            tPhysics_shape* polyhedron = (tPhysics_shape*)AllocateShapePolyhedron(16, kMem_crush_data);
+
+            if (shape != NULL) {
+                shape->common.next = polyhedron;
+            } else {
+                gSplit_car_collision_infos[i].shape = polyhedron;
+            }
+            shape = polyhedron;
+        }
+        if (shape != NULL) {
+            shape->common.next = NULL;
+        }
+    }
+    gSplit_car_driver = eDriver_split_car;
+    gGonad_sphere_collision_shape = (tPhysics_shape*)AllocateShapeSphere(kMem_crush_data);
+#else
     int i;
     int j;
     tCrush_info* crush_infos;
@@ -218,6 +261,7 @@ void C2_HOOK_FASTCALL InitCrushSystems(void) {
 
     gSplit_car_driver = 3;
     gGonad_sphere_collision_shape = (tPhysics_shape*)AllocateShapeSphere(kMem_crush_data);
+#endif
 }
 
 // ResetCrushSystems

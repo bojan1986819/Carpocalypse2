@@ -46,6 +46,9 @@
 #include <assert.h>
 #include <c2_sys_stat.h>
 #include "c2_math.h"
+#ifndef CARPOCALYPSE2_MATCHING
+#include "trackbatch.h"
+#endif
 
 #define RGB565_R(V) (((V) & 0xf800) >> 11)
 #define RGB565_G(V) (((V) & 0x07e0) >> 5)
@@ -442,6 +445,16 @@ tWall_texturing_level C2_HOOK_FASTCALL GetWallTexturingLevel(void) {
 int C2_HOOK_FASTCALL IsValidFile(const char* path) {
     struct stat s;
 
+#ifdef __vita__
+    {
+        /* port: listed once per directory (sdl3_casefix.c), not stat'ed per candidate name */
+        extern int C2VitaStatCached(const char* pPath, unsigned* pMtime, unsigned* pSize);
+        int cached = C2VitaStatCached(path, NULL, NULL);
+        if (cached >= 0) {
+            return cached;
+        }
+    }
+#endif
 #ifndef _WIN32
     /* Linux is case-sensitive; the retail game's data is not. */
     {
@@ -457,6 +470,16 @@ int C2_HOOK_FASTCALL GetLastModificationTime(const char* path) {
     struct stat s;
     int res;
 
+#ifdef __vita__
+    {
+        extern int C2VitaStatCached(const char* pPath, unsigned* pMtime, unsigned* pSize);
+        unsigned mtime;
+        int cached = C2VitaStatCached(path, &mtime, NULL);
+        if (cached >= 0) {
+            return cached ? (int)mtime : 0;
+        }
+    }
+#endif
 #ifndef _WIN32
     /* Linux is case-sensitive; the retail game's data is not. */
     {
@@ -1041,19 +1064,20 @@ br_pixelmap* C2_HOOK_FASTCALL SwapPixelmapInStorage(br_pixelmap* pNew, br_pixelm
 
 // FUNCTION: CARMA2_HW 0x004761e0
 br_uint_32 C2_HOOK_FASTCALL CalcProximities(br_actor* pActor, br_material* pMat, void* pData) {
+    tFunkotronic_spec* the_funk;
+    br_face* the_face;
     int i;
-    tFunkotronic_spec* the_funk = pData;
+
+    (void)pMat;
+    the_funk = pData;
 
     C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, material, 0x8);
     C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, proximity_count, 0x150);
 
     if (pActor->model != NULL) {
-        for (i = 0; i < pActor->model->nfaces; i++) {
-            br_face* the_face;
-
-            the_face = &pActor->model->faces[i];
+        for (i = 0, the_face = pActor->model->faces; i < pActor->model->nfaces; i++, the_face++) {
             if (the_face->material == the_funk->material) {
-                the_funk->proximity_count += 1;
+                the_funk->proximity_count++;
             }
         }
     }
@@ -1192,6 +1216,7 @@ static void texture_string_to_bits(tU8 *bits, const char *s) {
 
 // FUNCTION: CARMA2_HW 0x00474ac0
 void C2_HOOK_FASTCALL AddFunkotronics(FILE* pF, int pOwner, int pRef_offset, tCar_crush_buffer* pCar_crush_datas) {
+#ifdef CARPOCALYPSE2_MATCHING
     int first_time;
     char s[256];
     tFunkotronic_spec* the_funk;
@@ -1212,71 +1237,6 @@ void C2_HOOK_FASTCALL AddFunkotronics(FILE* pF, int pOwner, int pRef_offset, tCa
     float yon_factor;
     float fov_factor;
 
-#ifndef CARPOCALYPSE2_MATCHING
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, flags, 0x4);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, material, 0x8);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, mode, 0xc);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_type, 0x10);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mode, 0x14);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, proximity_count, 0x150);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, proximity_array, 0x154);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.spin_info.period, 0x18);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.texture_info.data, 0x18);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.rock_info.period, 0x18);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.rock_info.x_centre, 0x1c);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.rock_info.y_centre, 0x20);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.rock_info.rock_angle, 0x24);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.throb_info.x_period, 0x18);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.throb_info.y_period, 0x1c);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.throb_info.x_centre, 0x20);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.throb_info.y_centre, 0x24);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.throb_info.x_magnitude, 0x28);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.throb_info.y_magnitude, 0x2c);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.slither_info.x_period, 0x18);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.slither_info.y_period, 0x1c);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.slither_info.x_magnitude, 0x20);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.slither_info.y_magnitude, 0x24);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.roll_info.x_period, 0x18);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.roll_info.y_period, 0x1c);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, lighting_animation_type, 0x30);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, lighting_animation_data.controlled.period, 0x34);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, lighting_animation_data.texture_info.data, 0x34);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, lighting_animation_data.rock_info.period, 0x34);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, ambient_base, 0x38);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, ambient_delta, 0x3c);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, direct_base, 0x40);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, direct_delta, 0x44);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, specular_base, 0x48);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, specular_delta, 0x4c);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_type, 0x50);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, time_mode, 0x54);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, last_frame, 0x58);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.mode, 0x5c);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.controlled.period, 0x60);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.texture_info.data, 0x60);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.rock_info.period, 0x60);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.texture_count, 0x64);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.current_frame, 0x68);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.has_matrix, 0x6c);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.textures, 0x70);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.mat, 0x90);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.flic_info.flic_data, 0x5c);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.flic_info.flic_data_length, 0x60);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.flic_info.flic_descriptor, 0x64);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.flic_info.flic_descriptor.width, 0xa8);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.flic_info.flic_descriptor.height, 0xac);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.camera_info.mode, 0x5c);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.camera_info.field_0x60, 0x60);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.camera_info.count, 0x64);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.camera_info.actors, 0x68);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.mirror_info.yon, 0x60);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.mirror_info.actor, 0x64);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.mirror_info.mat, 0x68);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.mirror_info.bounds, 0x98);
-    C2_HOOK_BUG_ON(sizeof(tFunk_temp_buffer) != 0x30);
-    C2_HOOK_BUG_ON(sizeof(tFunk_texturebits) != 0x28);
-    C2_HOOK_BUG_ON(500 * sizeof(tFunk_temp_buffer) != 24000);
-#endif
 
     gFunk_temp_vertices = BrMemAllocate(500 * sizeof(tFunk_temp_buffer), BR_MEMORY_APPLICATION);
     first_time = 1;
@@ -1724,6 +1684,538 @@ void C2_HOOK_FASTCALL AddFunkotronics(FILE* pF, int pOwner, int pRef_offset, tCa
         }
     }
     BrMemFree(gFunk_temp_vertices);
+#else
+    int first_time;
+    char s[256];
+    tFunkotronic_spec* the_funk;
+    char* str;
+    float x_0;
+    float x_1;
+    int g0;
+    int g1;
+    float speed1;
+    float speed2;
+    int i;
+    float a_min;
+    float d_min;
+    float s_min;
+    float a_max;
+    float d_max;
+    float s_max;
+    float yon_factor;
+    float fov_factor;
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, flags, 0x4);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, material, 0x8);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, mode, 0xc);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_type, 0x10);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mode, 0x14);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, proximity_count, 0x150);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, proximity_array, 0x154);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.spin_info.period, 0x18);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.texture_info.data, 0x18);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.rock_info.period, 0x18);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.rock_info.x_centre, 0x1c);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.rock_info.y_centre, 0x20);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.rock_info.rock_angle, 0x24);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.throb_info.x_period, 0x18);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.throb_info.y_period, 0x1c);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.throb_info.x_centre, 0x20);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.throb_info.y_centre, 0x24);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.throb_info.x_magnitude, 0x28);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.throb_info.y_magnitude, 0x2c);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.slither_info.x_period, 0x18);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.slither_info.y_period, 0x1c);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.slither_info.x_magnitude, 0x20);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.slither_info.y_magnitude, 0x24);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.roll_info.x_period, 0x18);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, matrix_mod_data.roll_info.y_period, 0x1c);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, lighting_animation_type, 0x30);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, lighting_animation_data.controlled.period, 0x34);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, lighting_animation_data.texture_info.data, 0x34);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, lighting_animation_data.rock_info.period, 0x34);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, ambient_base, 0x38);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, ambient_delta, 0x3c);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, direct_base, 0x40);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, direct_delta, 0x44);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, specular_base, 0x48);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, specular_delta, 0x4c);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_type, 0x50);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, time_mode, 0x54);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, last_frame, 0x58);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.mode, 0x5c);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.controlled.period, 0x60);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.texture_info.data, 0x60);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.rock_info.period, 0x60);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.texture_count, 0x64);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.current_frame, 0x68);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.has_matrix, 0x6c);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.textures, 0x70);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.frames_info.mat, 0x90);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.flic_info.flic_data, 0x5c);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.flic_info.flic_data_length, 0x60);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.flic_info.flic_descriptor, 0x64);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.flic_info.flic_descriptor.width, 0xa8);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.flic_info.flic_descriptor.height, 0xac);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.camera_info.mode, 0x5c);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.camera_info.field_0x60, 0x60);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.camera_info.count, 0x64);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.camera_info.actors, 0x68);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.mirror_info.yon, 0x60);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.mirror_info.actor, 0x64);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.mirror_info.mat, 0x68);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tFunkotronic_spec, texture_animation_data.mirror_info.bounds, 0x98);
+    C2_HOOK_BUG_ON(sizeof(tFunk_temp_buffer) != 0x30);
+    C2_HOOK_BUG_ON(sizeof(tFunk_texturebits) != 0x28);
+    C2_HOOK_BUG_ON(500 * sizeof(tFunk_temp_buffer) != 24000);
+
+    gFunk_temp_vertices = BrMemAllocate(500 * sizeof(tFunk_temp_buffer), BR_MEMORY_APPLICATION);
+    first_time = 1;
+    while (!PFfeof(pF)) {
+        PossibleService();
+        GetALineAndDontArgue(pF, s);
+        if (strcmp(s, "END OF FUNK") == 0) {
+            break;
+        }
+        if (!first_time) {
+            if (strcmp(s, "NEXT FUNK") != 0) {
+                FatalError(kFatalError_FunkotronicFile);
+            }
+            GetALineAndDontArgue(pF, s);
+        }
+        first_time = 0;
+        str = strtok(s, "\t ,/");
+
+        the_funk = AddNewFunkotronic();
+        the_funk->owner = pOwner;
+        the_funk->material = NULL;
+        if (pCar_crush_datas != NULL) {
+            the_funk->material = FindSmashableMaterial(s, the_funk, pCar_crush_datas);
+        }
+        if (the_funk->material == NULL) {
+            the_funk->material = BrMaterialFind(str);
+        }
+        if (the_funk->material == NULL) {
+            FatalError(kFatalError_CannotFindMainMaterialInFunkotronicFile_S, str);
+        }
+        str = strtok(NULL, "\t ,/");
+        if (str != NULL && strcmp(str, "multiple") == 0 && the_funk->material->identifier != NULL) {
+            BrResFree(the_funk->material->identifier);
+            the_funk->material->identifier = NULL;
+        }
+        the_funk->mode = GetALineAndInterpretCommand(pF, gFunk_nature_names, CARPOCALYPSE2_ASIZE(gFunk_nature_names));
+        the_funk->proximity_count = 0;
+        the_funk->proximity_array = NULL;
+        if (the_funk->mode == eFunk_mode_distance) {
+            DRActorEnumRecurseWithMat(gUniverse_actor, NULL, CalcProximities, the_funk);
+            the_funk->proximity_array = BrMemAllocate(the_funk->proximity_count * sizeof(tFunk_proximity), kMem_funk_prox_array);
+            the_funk->proximity_count = 0;
+            DRActorEnumRecurseWithMat(gUniverse_actor, NULL, AddProximities, the_funk);
+        }
+        the_funk->matrix_mod_type = GetALineAndInterpretCommand(pF, gFunk_type_names, CARPOCALYPSE2_ASIZE(gFunk_type_names));
+        the_funk->flags &= ~0x1;
+        if (the_funk->matrix_mod_type != eMatrix_mod_none) {
+            the_funk->matrix_mode = GetALineAndInterpretCommand(pF, gFunk_move_names, CARPOCALYPSE2_ASIZE(gFunk_move_names));
+        }
+        switch (the_funk->matrix_mod_type) {
+        case eMatrix_mod_spin:
+            switch (the_funk->matrix_mode) {
+            case eMove_controlled:
+            case eMove_absolute:
+                g0 = GetAnInt(pF);
+                AddFunkGrooveBinding(pRef_offset + g0, &the_funk->matrix_mod_data.spin_info.period);
+                break;
+            case eMove_texturebits:
+                the_funk->matrix_mod_data.texture_info.data = BrMemAllocate(sizeof(tFunk_texturebits), kMem_funk_spec);
+                GetAString(pF, s);
+                the_funk->matrix_mod_data.texture_info.data->count = (tU8)strlen(s);
+                texture_string_to_bits(the_funk->matrix_mod_data.texture_info.data->bits, s);
+                the_funk->matrix_mod_data.texture_info.data->car = gCurrent_car_spec;
+                break;
+            default:
+                x_0 = GetAScalar(pF);
+                the_funk->matrix_mod_data.rock_info.period = (x_0 == 0.0f) ? 0.0f : 1000.0f / x_0;
+                break;
+            }
+            break;
+        case eMatrix_mod_rock:
+            switch (the_funk->matrix_mode) {
+            case eMove_controlled:
+            case eMove_absolute:
+                g0 = GetAnInt(pF);
+                AddFunkGrooveBinding(pRef_offset + g0, &the_funk->matrix_mod_data.rock_info.period);
+                break;
+            case eMove_texturebits:
+                the_funk->matrix_mod_data.texture_info.data = BrMemAllocate(sizeof(tFunk_texturebits), kMem_funk_spec);
+                GetAString(pF, s);
+                the_funk->matrix_mod_data.texture_info.data->count = (tU8)strlen(s);
+                texture_string_to_bits(the_funk->matrix_mod_data.texture_info.data->bits, s);
+                the_funk->matrix_mod_data.texture_info.data->car = gCurrent_car_spec;
+                break;
+            default:
+                x_0 = GetAScalar(pF);
+                the_funk->matrix_mod_data.rock_info.period = (x_0 == 0.0f) ? 0.0f : 1000.0f / x_0;
+                break;
+            }
+            the_funk->matrix_mod_data.rock_info.rock_angle = GetAScalar(pF);
+            GetPairOfFloats(pF, &x_0, &x_1);
+            the_funk->matrix_mod_data.rock_info.x_centre = x_0 / 100.0f;
+            the_funk->matrix_mod_data.rock_info.y_centre = x_1 / 100.0f;
+            break;
+        case eMatrix_mod_throb:
+            switch (the_funk->matrix_mode) {
+            case eMove_controlled:
+            case eMove_absolute:
+                GetPairOfInts(pF, &g0, &g1);
+                if (g0 >= 0) {
+                    AddFunkGrooveBinding(pRef_offset + g0, &the_funk->matrix_mod_data.throb_info.x_period);
+                }
+                if (g1 >= 0) {
+                    AddFunkGrooveBinding(pRef_offset + g1, &the_funk->matrix_mod_data.throb_info.y_period);
+                }
+                break;
+            default:
+                GetPairOfFloats(pF, &speed1, &speed2);
+                the_funk->matrix_mod_data.throb_info.x_period = (speed1 == 0.0f) ? 0.0f : 1000.0f / speed1;
+                the_funk->matrix_mod_data.throb_info.y_period = (speed2 == 0.0f) ? 0.0f : 1000.0f / speed2;
+                break;
+            }
+            GetPairOfFloatPercents(pF,
+                &the_funk->matrix_mod_data.throb_info.x_magnitude,
+                &the_funk->matrix_mod_data.throb_info.y_magnitude);
+            GetPairOfFloats(pF, &x_0, &x_1);
+            the_funk->matrix_mod_data.throb_info.x_centre = x_0 / 100.0f;
+            the_funk->matrix_mod_data.throb_info.y_centre = x_1 / 100.0f;
+            if (the_funk->matrix_mode != eMove_controlled) {
+                if (the_funk->matrix_mod_data.throb_info.x_period == 0.0f) {
+                    the_funk->matrix_mod_data.throb_info.x_period = 1.0f;
+                    the_funk->matrix_mod_data.throb_info.x_magnitude = 0.0f;
+                }
+                if (the_funk->matrix_mod_data.throb_info.y_period == 0.0f) {
+                    the_funk->matrix_mod_data.throb_info.y_period = 1.0f;
+                    the_funk->matrix_mod_data.throb_info.y_magnitude = 0.0f;
+                }
+            }
+            break;
+        case eMatrix_mod_slither:
+            switch (the_funk->matrix_mode) {
+            case eMove_controlled:
+            case eMove_absolute:
+                GetPairOfInts(pF, &g0, &g1);
+                if (g0 >= 0) {
+                    AddFunkGrooveBinding(pRef_offset + g0, &the_funk->matrix_mod_data.slither_info.x_period);
+                }
+                if (g1 >= 0) {
+                    AddFunkGrooveBinding(pRef_offset + g1, &the_funk->matrix_mod_data.slither_info.y_period);
+                }
+                break;
+            default:
+                GetPairOfFloats(pF, &speed1, &speed2);
+                the_funk->matrix_mod_data.slither_info.x_period = (speed1 == 0.0f) ? 0.0f : 1000.0f / speed1;
+                the_funk->matrix_mod_data.slither_info.y_period = (speed2 == 0.0f) ? 0.0f : 1000.0f / speed2;
+                break;
+            }
+            GetPairOfFloatPercents(pF,
+                &the_funk->matrix_mod_data.slither_info.x_magnitude,
+                &the_funk->matrix_mod_data.slither_info.y_magnitude);
+            if (the_funk->matrix_mode != eMove_controlled) {
+                if (the_funk->matrix_mod_data.slither_info.x_period == 0.0f) {
+                    the_funk->matrix_mod_data.slither_info.x_period = 1.0f;
+                    the_funk->matrix_mod_data.slither_info.x_magnitude = 0.0f;
+                }
+                if (the_funk->matrix_mod_data.slither_info.y_period == 0.0f) {
+                    the_funk->matrix_mod_data.slither_info.y_period = 1.0f;
+                    the_funk->matrix_mod_data.slither_info.y_magnitude = 0.0f;
+                }
+            }
+            break;
+        case eMatrix_mod_roll:
+            switch (the_funk->matrix_mode) {
+            case eMove_controlled:
+            case eMove_absolute:
+                GetPairOfInts(pF, &g0, &g1);
+                if (g0 >= 0) {
+                    AddFunkGrooveBinding(pRef_offset + g0, &the_funk->matrix_mod_data.roll_info.x_period);
+                }
+                if (g1 >= 0) {
+                    AddFunkGrooveBinding(pRef_offset + g1, &the_funk->matrix_mod_data.roll_info.y_period);
+                }
+                break;
+            default:
+                GetPairOfFloats(pF, &speed1, &speed2);
+                the_funk->matrix_mod_data.roll_info.x_period = speed1 == 0.0f ? 0.0f : 1000.0f / speed1;
+                the_funk->matrix_mod_data.roll_info.y_period = speed2 == 0.0f ? 0.0f : 1000.0f / speed2;
+                break;
+            }
+            break;
+        default:
+            break;
+        }
+        the_funk->lighting_animation_type = GetALineAndInterpretCommand(pF, gFunk_move_names, CARPOCALYPSE2_ASIZE(gFunk_move_names));
+        if (the_funk->lighting_animation_type != eMove_none) {
+            switch (the_funk->lighting_animation_type) {
+            case eMove_controlled:
+            case eMove_absolute:
+                g0 = GetAnInt(pF);
+                AddFunkGrooveBinding(pRef_offset + g1, &the_funk->lighting_animation_data.controlled.period);
+                break;
+            case eMove_texturebits:
+                the_funk->lighting_animation_data.texture_info.data = BrMemAllocate(sizeof(tFunk_texturebits), kMem_funk_spec);
+                GetAString(pF, s);
+                the_funk->lighting_animation_data.texture_info.data->count = (tU8)strlen(s);
+                texture_string_to_bits(the_funk->lighting_animation_data.texture_info.data->bits, s);
+                the_funk->lighting_animation_data.texture_info.data->car = gCurrent_car_spec;
+                break;
+            default:
+                x_0 = GetAFloat(pF);
+                the_funk->lighting_animation_data.rock_info.period = (x_0 == 0.0f) ? 0.0f : 1000.0f / x_0;
+                break;
+            }
+            GetThreeFloatPercents(pF, &a_min, &d_min, &s_min);
+            GetThreeFloatPercents(pF, &a_max, &d_max, &s_max);
+            the_funk->ambient_base = (a_min + a_max) / 2.0f;
+            the_funk->direct_base = (d_min + d_max) / 2.0f;
+            the_funk->specular_base = (s_min + s_max) / 2.0f;
+            the_funk->ambient_delta = (a_max - a_min) / 2.0f;
+            the_funk->direct_delta = (d_max - d_min) / 2.0f;
+            the_funk->specular_delta = (s_max - s_min) / 2.0f;
+        }
+        the_funk->texture_animation_type = GetALineAndInterpretCommand(pF, gFunk_anim_names, CARPOCALYPSE2_ASIZE(gFunk_anim_names));
+        if (the_funk->texture_animation_type != eTexture_animation_none
+                && the_funk->texture_animation_type != eTexture_animation_mirror
+                && the_funk->texture_animation_type != eTexture_animation_camera) {
+            the_funk->time_mode = GetALineAndInterpretCommand(pF, gTime_mode_names, CARPOCALYPSE2_ASIZE(gTime_mode_names));
+        }
+        if (the_funk->texture_animation_type == eTexture_animation_flic && gAusterity_mode) {
+            the_funk->texture_animation_type = eTexture_animation_none;
+            GetALineAndDontArgue(pF, s);
+        }
+        the_funk->last_frame = 0.0f;
+        switch (the_funk->texture_animation_type) {
+        case eTexture_animation_frames:
+            the_funk->texture_animation_data.frames_info.mode = GetALineAndInterpretCommand(pF, gFunk_move_names, CARPOCALYPSE2_ASIZE(gFunk_move_names));
+            switch (the_funk->texture_animation_data.frames_info.mode) {
+            case eMove_controlled:
+            case eMove_absolute:
+                g0 = GetAnInt(pF);
+                AddFunkGrooveBinding(pRef_offset + g0, &the_funk->texture_animation_data.frames_info.controlled.period);
+                break;
+            case eMove_texturebits:
+                the_funk->texture_animation_data.frames_info.texture_info.data = BrMemAllocate(sizeof(tFunk_texturebits), kMem_funk_spec);
+                GetAString(pF, s);
+                the_funk->texture_animation_data.frames_info.texture_info.data->count = (tU8)strlen(s);
+                texture_string_to_bits(the_funk->texture_animation_data.frames_info.texture_info.data->bits, s);
+                the_funk->texture_animation_data.frames_info.texture_info.data->car = gCurrent_car_spec;
+                break;
+            default:
+                x_0 = GetAFloat(pF);
+                the_funk->texture_animation_data.frames_info.rock_info.period = (x_0 == 0.0f) ? 0.0f : 1000.0F / x_0;
+                break;
+            }
+            the_funk->texture_animation_data.frames_info.texture_count = (int)GetAScalar(pF);
+            the_funk->texture_animation_data.frames_info.current_frame = 0;
+            the_funk->texture_animation_data.frames_info.has_matrix = 0;
+            for (i = 0; i < the_funk->texture_animation_data.frames_info.texture_count; i++) {
+                GetALineAndDontArgue(pF, s);
+                str = strtok(s, "\t ,/");
+                the_funk->texture_animation_data.frames_info.textures[i] = BrMapFind(str);
+                if (the_funk->texture_animation_data.frames_info.textures[i] == NULL) {
+                    FatalError(kFatalError_CannotFindAnimationFramePixelmapReferencedInFunkotronicFile);
+                }
+                BrMatrix23Identity(&the_funk->texture_animation_data.frames_info.mat[i]);
+                str = strtok(NULL, "\t ,/");
+                if (str != NULL && strlen(str) != 0) {
+                    int size_x;
+                    int pos_x;
+                    int size_y;
+                    int pos_y;
+
+                    the_funk->texture_animation_data.frames_info.has_matrix = 1;
+                    sscanf(str, "%d", &size_x);
+                    str = strtok(NULL, "\t ,/");
+                    sscanf(str, "%d", &pos_x);
+                    str = strtok(NULL, "\t ,/");
+                    sscanf(str, "%d", &size_y);
+                    str = strtok(NULL, "\t ,/");
+                    sscanf(str, "%d", &pos_y);
+                    the_funk->texture_animation_data.frames_info.mat[i].m[0][0] = 1.f / (float)size_x;
+                    the_funk->texture_animation_data.frames_info.mat[i].m[1][1] = 1.f / (float)size_y;
+                    the_funk->texture_animation_data.frames_info.mat[i].m[2][0] = (float)pos_x / (float)size_x;
+                    the_funk->texture_animation_data.frames_info.mat[i].m[2][1] = (float)pos_y / (float)size_y;
+                }
+            }
+            break;
+        case eTexture_animation_flic:
+            GetAString(pF, s);
+            the_funk->texture_animation_data.flic_info.flic_data = NULL;
+            if (LoadFlicData(s, &the_funk->texture_animation_data.flic_info.flic_data, &the_funk->texture_animation_data.flic_info.flic_data_length)) {
+                char *the_pixels;
+                br_pixelmap *the_pixelmap;
+
+                the_funk->texture_animation_data.flic_info.flic_descriptor.data_start = NULL;
+                StartFlic(s, -1, &the_funk->texture_animation_data.flic_info.flic_descriptor, the_funk->texture_animation_data.flic_info.flic_data_length, (tS8*)the_funk->texture_animation_data.flic_info.flic_data, NULL, 0, 0, 0);
+                the_funk->last_frame = 0.0f;
+                the_pixels = BrMemAllocate(
+                    the_funk->texture_animation_data.flic_info.flic_descriptor.height
+                        * ((the_funk->texture_animation_data.flic_info.flic_descriptor.width + 3) & ~3),
+                        kMem_video_pixels);
+                if (gScreen->row_bytes < 0) {
+                    BrFatal("C:\\Carma2\\Source\\Common\\Funkgroo.c", 732,
+                            "Bruce bug at line %d, file C:\\Carma2\\Source\\Common\\Funkgroo.c", 732);
+                }
+                the_pixelmap = DRPixelmapAllocate(gScreen->type,
+                    the_funk->texture_animation_data.flic_info.flic_descriptor.width,
+                    the_funk->texture_animation_data.flic_info.flic_descriptor.height,
+                    the_pixels,
+                    0);
+                AssertFlicPixelmap(&the_funk->texture_animation_data.flic_info.flic_descriptor, the_pixelmap);
+                the_funk->material->colour_map = the_pixelmap;
+                the_funk->material->user = the_pixelmap;
+                BrMaterialUpdate(the_funk->material, BR_MATU_ALL);
+            } else {
+                the_funk->texture_animation_type = eTexture_animation_none;
+            }
+            break;
+        case eTexture_animation_camera:
+            the_funk->texture_animation_data.camera_info.mode = GetALineAndInterpretCommand(pF, gCamera_animation_names, CARPOCALYPSE2_ASIZE(gCamera_animation_names));
+            GetPairOfFloats(pF, &yon_factor, &fov_factor);
+            the_funk->texture_animation_data.camera_info.field_0x60 = GetAnInt(pF);
+            the_funk->texture_animation_data.camera_info.count = GetAnInt(pF);
+            for (i = 0; i < the_funk->texture_animation_data.camera_info.count; i++) {
+                br_actor* actor;
+                br_camera* camera;
+                br_camera* global_camera;
+                br_vector3 cam_pos;
+
+                actor = BrActorAllocate(BR_ACTOR_CAMERA, NULL);
+                if (actor == NULL) {
+                    FatalError(kFatalError_CannotAllocateCamera);
+                }
+                the_funk->texture_animation_data.camera_info.actors[i] = actor;
+                camera = actor->type_data;
+                global_camera = gCamera->type_data;
+                camera->type = BR_CAMERA_PERSPECTIVE_FOV;
+                camera->field_of_view = (br_angle)(fov_factor * global_camera->field_of_view);
+                camera->hither_z = global_camera->hither_z;
+                camera->yon_z = yon_factor * global_camera->yon_z;
+                actor = BrActorAdd(gUniverse_actor, actor);
+                if (actor == NULL) {
+                    FatalError(kFatalError_CannotAllocateCamera);
+                }
+                GetThreeFloats(pF, &cam_pos.v[0], &cam_pos.v[1], &cam_pos.v[2]);
+                if (the_funk->texture_animation_data.camera_info.mode == eFunk_camera_static) {
+                    br_euler e;
+                    float angle1;
+                    float angle2;
+
+                    GetPairOfFloats(pF, &angle1, &angle2);
+                    e.order = 0x12;
+                    e.a = BrDegreeToAngle(angle1);
+                    e.b = BrDegreeToAngle(angle2);
+                    e.c = 0;
+                    BrEulerToMatrix34(&actor->t.t.mat, &e);
+                }
+                BrVector3Copy(&actor->t.t.translate.t, &cam_pos);
+            }
+            break;
+        case eTexture_animation_mirror:
+            if (the_funk->proximity_count == 0) {
+                the_funk->texture_animation_data.mirror_info.actor = NULL;
+                GetALineAndDontArgue(pF, s);
+                GetALineAndDontArgue(pF, s);
+            } else {
+                br_actor* actor;
+                br_camera* camera;
+                br_camera* global_camera;
+                br_vector3 n;
+                br_matrix34 mat;
+
+                global_camera = gCamera->type_data;
+                yon_factor = GetAScalar(pF);
+                the_funk->texture_animation_data.mirror_info.yon = yon_factor * global_camera->yon_z;
+                the_funk->texture_animation_data.mirror_info.field_0x5c = GetAnInt(pF);
+                actor = BrActorAllocate(BR_ACTOR_CAMERA, NULL);
+                if (actor == NULL) {
+                    FatalError(kFatalError_CannotAllocateCamera);
+                }
+                the_funk->texture_animation_data.mirror_info.actor = actor;
+                camera = actor->type_data;
+                camera->type = BR_CAMERA_PERSPECTIVE_FOV;
+                camera->field_of_view = global_camera->field_of_view;
+                camera->hither_z = global_camera->hither_z;
+                camera->yon_z = global_camera->yon_z + global_camera->hither_z;
+                actor = BrActorAdd(gUniverse_actor, actor);
+                if (actor == NULL) {
+                    FatalError(kFatalError_CannotAllocateCamera);
+                }
+                BrVector3Copy(&n, &the_funk->proximity_array->n);
+                BrVector3Set((br_vector3*)the_funk->texture_animation_data.mirror_info.mat.m[0],
+                    1.f - n.v[0] * n.v[0] + n.v[0] * n.v[0],
+                    n.v[0] * n.v[1] + n.v[0] * n.v[1],
+                    n.v[0] * n.v[2] + n.v[0] * n.v[2]);
+                BrVector3Set((br_vector3*)the_funk->texture_animation_data.mirror_info.mat.m[1],
+                    n.v[0] * n.v[1] + n.v[0] * n.v[1],
+                    1.f - n.v[1] * n.v[1] + n.v[1] * n.v[1],
+                    n.v[1] * n.v[2] + n.v[1] * n.v[2]);
+                BrVector3Set((br_vector3*)the_funk->texture_animation_data.mirror_info.mat.m[2],
+                    n.v[0] * n.v[2] + n.v[0] * n.v[2],
+                    n.v[1] * n.v[2] + n.v[1] * n.v[2],
+                    1.f - n.v[2] * n.v[2] + n.v[2] * n.v[2]);
+                BrVector3Scale((br_vector3*)the_funk->texture_animation_data.mirror_info.mat.m[3], &n, -2.f * the_funk->proximity_array->d);
+                BrVector3Sub((br_vector3*)mat.m[0], &the_funk->proximity_array->v[1], &the_funk->proximity_array->v[0]);
+                BrVector3Copy((br_vector3*)mat.m[1], &the_funk->proximity_array->n);
+                BrVector3Cross((br_vector3*)mat.m[2], (br_vector3*)mat.m[0], (br_vector3*)mat.m[1]);
+                BrVector3SetFloat(&the_funk->texture_animation_data.mirror_info.bounds.min, (float)0x7fffffff, (float)0x7fffffff, (float)0x7fffffff);
+                BrVector3SetFloat(&the_funk->texture_animation_data.mirror_info.bounds.max, (float)-0x7fffffff, (float)-0x7fffffff, (float)-0x7fffffff);
+                for (i = 0; i < the_funk->proximity_count; i++) {
+                    int j;
+
+                    for (j = 0; j < 3; j++) {
+                        int k;
+
+                        BrMatrix34ApplyP(&gFunk_temp_vertices[i].points[j],
+                            &the_funk->proximity_array[i].v[j], /* FIXME: original has &the_funk->proximity_array->v[j] */
+                            &mat);
+                        for (k = 0; k < 3; k++) {
+                            if (the_funk->texture_animation_data.mirror_info.bounds.min.v[k] > gFunk_temp_vertices[i].points[j].v[k]) {
+                                the_funk->texture_animation_data.mirror_info.bounds.min.v[k] = gFunk_temp_vertices[i].points[j].v[k];
+                            }
+                            if (the_funk->texture_animation_data.mirror_info.bounds.max.v[k] < gFunk_temp_vertices[i].points[j].v[k]) {
+                                the_funk->texture_animation_data.mirror_info.bounds.max.v[k] = gFunk_temp_vertices[i].points[j].v[k];
+                            }
+                        }
+                    }
+                }
+                for (i = 0; i < the_funk->proximity_count; i++) {
+                    int j;
+
+                    for (j = 0; j < 3; j++) {
+                        int k;
+
+                        gFunk_temp_vertices[i].points[j].v[0] =
+                            (gFunk_temp_vertices[i].points[j].v[0] - the_funk->texture_animation_data.mirror_info.bounds.min.v[0])
+                                / (the_funk->texture_animation_data.mirror_info.bounds.max.v[0] - the_funk->texture_animation_data.mirror_info.bounds.min.v[0]);
+                        gFunk_temp_vertices[i].points[j].v[1] =
+                            (gFunk_temp_vertices[i].points[j].v[2] - the_funk->texture_animation_data.mirror_info.bounds.min.v[2])
+                                / (the_funk->texture_animation_data.mirror_info.bounds.max.v[2] - the_funk->texture_animation_data.mirror_info.bounds.min.v[2]);
+                        for (k = 0; k < 3; k++) {
+                            if (the_funk->texture_animation_data.mirror_info.bounds.min.v[k] > gFunk_temp_vertices[i].points[j].v[k]) {
+                                the_funk->texture_animation_data.mirror_info.bounds.min.v[k] = gFunk_temp_vertices[i].points[j].v[k];
+                            }
+                            if (the_funk->texture_animation_data.mirror_info.bounds.max.v[k] < gFunk_temp_vertices[i].points[j].v[k]) {
+                                the_funk->texture_animation_data.mirror_info.bounds.max.v[k] = gFunk_temp_vertices[i].points[j].v[k];
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    BrMemFree(gFunk_temp_vertices);
+#endif
 }
 
 tGroovidelic_spec* C2_HOOK_FASTCALL AddNewGroovidelic(void) {
@@ -2328,21 +2820,19 @@ void C2_HOOK_FASTCALL ReadSmashableEnvironment(FILE* pF, const char* pPath) {
 }
 
 // FUNCTION: CARMA2_HW 0x004f5470
-int C2_HOOK_FASTCALL SmashFaceMustBeUpdateable(br_material *pMaterial) {
+int C2_HOOK_FASTCALL SmashFaceMustBeUpdateable(br_material* pMaterial) {
     int i;
 
     for (i = 0; i < gCount_track_smashable_environment_specs; i++) {
-        tSmashable_item_spec *spec = &gTrack_smashable_environment_specs[i];
+        tSmashable_item_spec* smash = &gTrack_smashable_environment_specs[i];
 
-        if ((spec->trigger_type == kSmashableTrigger_Material && spec->trigger_object.material == pMaterial)
-                && ((spec->mode == kSmashableMode_TextureChange && spec->mode_data.texture_change.count_levels > 0)
-                || spec->mode == kSmashableMode_Remove
-                || spec->mode == kSmashableMode_ReplaceModel)) {
-            C2_HOOK_ASSERT(SmashFaceMustBeUpdateable_original(pMaterial) == 1);
+        if (smash->trigger_type == kSmashableTrigger_Material && smash->trigger_object.material == pMaterial
+                && ((smash->mode_data.texture_change.count_levels > 0 && smash->mode == kSmashableMode_TextureChange)
+                || smash->mode == kSmashableMode_Remove
+                || smash->mode == kSmashableMode_ReplaceModel)) {
             return 1;
         }
     }
-    C2_HOOK_ASSERT(SmashFaceMustBeUpdateable_original(pMaterial) == 0);
     return 0;
 }
 
@@ -2382,18 +2872,18 @@ void C2_HOOK_FASTCALL FreeEnvSmash(tSmashable_item_spec* pSmash) {
 
 #pragma auto_inline(off)
 // FUNCTION: CARMA2_HW 0x004f0a80
-void C2_HOOK_FASTCALL FreeConnotations(tConnotations* pConnotations, int pKeepActors) {
+void C2_HOOK_FASTCALL FreeConnotations(tConnotations* pConnotations, int pKeep_actors) {
     int i;
     int j;
-    tExplosion_animation_group* pGroup;
+    tExplosion_animation_group* group;
 
     for (i = 0; i < pConnotations->count_shrapnel; i++) {
-        if (pConnotations->shrapnel[i].type == kShrapnelType_GhostParts && !pKeepActors) {
+        if (pConnotations->shrapnel[i].type == kShrapnelType_GhostParts && !pKeep_actors) {
             for (j = 0; j < pConnotations->shrapnel[i].type_info.ghost.count_actors; j++) {
                 BrActorFree(pConnotations->shrapnel[i].type_info.ghost.actors[j]);
             }
             BrMemFree(pConnotations->shrapnel[i].type_info.ghost.actors);
-        } else if (pConnotations->shrapnel[i].type == kShrapnelType_NonCars && !pKeepActors) {
+        } else if (pConnotations->shrapnel[i].type == kShrapnelType_NonCars && !pKeep_actors) {
             for (j = 0; j < pConnotations->shrapnel[i].type_info.noncar.count_actors; j++) {
                 if (pConnotations->shrapnel[i].type_info.noncar.actors[j]->parent == NULL) {
                     BrActorFree(pConnotations->shrapnel[i].type_info.noncar.actors[j]);
@@ -2403,10 +2893,8 @@ void C2_HOOK_FASTCALL FreeConnotations(tConnotations* pConnotations, int pKeepAc
         }
     }
     if (pConnotations->special_effects.explosion_animation.count_groups != 0) {
-        pGroup = pConnotations->special_effects.explosion_animation.groups;
-        for (i = 0; i < pConnotations->special_effects.explosion_animation.count_groups; i++) {
-            BrMemFree(pGroup->frames);
-            pGroup++;
+        for (i = 0, group = pConnotations->special_effects.explosion_animation.groups; i < pConnotations->special_effects.explosion_animation.count_groups; i++, group++) {
+            BrMemFree(group->frames);
         }
         BrMemFree(pConnotations->special_effects.explosion_animation.groups);
     }
@@ -2421,10 +2909,11 @@ void C2_HOOK_FASTCALL FreeConnotations(tConnotations* pConnotations, int pKeepAc
 // FUNCTION: CARMA2_HW 0x004f0960
 void C2_HOOK_FASTCALL DisposeSmashableEnvironment(void) {
     int i;
+    tSmashable_item_spec* smash;
 
-    for (i = 0; i < gCount_track_smashable_environment_specs; i++) {
-        tSmashable_item_spec* smash = &gTrack_smashable_environment_specs[i];
+    C2_HOOK_BUG_ON(sizeof(tSmashable_item_spec) != 0x2e0);
 
+    for (i = 0, smash = gTrack_smashable_environment_specs; i < gCount_track_smashable_environment_specs; i++, smash++) {
         FreeEnvSmash(smash);
     }
     if (gCount_track_smashable_environment_specs != 0) {
@@ -2756,6 +3245,9 @@ void C2_HOOK_FASTCALL FreeTrack(tTrack_spec* pTrack_spec) {
     tPhysics_object** collision_info_slot;
     br_actor** actor_slot;
 
+#ifndef CARPOCALYPSE2_MATCHING
+    C2TrackBatchDispose(); /* port: merged track blocks reference the track's materials */
+#endif
     DisposeSmashableEnvironment();
     zero = 0;
     if (gAdditional_actors != zero) {
@@ -2860,23 +3352,18 @@ void C2_HOOK_FASTCALL MungeMaterialSV(br_matrix34* pMat, br_material* pMat_1, br
 // FUNCTION: CARMA2_HW 0x005072b0
 br_uint_32 C2_HOOK_FASTCALL ApplyTransToModels(br_actor* pActor, br_matrix34* pMat, void* pData) {
     int i;
+    br_vector3 temp_point;
 
-    if (pActor->identifier == NULL) {
-        return 0;
-    }
-    if (pActor->identifier[0] == '&') {
-        return 0;
-    }
-    if (pActor->model != NULL) {
-        for (i = 0; i < pActor->model->nvertices; i++) {
-            br_vector3 p;
-
-            BrVector3Copy(&p, &pActor->model->vertices[i].p);
-            BrMatrix34ApplyP(&pActor->model->vertices[i].p, &p, pMat);
+    if (pActor->identifier != NULL && pActor->identifier[0] != '&') {
+        if (pActor->model != NULL) {
+            for (i = 0; i < pActor->model->nvertices; i++) {
+                temp_point = pActor->model->vertices[i].p;
+                BrMatrix34ApplyP(&pActor->model->vertices[i].p, &temp_point, pMat);
+            }
+            BrModelUpdate(pActor->model, BR_MODU_ALL);
         }
-        BrModelUpdate(pActor->model, BR_MODU_ALL);
+        BrMatrix34Identity(&pActor->t.t.mat);
     }
-    BrMatrix34Identity(&pActor->t.t.mat);
     return 0;
 }
 
@@ -3257,18 +3744,24 @@ void C2_HOOK_FASTCALL RecenterActorModels(br_actor* pActor, br_vector3* pOffset)
 
 // FUNCTION: CARMA2_HW 0x00507210
 br_uint_32 C2_HOOK_FASTCALL DeleteBastards(br_actor* pActor, br_matrix34* pMat, void* pData) {
+    int i;
+    int parent_already_doomed;
 
-    if ((pActor != gAdditional_actors && (pActor->identifier == NULL || pActor->identifier[0] == '&') && Vector3IsZero((br_vector3*)pMat->m[3]))
-            || (pActor->model == NULL && pActor->type == BR_ACTOR_MODEL)) {
-        int i;
-
+    if ((pActor != gAdditional_actors
+            && (pActor->identifier == NULL || pActor->identifier[0] == '&')
+            && Vector3EqualElements((br_vector3*)pMat->m[3], gZero_0058b1c8, gZero_0058b1c8, gZero_0058b1c8))
+        || (pActor->model == NULL && pActor->type == BR_ACTOR_MODEL)) {
+        parent_already_doomed = 0;
         for (i = 0; i < gDelete_count; i++) {
             if (gDelete_list[i] == pActor) {
-                return 0;
+                parent_already_doomed = 1;
+                break;
             }
         }
-        gDelete_list[gDelete_count] = pActor;
-        gDelete_count += 1;
+        if (!parent_already_doomed) {
+            gDelete_list[gDelete_count] = pActor;
+            gDelete_count++;
+        }
     }
     return 0;
 }
@@ -3469,21 +3962,10 @@ void C2_HOOK_FASTCALL AnimateSky(void) {
 
 // FUNCTION: CARMA2_HW 0x00478e30
 void C2_HOOK_FASTCALL PathGrooveBastard(tGroovidelic_spec* pGroove, tU32 pTime, br_matrix34* pMat, int pInterrupt_it) {
+#ifdef CARPOCALYPSE2_MATCHING
     br_scalar pos;
     float f_the_time = (float)pTime;
 
-#ifndef CARPOCALYPSE2_MATCHING
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_interrupt_status, 0x20);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_resumption_value, 0x24);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_data.straight_info.period.value, 0x28);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_data.straight_info.x_delta, 0x2c);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_data.straight_info.y_delta, 0x30);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_data.straight_info.z_delta, 0x34);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_data.straight_info.centre, 0x38);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_data.circular_info.period.value, 0x28);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_data.circular_info.centre, 0x30);
-    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, object_position, 0x50);
-#endif
 
     switch (pGroove->path_type) {
     case eGroove_path_straight:
@@ -3635,6 +4117,172 @@ void C2_HOOK_FASTCALL PathGrooveBastard(tGroovidelic_spec* pGroove, tU32 pTime, 
     default:
         break;
     }
+#else
+    br_scalar pos;
+    float f_the_time = (float)pTime;
+
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_interrupt_status, 0x20);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_resumption_value, 0x24);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_data.straight_info.period.value, 0x28);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_data.straight_info.x_delta, 0x2c);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_data.straight_info.y_delta, 0x30);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_data.straight_info.z_delta, 0x34);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_data.straight_info.centre, 0x38);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_data.circular_info.period.value, 0x28);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, path_data.circular_info.centre, 0x30);
+    C2_HOOK_STATIC_ASSERT_STRUCT_OFFSET(tGroovidelic_spec, object_position, 0x50);
+
+    switch (pGroove->path_type) {
+    case eGroove_path_straight:
+        if (pGroove->path_data.straight_info.x_delta != 0.0f) {
+
+            MOVE_FUNK_PARAMETER(pos, pGroove->path_mode, pGroove->path_data.straight_info.period.value, pGroove->path_data.straight_info.texture_info.data, pGroove->path_data.straight_info.x_delta, -pGroove->path_data.straight_info.x_delta);
+            pos += pGroove->path_data.straight_info.centre.v[0];
+            if (pInterrupt_it) {
+                pGroove->path_resumption_value = pos;
+                if (pos >= pMat->m[3][0]) {
+                    pGroove->path_interrupt_status = eInterrupt_greater_than;
+                } else {
+                    pGroove->path_interrupt_status = eInterrupt_less_than;
+                }
+                pMat->m[3][0] = pos;
+                BrVector3Copy(&pGroove->actor->t.t.translate.t, &pGroove->path_data.straight_info.centre);
+            } else {
+                if (pGroove->path_interrupt_status == eInterrupt_none) {
+                    pMat->m[3][0] = pos;
+                    BrVector3Copy(&pGroove->actor->t.t.translate.t, &pGroove->path_data.straight_info.centre);
+                } else if (pGroove->path_interrupt_status == eInterrupt_less_than) {
+                    if (pos < pGroove->path_resumption_value) {
+                        pGroove->path_interrupt_status = eInterrupt_none;
+                        pMat->m[3][0] = pos;
+                        BrVector3Copy(&pGroove->actor->t.t.translate.t, &pGroove->path_data.straight_info.centre);
+                    }
+                } else if (pos > pGroove->path_resumption_value) {
+                    pGroove->path_interrupt_status = eInterrupt_none;
+                    pMat->m[3][0] = pos;
+                    BrVector3Copy(&pGroove->actor->t.t.translate.t, &pGroove->path_data.straight_info.centre);
+                }
+            }
+        }
+
+        if (pGroove->path_data.straight_info.y_delta != 0.0f) {
+
+            MOVE_FUNK_PARAMETER(pos, pGroove->path_mode, pGroove->path_data.straight_info.period.value, pGroove->path_data.straight_info.texture_info.data, pGroove->path_data.straight_info.y_delta, -pGroove->path_data.straight_info.y_delta);
+            pos += pGroove->path_data.straight_info.centre.v[1];
+            if (pInterrupt_it) {
+                pGroove->path_resumption_value = pos;
+                if (pos >= pMat->m[3][1]) {
+                    pGroove->path_interrupt_status = eInterrupt_greater_than;
+                } else {
+                    pGroove->path_interrupt_status = eInterrupt_less_than;
+                }
+                pMat->m[3][1] = pos;
+                BrVector3Copy(&pGroove->actor->t.t.translate.t, &pGroove->path_data.straight_info.centre);
+            } else {
+                if (pGroove->path_interrupt_status == eInterrupt_none) {
+                    pMat->m[3][1] = pos;
+                    BrVector3Copy(&pGroove->actor->t.t.translate.t, &pGroove->path_data.straight_info.centre);
+                } else if (pGroove->path_interrupt_status == eInterrupt_less_than) {
+                    if (pos < pGroove->path_resumption_value) {
+                        pGroove->path_interrupt_status = eInterrupt_none;
+                        pMat->m[3][1] = pos;
+                        BrVector3Copy(&pGroove->actor->t.t.translate.t, &pGroove->path_data.straight_info.centre);
+                    }
+                } else if (pos > pGroove->path_resumption_value) {
+                    pGroove->path_interrupt_status = eInterrupt_none;
+                    pMat->m[3][1] = pos;
+                    BrVector3Copy(&pGroove->actor->t.t.translate.t, &pGroove->path_data.straight_info.centre);
+                }
+            }
+        }
+
+        if (pGroove->path_data.straight_info.z_delta != 0.0f) {
+
+            MOVE_FUNK_PARAMETER(pos, pGroove->path_mode, pGroove->path_data.straight_info.period.value, pGroove->path_data.straight_info.texture_info.data, pGroove->path_data.straight_info.z_delta, -pGroove->path_data.straight_info.z_delta);
+            pos += pGroove->path_data.straight_info.centre.v[2];
+            if (pInterrupt_it) {
+                pGroove->path_resumption_value = pos;
+                if (pos >= pMat->m[3][2]) {
+                    pGroove->path_interrupt_status = eInterrupt_greater_than;
+                } else {
+                    pGroove->path_interrupt_status = eInterrupt_less_than;
+                }
+                BrVector3Copy(&pGroove->actor->t.t.translate.t, &pGroove->path_data.straight_info.centre);
+                pMat->m[3][2] = pos;
+            } else {
+                if (pGroove->path_interrupt_status == eInterrupt_none) {
+                    BrVector3Copy(&pGroove->actor->t.t.translate.t, &pGroove->path_data.straight_info.centre);
+                    pMat->m[3][2] = pos;
+                } else if (pGroove->path_interrupt_status == eInterrupt_less_than) {
+                    if (pos < pGroove->path_resumption_value) {
+                        pGroove->path_interrupt_status = eInterrupt_none;
+                        BrVector3Copy(&pGroove->actor->t.t.translate.t, &pGroove->path_data.straight_info.centre);
+                        pMat->m[3][2] = pos;
+                    }
+                } else if (pos > pGroove->path_resumption_value) {
+                    pGroove->path_interrupt_status = eInterrupt_none;
+                    BrVector3Copy(&pGroove->actor->t.t.translate.t, &pGroove->path_data.straight_info.centre);
+                    pMat->m[3][2] = pos;
+                }
+            }
+        }
+        BrVector3Copy(&pGroove->object_position, &pGroove->actor->t.t.translate.t);
+        break;
+    case eGroove_path_circular:
+        BrVector3Copy(&pGroove->actor->t.t.translate.t, &pGroove->path_data.circular_info.centre);
+        if (pGroove->path_data.circular_info.axis == eAxis_y) {
+            if (pGroove->path_data.circular_info.period.value == 0.0f) {
+                pos = 0.f;
+            } else {
+                pos = cosf(BrAngleToRadian(BrDegreeToAngle(fmodf((float)pTime, pGroove->path_data.circular_info.period.value) / pGroove->path_data.circular_info.period.value * 360.0f))) * pGroove->path_data.circular_info.radius;
+            }
+            pMat->m[3][0] = pGroove->path_data.circular_info.centre.v[0] + pos;
+        } else if (pGroove->path_data.circular_info.axis == eAxis_z) {
+            if (pGroove->path_data.circular_info.period.value == 0.0f) {
+                pos = 0.f;
+            } else {
+                pos = sinf(BrAngleToRadian(BrDegreeToAngle(fmodf((float)pTime, pGroove->path_data.circular_info.period.value) / pGroove->path_data.circular_info.period.value * 360.0f))) * pGroove->path_data.circular_info.radius;
+            }
+            pMat->m[3][0] = pGroove->path_data.circular_info.centre.v[0] + pos;
+        }
+
+        if (pGroove->path_data.circular_info.axis == eAxis_x) {
+            if (pGroove->path_data.circular_info.period.value == 0.0f) {
+                pos = 0.f;
+            } else {
+                pos = sinf(BrAngleToRadian(BrDegreeToAngle(fmodf((float)pTime, pGroove->path_data.circular_info.period.value) / pGroove->path_data.circular_info.period.value * 360.0f))) * pGroove->path_data.circular_info.radius;
+            }
+            pMat->m[3][1] = pGroove->path_data.circular_info.centre.v[1] + pos;
+        } else if (pGroove->path_data.circular_info.axis == eAxis_z) {
+            if (pGroove->path_data.circular_info.period.value == 0.0f) {
+                pos = 0.f;
+            } else {
+                pos = cosf(BrAngleToRadian(BrDegreeToAngle(fmodf((float)pTime, pGroove->path_data.circular_info.period.value) / pGroove->path_data.circular_info.period.value * 360.0f))) * pGroove->path_data.circular_info.radius;
+            }
+            pMat->m[3][1] = pGroove->path_data.circular_info.centre.v[1] + pos;
+        }
+
+        if (pGroove->path_data.circular_info.axis == eAxis_x) {
+            if (pGroove->path_data.circular_info.period.value == 0.0f) {
+                pos = 0.f;
+            } else {
+                pos = cosf(BrAngleToRadian(BrDegreeToAngle(fmodf((float)pTime, pGroove->path_data.circular_info.period.value) / pGroove->path_data.circular_info.period.value * 360.0f))) * pGroove->path_data.circular_info.radius;
+            }
+            pMat->m[3][2] = pGroove->path_data.circular_info.centre.v[1] + pos;
+        } else if (pGroove->path_data.circular_info.axis == eAxis_z) {
+            if (pGroove->path_data.circular_info.period.value == 0.0f) {
+                pos = 0.f;
+            } else {
+                pos = sinf(BrAngleToRadian(BrDegreeToAngle(fmodf((float)pTime, pGroove->path_data.circular_info.period.value) / pGroove->path_data.circular_info.period.value * 360.0f))) * pGroove->path_data.circular_info.radius;
+            }
+            pMat->m[3][2] = pGroove->path_data.circular_info.centre.v[1] + pos;
+        }
+        BrVector3Copy(&pGroove->object_position, &pGroove->actor->t.t.translate.t);
+        break;
+    default:
+        break;
+    }
+#endif
 }
 
 // C2PORT-NONMATCHING: best 40.32% | difftest PASS 2000 trials (spec difftest/specs/00479890_object_groove_bastard.json) | reason shear and double precision behavior fixed; remaining x87/codegen diff
@@ -3897,18 +4545,15 @@ void C2_HOOK_FASTCALL GrooveThisDelic(tGroovidelic_spec* pGroove, tU32 pTime, in
 
 // FUNCTION: CARMA2_HW 0x00478c00
 void C2_HOOK_FASTCALL GrooveThoseDelics(void) {
-    int i;
+    tGroovidelic_spec* the_groove;
     float f_the_time;
+    int i;
 
     if (gGroovidelics_array != NULL) {
         f_the_time = (float)GetTotalTime();
         gPrevious_groove_times[1] = gPrevious_groove_times[0];
         gPrevious_groove_times[0] = (tU32)f_the_time;
-
-        for (i = 0; i < gGroovidelics_array_size; i++) {
-            tGroovidelic_spec* the_groove;
-
-            the_groove = &gGroovidelics_array[i];
+        for (i = 0, the_groove = gGroovidelics_array; i < gGroovidelics_array_size; i++, the_groove++) {
             if (the_groove->owner != -999 && !the_groove->done_this_frame) {
                 GrooveThisDelic(the_groove, (tU32)f_the_time, 0);
             }
@@ -4350,7 +4995,24 @@ void C2_HOOK_FASTCALL EnableFunkotronic(int pIndex) {
 }
 
 // FUNCTION: CARMA2_HW 0x0047b0e0
-void C2_HOOK_FASTCALL StopGroovidelic(br_actor* actor) {
+void C2_HOOK_FASTCALL StopGroovidelic(br_actor* pActor) {
+#ifdef CARPOCALYPSE2_MATCHING
+    tGroovidelic_spec* the_groove;
+    int count;
+    int i;
+
+    the_groove = gGroovidelics_array;
+    count = gGroovidelics_array_size;
+    for (i = 0; i < count; i++, the_groove++) {
+        if (the_groove->actor == pActor) {
+            if (the_groove->path_interrupt_status == eInterrupt_none
+                && the_groove->object_interrupt_status == eInterrupt_none) {
+                GrooveThisDelic(the_groove, gPrevious_groove_times[1], 1);
+            }
+            return;
+        }
+    }
+#else
     tGroovidelic_spec* groove;
     int count;
     int i;
@@ -4358,7 +5020,7 @@ void C2_HOOK_FASTCALL StopGroovidelic(br_actor* actor) {
     groove = gGroovidelics_array;
     count = gGroovidelics_array_size;
     for (i = 0; i < count; i++) {
-        if (groove->actor == actor) {
+        if (groove->actor == pActor) {
             if (groove->path_interrupt_status == eInterrupt_none &&
                     groove->object_interrupt_status == eInterrupt_none) {
                 GrooveThisDelic(groove, gPrevious_groove_times[1], 1);
@@ -4367,15 +5029,18 @@ void C2_HOOK_FASTCALL StopGroovidelic(br_actor* actor) {
         }
         groove = (tGroovidelic_spec*)((char*)groove + sizeof(*groove));
     }
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x0047b360
 tGroovidelic_spec* C2_HOOK_FASTCALL ActorsGroove(br_actor* pActor) {
+    tGroovidelic_spec* groove;
+    int count;
     int i;
 
-    for (i = 0; i < gGroovidelics_array_size; i++) {
-        tGroovidelic_spec* groove = &gGroovidelics_array[i];
-
+    groove = gGroovidelics_array;
+    count = gGroovidelics_array_size;
+    for (i = 0; i < count; i++, groove++) {
         if (groove->actor == pActor) {
             return groove;
         }
@@ -4422,16 +5087,15 @@ void C2_HOOK_FASTCALL DisableGroovidelic(br_actor* pActor, tU32 pBlock_flags) {
     }
 }
 
-// C2PORT-NONMATCHING: best 91.30% | difftest PASS 2000 trials (spec difftest/specs/0047b160_EnableGroovidelic.json) | reason remaining diff is VC5 branch layout and array-load placement
 // FUNCTION: CARMA2_HW 0x0047b160
-void C2_HOOK_FASTCALL EnableGroovidelic(br_actor *pActor, tU32 pBlock_flags) {
+void C2_HOOK_FASTCALL EnableGroovidelic(br_actor* pActor, tU32 pBlock_flags) {
+    tGroovidelic_spec* the_groove;
     int i;
 
-    for (i = 0; i < gGroovidelics_array_size; i++) {
-        tGroovidelic_spec* groove = &gGroovidelics_array[i];
-
-        if (groove->actor == pActor) {
-            groove->block_flags &= ~pBlock_flags;
+    the_groove = gGroovidelics_array;
+    for (i = 0; i < gGroovidelics_array_size; i++, the_groove++) {
+        if (the_groove->actor == pActor) {
+            the_groove->block_flags &= ~pBlock_flags;
             return;
         }
     }
@@ -4552,7 +5216,7 @@ void C2_HOOK_FAKE_THISCALL ControlBoundFunkGroove(int pSlot_number, undefined4 p
     if (pSlot_number < 0) {
         return;
     }
-    if (pSlot_number >= CARPOCALYPSE2_ASIZE(gGroove_funk_bindings)) {
+    if (pSlot_number >= (int)CARPOCALYPSE2_ASIZE(gGroove_funk_bindings)) {
         FatalError(kFatalError_UsedRefNumOfControlledGroovidelicFunkotronicIsOutOfRange);
     }
     if (!gGroove_funk_bindings[pSlot_number].field_0x4) {
@@ -4566,7 +5230,7 @@ float C2_HOOK_FAKE_THISCALL ControlBoundFunkGroovePlus(int pSlot_number, undefin
     if (pSlot_number < 0) {
         return 0.f;
     }
-    if (pSlot_number >= CARPOCALYPSE2_ASIZE(gGroove_funk_bindings)) {
+    if (pSlot_number >= (int)CARPOCALYPSE2_ASIZE(gGroove_funk_bindings)) {
         FatalError(kFatalError_UsedRefNumOfControlledGroovidelicFunkotronicIsOutOfRange);
     }
     if (!gGroove_funk_bindings[pSlot_number].field_0x4) {

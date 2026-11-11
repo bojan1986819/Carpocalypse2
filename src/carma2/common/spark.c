@@ -2015,6 +2015,28 @@ void C2_HOOK_FASTCALL DoSmokeColumn(int i, tU32 pTime, br_vector3* pRet_car_pos)
     static const br_scalar upright_tilt_threshold = 0.1f;
     static const br_scalar descent_tilt_threshold = -0.1f;
 
+#ifndef CARPOCALYPSE2_MATCHING
+    {
+        /* port: a column's vertex index has been seen holding a heap pointer (Vita crash in this
+         * function during a TIMBER3 race, 00.60 test build); keep it inside the model instead of
+         * reading far outside the vertex array. */
+        br_actor* source = gSmoke_column[i].core.field_0x0 == 1
+            ? (gSmoke_column[i].core.car != NULL ? gSmoke_column[i].core.car->car_actor : NULL)
+            : gSmoke_column[i].core.car_actor;
+        if (source != NULL && source->model != NULL && source->model->prepared != NULL
+                && source->model->prepared->groups != NULL
+                && (unsigned)gSmoke_column[i].vertex_index >= source->model->prepared->groups->nvertices) {
+            static int reported;
+            if (!reported) {
+                reported = 1;
+                dr_dprintf("SMOKE COLUMN %d: vertex index %d outside %u vertices (type %d); using 0",
+                    i, gSmoke_column[i].vertex_index, source->model->prepared->groups->nvertices,
+                    gSmoke_column[i].core.field_0x0);
+            }
+            gSmoke_column[i].vertex_index = 0;
+        }
+    }
+#endif
     if (gSmoke_column[i].core.field_0x0 == 1) {
         if (gSmoke_column[i].core.car->car_master_actor->t.t.mat.m[1][1] > upright_tilt_threshold) {
             gSmoke_column[i].upright = 1;
@@ -2882,6 +2904,22 @@ void C2_HOOK_FASTCALL RenderSmoke(br_pixelmap* pRender_screen, br_pixelmap* pDep
 
 // CreateShrapnelShower
 
+#ifndef CARPOCALYPSE2_MATCHING
+/* port: float -> int as the original x86 code converts (cvttss2si): a value out of the int range
+ * (a crash force overflowing to infinity) gives 0x80000000. ARM saturates instead, and a count of
+ * INT_MAX * 12 wrapped to -12 made CreateShrapnelShower's loop run (practically) forever. */
+static int X86FloatToInt(float pValue) {
+    if (!(pValue > -2147483648.f && pValue < 2147483648.f)) {
+        return (int)0x80000000u;
+    }
+    return (int)pValue;
+}
+#define C2_FTOI(x) X86FloatToInt(x)
+#else
+#define C2_FTOI(x) ((int)(x))
+#endif
+
+
 #pragma auto_inline(off)
 // C2PORT-NONMATCHING: best 38.34% | difftest PASS 2000 trials (spec difftest/specs/004f7d60_CreateSparks.json) | reason VC5 x87 scheduling and register allocation
 // FUNCTION: CARMA2_HW 0x004f7d60
@@ -2911,7 +2949,7 @@ void C2_HOOK_FASTCALL CreateSparks(const br_vector3* pPosition, br_vector3* pVel
     pVelocity->v[1] += pForce->v[1] * scale;
     pVelocity->v[2] += pForce->v[2] * scale;
 
-    spark_count = (int)(FRandomBetween(0.0f, (br_scalar)gDOUBLE_0058b020 - (float)sqrt((double)(pVelocity->v[0] * pVelocity->v[0] + pVelocity->v[2] * pVelocity->v[2] + pVelocity->v[1] * pVelocity->v[1])) * gFLOAT_0058b018) * pStrength);
+    spark_count = C2_FTOI(FRandomBetween(0.0f, (br_scalar)gDOUBLE_0058b020 - (float)sqrt((double)(pVelocity->v[0] * pVelocity->v[0] + pVelocity->v[2] * pVelocity->v[2] + pVelocity->v[1] * pVelocity->v[1])) * gFLOAT_0058b018) * pStrength);
     if (spark_count > 10) {
         spark_count = 10;
     }
@@ -2940,7 +2978,7 @@ void C2_HOOK_FASTCALL CreateSparks(const br_vector3* pPosition, br_vector3* pVel
         relative_position.v[2] = pPosition->v[2] - pCar->car_master_actor->t.t.mat.m[3][2];
         BrMatrix34TApplyV(&local_position, &relative_position, &pCar->car_master_actor->t.t.mat);
         BrMatrix34TApplyV(&local_normal, &force_normal, &pCar->car_master_actor->t.t.mat);
-        spark_count = 3 - (int)(force_length * pStrength * gFLOAT_0058b02c);
+        spark_count = (int)(3u - (unsigned)C2_FTOI(force_length * pStrength * gFLOAT_0058b02c));
         if (spark_count > 10) {
             spark_count = 10;
         }
@@ -3092,8 +3130,8 @@ void C2_HOOK_FASTCALL CreateShrapnelShower(const br_vector3* pPosition, const br
     fVar4 = pVelocity->v[2];
     fVar8 = (fVar8 + pVelocity->v[1]) - pDirection->v[1] * fVar9;
     BrVector3Set(&velocity, fVar3 - fVar2 * fVar9, fVar8, fVar4 - fVar1 * fVar9);
-    shrapnel_count = (int)(pStrength * gFLOAT_0058b038);
-    shrapnel_count *= 12;
+    shrapnel_count = C2_FTOI(pStrength * gFLOAT_0058b038);
+    shrapnel_count = (int)((unsigned)shrapnel_count * 12u); /* wraps like the original */
     if (shrapnel_count > 20) {
         shrapnel_count = 20;
     }
@@ -3269,32 +3307,29 @@ void C2_HOOK_FASTCALL MasterEnableCarFunks(tCar_spec* pCar) {
 
 // FUNCTION: CARMA2_HW 0x004f8f30
 void C2_HOOK_FASTCALL DoCamouflageThing(tCar_spec* pCar) {
-    br_scalar distance;
-    br_vector3 ray_dir;
-    br_vector3 ray_pos;
-    br_vector3 hit_position;
-    br_vector3 hit_normal;
+#ifdef CARPOCALYPSE2_MATCHING
+    br_vector3 direction;
+    br_vector3 position;
+    br_vector3 collision_position;
+    br_vector3 normal;
+    br_scalar t;
     tFace_ref* face;
 
-    distance = 10.0f;
-    ray_dir.v[0] = 0.0f;
-    ray_dir.v[1] = -0.5f;
-    ray_dir.v[2] = 0.0f;
-    BrMatrix34ApplyP(&ray_pos, &pCar->collision_info->cmpos, &pCar->collision_info->transform_matrix);
-    face = FUN_004226d0(&ray_pos, &ray_dir, &hit_normal, &distance, &hit_position,
-            &gFace_list__car[pCar->collision_info->box_face_start],
-            pCar->collision_info->box_face_end - pCar->collision_info->box_face_start);
-    if (face != NULL) {
-        if (face->material != NULL) {
-            if (face->material->colour_map != NULL) {
-                if (face->material->colour_map != pCar->field_0x1960) {
-                    pCar->field_0x1960 = face->material->colour_map;
-                    gRecalc_mass_car = pCar;
-                    ForEveryCarMaterial(pCar, SetCarMaterialToSolidGreenCB, 1);
-                }
-            }
-        }
+    BrVector3Set(&direction, 0.f, -0.5f, 0.f);
+    t = 10.f;
+    BrMatrix34ApplyP(&position, &pCar->collision_info->cmpos, &pCar->collision_info->transform_matrix);
+    face = FUN_004226d0(&position, &direction, &normal, &t, &collision_position,
+        &gFace_list__car[pCar->collision_info->box_face_start],
+        pCar->collision_info->box_face_end - pCar->collision_info->box_face_start);
+    if (face != NULL && face->material != NULL && face->material->colour_map != NULL
+        && face->material->colour_map != pCar->field_0x1960) {
+        pCar->field_0x1960 = face->material->colour_map;
+        gRecalc_mass_car = pCar;
+        ForEveryCarMaterial(pCar, SetCarMaterialToSolidGreenCB, 1);
     }
+#else
+    BlendifyCar(pCar);
+#endif
 }
 
 // DoSolidGraniteThing
@@ -3848,7 +3883,8 @@ void C2_HOOK_FASTCALL ClearSplashReplay(void* pObject) {
 
 // FUNCTION: CARMA2_HW 0x004fee10
 void* C2_HOOK_FASTCALL FUN_004fee10(tPhysics_object* pObject) {
-    if (PHILGetObjectProperty(pObject, 6) != 0.f) {
+
+    if (PHILGetObjectProperty(pObject, 6) != gFLOAT_0058b008) {
         return pObject;
     }
     if (pObject != NULL && pObject->owner != NULL && pObject->flags_0x238 == 1) {
@@ -3908,7 +3944,6 @@ update_splash:
 
 // InitReplaySplashes
 
-// C2PORT-NONMATCHING: best 72.87% | difftest PASS 2000 trials (spec difftest/specs/004ff030_InitReplaySplashes.json) | reason owner-branch code generation
 // FUNCTION: CARMA2_HW 0x004ff030
 void C2_HOOK_FASTCALL InitReplaySplashes(void) {
     tPhysics_object* object;
@@ -3926,17 +3961,15 @@ void C2_HOOK_FASTCALL InitReplaySplashes(void) {
                 if (PHILGetObjectProperty(object, 6) != gFLOAT_0058b008) {
                     replay_object = object;
                     splash_type = 0xff;
-                } else if (object != NULL) {
+                } else if (object != NULL && object->owner != NULL && object->flags_0x238 == 1) {
                     owner = object->owner;
-                    if (owner == NULL || object->flags_0x238 != 1) {
-                        if (object != NULL && object->owner != NULL && object->flags_0x238 >= 2 && object->flags_0x238 <= 4) {
-                            replay_object = object->owner;
-                            splash_type = object->flags_0x238;
-                        }
-                    } else if (owner == NULL || *(int*)&owner->field_0x0c <= 5) {
+                    if (owner == NULL || *(int*)&owner->field_0x0c <= 5) {
                         replay_object = object->actor;
                         splash_type = 1;
                     }
+                } else if (object != NULL && object->owner != NULL && object->flags_0x238 >= 2 && object->flags_0x238 <= 4) {
+                    replay_object = object->owner;
+                    splash_type = object->flags_0x238;
                 }
                 if (replay_object != NULL) {
                     RecordReplaySplash(replay_object, splash_type, *(const tU32*)&object->water_d,

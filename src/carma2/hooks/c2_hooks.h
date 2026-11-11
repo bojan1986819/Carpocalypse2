@@ -24,14 +24,11 @@
 // statement in naked function is not supported"), with no flag to downgrade
 // it, and every C2_NAKED body a non-MSVC build sees is plain C: the asm
 // bodies sit behind CARPOCALYPSE2_MATCHING, which only Visual C++ 5 reaches.
-// gcc tolerates a C body there, so it keeps the attribute and clang drops it
-// -- the only cost is a normal prologue on functions no non-matching build is
-// reproducing byte for byte anyway.
-#if defined(__clang__)
+// gcc accepts a C body there but documents it as unreliable (no prologue: on
+// ARM a body that needs the stack, like BrFixedMac3's six arguments and 64-bit
+// products, breaks), so non-MSVC builds drop the attribute -- the only cost is
+// a normal prologue on functions no non-matching build reproduces byte for byte.
 #define C2_NAKED
-#else
-#define C2_NAKED __attribute__((__naked__))
-#endif
 #define C2_HOOK_NOINLINE __attribute__((__noinline__))
 #endif
 

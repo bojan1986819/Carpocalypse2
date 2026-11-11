@@ -338,7 +338,6 @@ void C2_HOOK_FASTCALL UpdateNetGameTypeScroller(tFrontend_spec* pFrontend) {
     FuckWithWidths(pFrontend);
 }
 
-// C2PORT-NONMATCHING: best 44.12% | difftest PASS 2000 trials (spec difftest/specs/00467ce0_NetGameTypeUp.json) | reason fixed scroller label offset; VC5 helper inlining and loop layout
 // FUNCTION: CARMA2_HW 0x00467ce0
 int C2_HOOK_FASTCALL NetGameTypeUp(tFrontend_spec* pFrontend) {
 
@@ -397,7 +396,6 @@ int C2_HOOK_FASTCALL NetSetRaceType(tFrontend_spec* pFrontend) {
     return 0;
 }
 
-// C2PORT-NONMATCHING: best 43.3% | difftest PASS 2000 trials (spec 00467dc0_NetGameTypeDn.json) | reason behavior matches; VC5 inlined scroller helper and loop layout differ
 // FUNCTION: CARMA2_HW 0x00467dc0
 int C2_HOOK_FASTCALL NetGameTypeDn(tFrontend_spec* pFrontend) {
 

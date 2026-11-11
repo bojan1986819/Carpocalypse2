@@ -626,10 +626,9 @@ int C2_HOOK_FASTCALL PDDoWeLeadAnAustereExistance(void) {
 
 // FUNCTION: CARMA2_HW 0x0051c850
 void C2_HOOK_FASTCALL PDSetPaletteEntries(br_pixelmap *pPalette, int pFirst_colour, int pCount) {
-    int i;
-    PALETTEENTRY colours[256];
     tU32 *pixels = pPalette->pixels;
-
+    PALETTEENTRY colours[256];
+    int i;
     for (i = 0; i < pCount; i++) {
         tU32 c;
 
@@ -637,7 +636,7 @@ void C2_HOOK_FASTCALL PDSetPaletteEntries(br_pixelmap *pPalette, int pFirst_colo
         colours[i].peFlags = 0;
         colours[i].peRed = c >> 16;
         colours[i].peGreen = c >> 8;
-        colours[i].peBlue = c >> 0;
+        colours[i].peBlue = pixels[pFirst_colour + i];
     }
     SetPaletteEntries(gPDPalette, pFirst_colour, pCount, colours);
     BrPixelmapDoubleBuffer(gScreen, gBack_screen);
@@ -783,9 +782,11 @@ void C2_HOOK_FASTCALL SignalHandler(int pSignal) {
 // FUNCTION: CARMA2_HW 0x0051a7b0
 void C2_HOOK_FASTCALL PDEnterDebugger(const char *pStr) {
     dr_dprintf("PDEnterDebugger(): %s", pStr);
-    ShowCursor(1);
+    ShowCursor(TRUE);
+#ifndef CARPOCALYPSE2_MATCHING
     __debugbreak();
-    ShowCursor(0);
+#endif
+    ShowCursor(FALSE);
 }
 
 // FUNCTION: CARMA2_HW 0x0051a7d0
@@ -1007,13 +1008,15 @@ void C2_HOOK_FASTCALL PDInstallErrorHandlers(void) {
 
 // FUNCTION: CARMA2_HW 0x0051c290
 int C2_HOOK_FASTCALL PDInitScreenVars(int pArgc, const char **pArgv) {
-    gGraf_spec_index = gDefault_spec_index;
 #ifdef CARPOCALYPSE2_MATCHING
     gGraf_spec_index = gDefault_spec_index;
-#else
-    gGraf_data_index = gDefault_data_index;
-#endif
+    gGraf_data_index = gDefault_spec_index;
     return 1;
+#else
+    gGraf_spec_index = gDefault_spec_index;
+    gGraf_data_index = gDefault_data_index;
+    return 1;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x0051c270

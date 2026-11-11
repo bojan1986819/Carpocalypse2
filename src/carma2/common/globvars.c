@@ -674,3 +674,7 @@ int gNoCutscenes;
 //int gNumber_of_races;
 //char gDir_separator[3] = "";
 
+#ifndef CARPOCALYPSE2_MATCHING
+/* port: the renderer blends 2D quads (glrend); DimRectangle then uses the original devious quad */
+int gPort_blended_2d;
+#endif

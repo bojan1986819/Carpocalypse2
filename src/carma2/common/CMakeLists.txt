@@ -298,5 +298,5 @@ if(NOT MSVC)
 endif()
 
 if(NOT CARPOCALYPSE2_MATCHING)
-    target_sources(c2_common PRIVATE loadprof.c loadprof.h)
+    target_sources(c2_common PRIVATE loadprof.c loadprof.h trackbatch.c trackbatch.h)
 endif()

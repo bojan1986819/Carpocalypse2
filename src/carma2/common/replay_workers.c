@@ -139,82 +139,55 @@ void C2_HOOK_FASTCALL WorkerDroneCornerPos(int pDrone_index, tU16 pSpeed, tU16 p
     DoDroneFunkyGroovyThings(drone);
 }
 
-// C2PORT-NONMATCHING: best 65.75% | difftest PASS 2000 trials (spec difftest/specs/0043c0e0_WorkerFlap.json) | reason VC5 x87 scheduling and register allocation
 // FUNCTION: CARMA2_HW 0x0043c0e0
-void C2_HOOK_FASTCALL WorkerFlap(br_actor* pActor, tS16 pDelta) {
-    br_actor* actor;
-    br_actor* parent_actor;
-    br_matrix34* actor_matrix;
+void C2_HOOK_FASTCALL WorkerFlap(br_actor* pActor, tS16 pAngle) {
     tUser_crush_data* user_crush_data;
-    tUser_crush_data* parent_user_crush_data;
-    tCar_crush_buffer_entry* crush_entry;
     tCar_crush_flap_data* flap_data;
-    br_model* model;
-    br_model* parent_model;
-    br_vertex* hinge0_vertex;
-    br_vertex* hinge1_vertex;
+    br_vertex* vertex;
     br_vector3 axis;
-    br_scalar axis_length;
-    br_scalar inverse_axis_length;
+    br_scalar length;
 
-    actor = pActor;
-    user_crush_data = actor->user;
+    user_crush_data = pActor->user;
     if (user_crush_data == NULL) {
         return;
     }
-    crush_entry = user_crush_data->crush_data;
-    if (crush_entry == NULL) {
+    if (user_crush_data->crush_data == NULL) {
         return;
     }
-    flap_data = crush_entry->flap_data;
+    flap_data = user_crush_data->crush_data->flap_data;
     if (flap_data == NULL) {
         return;
     }
-    flap_data->field_0x4 += pDelta;
-    actor_matrix = &actor->t.t.mat;
-    model = user_crush_data->models[0];
-    hinge0_vertex = &model->vertices[flap_data->hinge0];
-    hinge1_vertex = &model->vertices[flap_data->hinge1];
-    axis.v[0] = hinge1_vertex->p.v[0] - hinge0_vertex->p.v[0];
-    axis.v[1] = hinge1_vertex->p.v[1] - hinge0_vertex->p.v[1];
-    axis.v[2] = hinge1_vertex->p.v[2] - hinge0_vertex->p.v[2];
-    axis_length = sqrtf(axis.v[0] * axis.v[0]
-        + axis.v[1] * axis.v[1]
-        + axis.v[2] * axis.v[2]);
-    if (axis_length > gFLOAT_00589a5c) {
-        inverse_axis_length = gDOUBLE_00589a60 / axis_length;
-        axis.v[0] = (br_scalar)(axis.v[0] * inverse_axis_length);
-        axis.v[1] = (br_scalar)(axis.v[1] * inverse_axis_length);
-        axis.v[2] = (br_scalar)(axis.v[2] * inverse_axis_length);
+    flap_data->field_0x4 += pAngle;
+    vertex = &user_crush_data->models[0]->vertices[flap_data->hinge0];
+    axis.v[0] = user_crush_data->models[0]->vertices[flap_data->hinge1].p.v[0] - vertex->p.v[0];
+    axis.v[1] = user_crush_data->models[0]->vertices[flap_data->hinge1].p.v[1] - vertex->p.v[1];
+    axis.v[2] = user_crush_data->models[0]->vertices[flap_data->hinge1].p.v[2] - vertex->p.v[2];
+    length = sqrtf(axis.v[0] * axis.v[0] + axis.v[1] * axis.v[1] + axis.v[2] * axis.v[2]);
+    if (length > gFLOAT_00589a5c) {
+        br_scalar scale = (br_scalar)(gDOUBLE_00589a60 / length);
+        axis.v[0] *= scale;
+        axis.v[1] *= scale;
+        axis.v[2] *= scale;
     } else {
         axis.v[0] = 1.0f;
         axis.v[1] = 0.0f;
         axis.v[2] = 0.0f;
     }
-    BrMatrix34Translate(actor_matrix,
-        -hinge0_vertex->p.v[0],
-        -hinge0_vertex->p.v[1],
-        -hinge0_vertex->p.v[2]);
-    BrMatrix34PostRotate(actor_matrix, flap_data->field_0x4, &axis);
-    parent_actor = actor->parent;
-    parent_user_crush_data = parent_actor->user;
-    parent_model = parent_user_crush_data->models[0];
-    BrMatrix34PostTranslate(actor_matrix,
-        parent_model->vertices[flap_data->field_0xc].p.v[0],
-        parent_model->vertices[flap_data->field_0xc].p.v[1],
-        parent_model->vertices[flap_data->field_0xc].p.v[2]);
+    BrMatrix34Translate(&pActor->t.t.mat, -vertex->p.v[0], -vertex->p.v[1], -vertex->p.v[2]);
+    BrMatrix34PostRotate(&pActor->t.t.mat, flap_data->field_0x4, &axis);
+    vertex = &((tUser_crush_data*)pActor->parent->user)->models[0]->vertices[flap_data->field_0xc];
+    BrMatrix34PostTranslate(&pActor->t.t.mat, vertex->p.v[0], vertex->p.v[1], vertex->p.v[2]);
 }
 
 // FUNCTION: CARMA2_HW 0x004208f0
-void C2_HOOK_FASTCALL WorkerNonCarCreation(int field_0x0) {
-
-    ((char*)gProgram_state.track_spec.non_car_list[field_0x0])[0x20] = 4;
+void C2_HOOK_FASTCALL WorkerNonCarCreation(int pIndex) {
+    gProgram_state.track_spec.non_car_list[pIndex]->render_style = BR_RSTYLE_FACES;
 }
 
 // FUNCTION: CARMA2_HW 0x00420900
-void C2_HOOK_FASTCALL WorkerNonCarCreationUndo(int field_0x0) {
-
-    ((char*)gProgram_state.track_spec.non_car_list[field_0x0])[0x20] = 1;
+void C2_HOOK_FASTCALL WorkerNonCarCreationUndo(int pIndex) {
+    gProgram_state.track_spec.non_car_list[pIndex]->render_style = BR_RSTYLE_NONE;
 }
 
 // FUNCTION: CARMA2_HW 0x004f6060

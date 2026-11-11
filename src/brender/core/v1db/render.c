@@ -13,10 +13,15 @@
 #include "core/fw/diag.h"
 #if defined(__vita__)
 #include "../../../carma2/platform/sdl3/vita_perf.h"
-#define VPB(x) do { if (C2VitaPerfDetail) C2VitaPerfBegin(x); } while (0)
-#define VPE(x) do { if (C2VitaPerfDetail) C2VitaPerfEnd(x); } while (0)
+#define VPB(x) do { if (C2VitaPerfDetail) C2VitaPerfBegin(x); else C2VitaPhasePush(x); } while (0)
+#define VPE(x) do { if (C2VitaPerfDetail) C2VitaPerfEnd(x); else C2VitaPhasePop(); } while (0)
+/* sampler-only phases (cheap: no timing) */
+#define APB(x) C2VitaPhasePush(x)
+#define APE() C2VitaPhasePop()
 #else
 #define VPB(x) ((void)0)
+#define APB(x) ((void)0)
+#define APE() ((void)0)
 #define VPE(x) ((void)0)
 #endif
 
@@ -51,6 +56,14 @@ void C2_HOOK_CDECL BrDbModelRender(br_actor* actor, br_model* model, br_material
         extern const char* gDebug_render_material_name;
         gDebug_render_model_name = model != NULL ? model->identifier : NULL;
         gDebug_render_material_name = material != NULL ? material->identifier : NULL;
+    }
+    {
+        /* port: fixed track models are drawn through merged track blocks (carma2 trackbatch.c) */
+        extern br_model* C2TrackBatchRenderModel(const br_actor* pActor, br_model* pModel);
+        model = C2TrackBatchRenderModel(actor, model);
+        if (model == NULL) {
+            return;
+        }
     }
 #endif
     v1db.model_to_screen_valid = 0;
@@ -200,6 +213,18 @@ void C2_HOOK_STDCALL actorRender(br_actor* ap, br_model* model, br_material* mat
     br_actor* a;
     br_token s;
 
+#if !defined(CARPOCALYPSE2_MATCHING) && defined(__vita__)
+    {
+        extern unsigned C2VitaActorCounts[4]; /* test: actors walked (all, model, identity transform, skipped) */
+        C2VitaActorCounts[0]++;
+        C2VitaActorCounts[1] += ap->type == BR_ACTOR_MODEL;
+        C2VitaActorCounts[2] += ap->t.type == BR_TRANSFORM_IDENTITY;
+        if (ap->type == BR_ACTOR_MODEL) {
+            extern void C2VitaActorProfile(const char* pName);
+            C2VitaActorProfile(ap->identifier != NULL ? ap->identifier : ap->model != NULL ? ap->model->identifier : model != NULL ? model->identifier : NULL);
+        }
+    }
+#endif
     if (ap->children == NULL && ap->type != BR_ACTOR_MODEL) {
         return;
     }
@@ -212,22 +237,36 @@ void C2_HOOK_STDCALL actorRender(br_actor* ap, br_model* model, br_material* mat
     this_material = ap->material != NULL ? ap->material : material;
     this_model = ap->model != NULL ? ap->model : model;
     this_render_data = ap->render_data != NULL ? ap->render_data : render_data;
+#if !defined(CARPOCALYPSE2_MATCHING) && defined(__vita__)
+    {
+        /* port: a childless track model drawn entirely by a merged block needs no transform,
+         * bounds test or state push at all (carma2 trackbatch.c) */
+        extern int C2TrackBatchSkipsActor(const br_actor* pActor, const br_model* pModel);
+        extern int C2VitaABFeature(const char* pFeature, int pDefault);
+        if (ap->type == BR_ACTOR_MODEL && ap->children == NULL && C2TrackBatchSkipsActor(ap, this_model)
+                && C2VitaABFeature("batchskip", 1)) {
+            extern unsigned C2VitaActorCounts[4];
+            C2VitaActorCounts[3]++;
+            return;
+        }
+    }
+#endif
     if (ap->t.type == BR_TRANSFORM_IDENTITY) {
         switch (ap->type) {
         case BR_ACTOR_MODEL:
-            s = BrOnScreenCheck(&this_model->bounds);
+            APB(C2VP_A_ONSCREEN); s = BrOnScreenCheck(&this_model->bounds); APE();
             if (s != BRT_REJECT) {
                 BrDbModelRender(ap, this_model, this_material, this_render_data, style, s, 1);
             }
             break;
         case BR_ACTOR_BOUNDS:
-            s = BrOnScreenCheck(&this_model->bounds);
+            APB(C2VP_A_ONSCREEN); s = BrOnScreenCheck(&this_model->bounds); APE();
             if (s == BRT_REJECT) {
                 return;
             }
             break;
         case BR_ACTOR_BOUNDS_CORRECT:
-            s = BrOnScreenCheck((br_bounds3*)ap->type_data);
+            APB(C2VP_A_ONSCREEN); s = BrOnScreenCheck((br_bounds3*)ap->type_data); APE();
             switch (s) {
             case BRT_ACCEPT:
                 for (a = ap->children; a != NULL; a = a->next) {
@@ -247,24 +286,26 @@ void C2_HOOK_STDCALL actorRender(br_actor* ap, br_model* model, br_material* mat
             actorRender(a, this_model, this_material, this_render_data, style, t);
         }
     } else {
+        APB(C2VP_A_PUSH);
         v1db.renderer->dispatch->_statePush(v1db.renderer, 0x2);
         t = prependActorTransform(ap, t);
+        APE();
         switch (ap->type) {
         case BR_ACTOR_MODEL:
-            s = BrOnScreenCheck(&this_model->bounds);
+            APB(C2VP_A_ONSCREEN); s = BrOnScreenCheck(&this_model->bounds); APE();
             if (s != BRT_REJECT) {
                 BrDbModelRender(ap, this_model, this_material, this_render_data, style, s, 1);
             }
             break;
         case BR_ACTOR_BOUNDS:
-            s = BrOnScreenCheck((br_bounds3*)ap->type_data);
+            APB(C2VP_A_ONSCREEN); s = BrOnScreenCheck((br_bounds3*)ap->type_data); APE();
             if (s == BRT_REJECT) {
                 v1db.renderer->dispatch->_statePop(v1db.renderer, 0x2);
                 return;
             }
             break;
         case BR_ACTOR_BOUNDS_CORRECT:
-            s = BrOnScreenCheck((br_bounds3*)ap->type_data);
+            APB(C2VP_A_ONSCREEN); s = BrOnScreenCheck((br_bounds3*)ap->type_data); APE();
             if (s == BRT_ACCEPT) {
                 for (a = ap->children; a != NULL; a = a->next) {
                     actorRenderOnScreen(a, this_model, this_material, this_render_data, style, t);
@@ -278,7 +319,9 @@ void C2_HOOK_STDCALL actorRender(br_actor* ap, br_model* model, br_material* mat
         for (a = ap->children; a != NULL; a = a->next) {
             actorRender(a, this_model, this_material, this_render_data, style, t);
         }
+        APB(C2VP_A_POP);
         v1db.renderer->dispatch->_statePop(v1db.renderer, 0x2);
+        APE();
     }
 }
 
@@ -502,6 +545,7 @@ void C2_HOOK_CDECL BrZbSceneRenderEnd(void) {
 
 // FUNCTION: CARMA2_HW 0x005226d0
 void C2_HOOK_CDECL BrZbSceneRender(br_actor* world, br_actor* camera, br_pixelmap* colour_buffer, br_pixelmap* depth_buffer) {
+#ifdef CARPOCALYPSE2_MATCHING
     br_actor* child;
     br_model* model;
     br_material* material;
@@ -556,14 +600,71 @@ void C2_HOOK_CDECL BrZbSceneRender(br_actor* world, br_actor* camera, br_pixelma
     }
 
     v1db.renderer->dispatch->_flush(v1db.renderer, 0);
-#ifndef CARPOCALYPSE2_MATCHING
-    if (v1db.renderer->dispatch->_sceneEnd != NULL) {
-        v1db.renderer->dispatch->_sceneEnd(v1db.renderer);
-    }
-#endif
 
     v1db.rendering = 0;
     v1db.render_root = NULL;
+#else
+    br_actor* child;
+    br_model* model;
+    br_material* material;
+    void* render_data;
+    br_uint_8 style;
+    br_uint_16 ttype;
+
+    if (v1db.renderer == NULL) {
+        return;
+    }
+
+    v1db.rendering = BR_ZB_RENDERING;
+    v1db.render_root = world;
+    v1db.colour_buffer = colour_buffer;
+
+    v1db.origin.v[0] = (br_scalar)(colour_buffer->origin_x - colour_buffer->width / 2) / (br_scalar)(colour_buffer->width / 2);
+    v1db.origin.v[1] = -(br_scalar)(colour_buffer->origin_y - colour_buffer->height / 2) / (br_scalar)(colour_buffer->height / 2);
+    v1db.vp_ox = (br_scalar)(colour_buffer->base_x + colour_buffer->width / 2) + 0.5f;
+    v1db.vp_width = (br_scalar)(colour_buffer->width / 2);
+    v1db.vp_oy = (br_scalar)(colour_buffer->height / 2) + 0.5f;
+    v1db.vp_height = -(br_scalar)(colour_buffer->height / 2);
+
+    v1db.renderer->dispatch->_partSet(v1db.renderer, BRT_OUTPUT, 0, BRT_COLOUR_BUFFER_O, (uintptr_t)colour_buffer);
+    v1db.renderer->dispatch->_partSet(v1db.renderer, BRT_OUTPUT, 0, BRT_DEPTH_BUFFER_O, (uintptr_t)depth_buffer);
+    v1db.renderer->dispatch->_partSet(v1db.renderer, BRT_HIDDEN_SURFACE, 0, BRT_TYPE_T, 1);
+    v1db.default_render_data = NULL;
+
+    BrDbSceneRenderBegin(world, camera);
+
+    model = v1db.default_model;
+    if (world->model) {
+        model = world->model;
+    }
+    material = v1db.default_material;
+    if (world->material) {
+        material = world->material;
+    }
+    render_data = v1db.default_render_data;
+    if (world->render_data) {
+        render_data = world->render_data;
+    }
+    style = 0;
+    if (world->render_style) {
+        style = world->render_style;
+    }
+    ttype = v1db.ttype;
+
+    child = world->children;
+    while (child) {
+        actorRender(child, model, material, render_data, style, ttype);
+        child = child->next;
+    }
+
+    v1db.renderer->dispatch->_flush(v1db.renderer, 0);
+    if (v1db.renderer->dispatch->_sceneEnd != NULL) {
+        v1db.renderer->dispatch->_sceneEnd(v1db.renderer);
+    }
+
+    v1db.rendering = 0;
+    v1db.render_root = NULL;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x005228e0
@@ -622,6 +723,7 @@ void C2_HOOK_CDECL BrZsSceneRenderEnd(void) {
 
 // FUNCTION: CARMA2_HW 0x00522b70
 void C2_HOOK_CDECL BrZsSceneRender(br_actor* world, br_actor* camera, br_pixelmap* colour_buffer) {
+#ifdef CARPOCALYPSE2_MATCHING
     br_actor* child;
     br_model* model;
     br_material* material;
@@ -668,13 +770,61 @@ void C2_HOOK_CDECL BrZsSceneRender(br_actor* world, br_actor* camera, br_pixelma
         RenderOrderTableList();
     }
     v1db.renderer->dispatch->_flush(v1db.renderer, 0);
-#ifndef CARPOCALYPSE2_MATCHING
+    v1db.rendering = 0;
+    v1db.render_root = NULL;
+#else
+    br_actor* child;
+    br_model* model;
+    br_material* material;
+    void* render_data;
+    br_uint_8 style;
+    br_uint_16 ttype;
+
+    if (v1db.renderer == NULL) {
+        return;
+    }
+    BrZsSceneRenderBegin(world, camera, colour_buffer);
+
+    model = v1db.default_model;
+    if (world->model) {
+        model = world->model;
+    }
+    material = v1db.default_material;
+    if (world->material) {
+        material = world->material;
+    }
+    render_data = v1db.default_render_data;
+    if (world->render_data) {
+        render_data = world->render_data;
+    }
+    style = 0;
+    if (world->render_style) {
+        style = world->render_style;
+    }
+    ttype = v1db.ttype;
+
+    child = world->children;
+    while (child) {
+        actorRender(child, model, material, render_data, style, ttype);
+        child = child->next;
+    }
+
+    v1db.renderer->dispatch->_partSet(v1db.renderer, BRT_OUTPUT, 0, BRT_COLOUR_BUFFER_O, (uintptr_t)v1db.colour_buffer);
+    if (v1db.format_buckets == NULL) {
+        BrFailure("Renderer does not support buckets");
+    }
+    if (v1db.primary_order_table != NULL) {
+        RenderPrimaryOrderTable();
+    } else {
+        RenderOrderTableList();
+    }
+    v1db.renderer->dispatch->_flush(v1db.renderer, 0);
     if (v1db.renderer->dispatch->_sceneEnd != NULL) {
         v1db.renderer->dispatch->_sceneEnd(v1db.renderer);
     }
-#endif
     v1db.rendering = 0;
     v1db.render_root = NULL;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00522c70
@@ -743,6 +893,7 @@ void C2_HOOK_CDECL BrZbsSceneRenderEnd(void) {
 
 // FUNCTION: CARMA2_HW 0x00522f30
 void C2_HOOK_CDECL BrZbsSceneRender(br_actor* world, br_actor* camera, br_pixelmap* colour_buffer, br_pixelmap* depth_buffer) {
+#ifdef CARPOCALYPSE2_MATCHING
     br_actor* child;
     br_model* model;
     br_material* material;
@@ -789,13 +940,61 @@ void C2_HOOK_CDECL BrZbsSceneRender(br_actor* world, br_actor* camera, br_pixelm
         RenderOrderTableList();
     }
     v1db.renderer->dispatch->_flush(v1db.renderer, 0);
-#ifndef CARPOCALYPSE2_MATCHING
+    v1db.rendering = 0;
+    v1db.render_root = NULL;
+#else
+    br_actor* child;
+    br_model* model;
+    br_material* material;
+    void* render_data;
+    br_uint_8 style;
+    br_uint_16 ttype;
+
+    if (v1db.renderer == NULL) {
+        return;
+    }
+    BrZbsSceneRenderBegin(world, camera, colour_buffer, depth_buffer);
+
+    model = v1db.default_model;
+    if (world->model) {
+        model = world->model;
+    }
+    material = v1db.default_material;
+    if (world->material) {
+        material = world->material;
+    }
+    render_data = v1db.default_render_data;
+    if (world->render_data) {
+        render_data = world->render_data;
+    }
+    style = 0;
+    if (world->render_style) {
+        style = world->render_style;
+    }
+    ttype = v1db.ttype;
+
+    child = world->children;
+    while (child) {
+        actorRender(child, model, material, render_data, style, ttype);
+        child = child->next;
+    }
+
+    v1db.renderer->dispatch->_partSet(v1db.renderer, BRT_OUTPUT, 0, BRT_COLOUR_BUFFER_O, (uintptr_t)v1db.colour_buffer);
+    if (v1db.format_buckets == NULL) {
+        BrFailure("Renderer does not support buckets");
+    }
+    if (v1db.primary_order_table != NULL) {
+        RenderPrimaryOrderTable();
+    } else {
+        RenderOrderTableList();
+    }
+    v1db.renderer->dispatch->_flush(v1db.renderer, 0);
     if (v1db.renderer->dispatch->_sceneEnd != NULL) {
         v1db.renderer->dispatch->_sceneEnd(v1db.renderer);
     }
-#endif
     v1db.rendering = 0;
     v1db.render_root = NULL;
+#endif
 }
 
 // FUNCTION: CARMA2_HW 0x00523040

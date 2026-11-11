@@ -989,42 +989,34 @@ void C2_HOOK_FASTCALL DisposePhysicsObject(tPhysics_object* pObject) {
     BrMemFree(pObject);
 }
 
-// C2PORT-NONMATCHING: best 38.94% | difftest PASS 2000 trials (spec difftest/specs/0044be80_DisposeCarActModDataCB.json) | reason VC5 register allocation and cleanup-loop layout
 // FUNCTION: CARMA2_HW 0x0044be80
 intptr_t C2_HOOK_CDECL DisposeCarActModDataCB(br_actor* pActor, void* pContext) {
-    br_actor** model_list;
+    tUser_crush_data* crush_data = pActor->user;
+    tCar_spec* car = pContext;
     int i;
-    br_actor** model_entry;
-    br_model* model;
-    tU8* model_user;
 
-    model_list = pActor->user;
-    if (model_list == NULL) {
+    if (crush_data == NULL) {
         return 0;
     }
-    i = 0;
-    model_entry = model_list;
-    if (*(int*)((tU8*)pContext + 0xe14) > 0) {
-        do {
-            model = (br_model*)*model_entry;
-            if (model != NULL && model->user != NULL) {
-                model_user = model->user;
-                if (*(void**)(model_user + 4) != NULL) {
-                    FreeIfNotNull(*(void**)(model_user + 4));
-                    *(void**)(model_user + 4) = NULL;
-                }
-                BrMemFree(model_user);
-                model->user = NULL;
+    for (i = 0; i < car->count_detail_levels; i++) {
+        br_model* model = crush_data->models[i];
+
+        if (model != NULL && model->user != NULL) {
+            tUser_detail_level_model* model_data = model->user;
+
+            if (model_data->field_0x4 != NULL) {
+                FreeIfNotNull(model_data->field_0x4);
+                model_data->field_0x4 = NULL;
             }
-            i++;
-            model_entry++;
-        } while (i < *(int*)((tU8*)pContext + 0xe14));
+            BrMemFree(model_data);
+            model->user = NULL;
+        }
     }
-    if (model_list[2] != NULL) {
-        FUN_0042c4f0((tU8*)model_list[2]);
-        model_list[2] = NULL;
+    if (crush_data->crush_data != NULL) {
+        FUN_0042c4f0(crush_data->crush_data);
+        crush_data->crush_data = NULL;
     }
-    BrMemFree(model_list);
+    BrMemFree(crush_data);
     pActor->user = NULL;
     return 0;
 }

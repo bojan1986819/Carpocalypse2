@@ -804,7 +804,6 @@ int C2_HOOK_FASTCALL S3CreateOutletChannels(tS3_outlet* outlet, int pChannel_cou
     return 0;
 }
 
-// C2PORT-NONMATCHING: best 47.10% | difftest PASS 2000 trials (spec difftest/specs/00568c2c_S3LoadSoundBankFile.json) | reason file API wrappers and local stack layout
 // FUNCTION: CARMA2_HW 0x00568c2c
 void* C2_HOOK_FASTCALL S3LoadSoundBankFile(const char* pPath) {
     char path[512];

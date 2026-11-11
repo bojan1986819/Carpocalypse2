@@ -230,7 +230,6 @@ static int C2_HOOK_FASTCALL AcquireDInputJoystickDevice(int pIndex) {
 }
 #pragma auto_inline(on)
 
-// C2PORT-NONMATCHING: best 32.45% | difftest PASS 2000 trials (spec difftest/specs/004589d0_JoystickDInputGetInfo.json) | reason COM-vtable calls and local DIDEVCAPS layout
 // FUNCTION: CARMA2_HW 0x004589d0
 tDirectInputJoystickInfo* C2_HOOK_FASTCALL JoystickDInputGetInfo(int pJoystickIndex, tU32* pButtonMask, tU32* pAxisMask) {
     IDirectInputDevice2A* device;
@@ -837,7 +836,6 @@ int C2_HOOK_FASTCALL ResetForceFeedback(void) {
     return result;
 }
 
-// C2PORT-NONMATCHING: best 17.13% | difftest PASS 2000 trials (spec difftest/specs/00457760_InitForceFeedback.json) | reason DirectInput COM vtables and compiler layout
 // FUNCTION: CARMA2_HW 0x00457760
 int C2_HOOK_FASTCALL InitForceFeedback(void) {
     tPath_name path;
@@ -1137,23 +1135,22 @@ int C2_HOOK_FASTCALL SetJoystickFFBSteeringForce(int pMagnitude) {
     IDirectInputEffect* effect;
     int index;
 
-    if (!gForceFeedbackAvailable) {
-        return 0;
+    if (gForceFeedbackAvailable) {
+        if (pMagnitude > 10000) {
+            pMagnitude = 10000;
+        }
+        index = gBasic_force_joystick_effect_index;
+        if (*(LONG*)&gJoystick_effects[index].type_specific_params != pMagnitude) {
+            *(LONG*)&gJoystick_effects[index].type_specific_params = pMagnitude;
+            effect = gDirectInputEffects[index];
+            if (effect != NULL) {
+                IDirectInputEffect_SetParameters(effect, &gJoystick_effects[index].di_effect, DIEP_TYPESPECIFICPARAMS);
+            }
+            StartDinputEffect(gBasic_force_joystick_effect_index);
+            return 1;
+        }
     }
-    if (pMagnitude > 10000) {
-        pMagnitude = 10000;
-    }
-    index = gBasic_force_joystick_effect_index;
-    if (*(LONG*)&gJoystick_effects[index].type_specific_params == pMagnitude) {
-        return 0;
-    }
-    *(LONG*)&gJoystick_effects[index].type_specific_params = pMagnitude;
-    effect = gDirectInputEffects[index];
-    if (effect != NULL) {
-        IDirectInputEffect_SetParameters(effect, &gJoystick_effects[index].di_effect, DIEP_TYPESPECIFICPARAMS);
-    }
-    StartDinputEffect(gBasic_force_joystick_effect_index);
-    return 1;
+    return 0;
 }
 
 // FUNCTION: CARMA2_HW 0x00458720
@@ -1450,7 +1447,6 @@ void C2_HOOK_FASTCALL Win32InitInputDevice(void) {
     gJoystick_deadzone = 8000;
 }
 
-// C2PORT-NONMATCHING: best 28.78% | difftest PASS 2000 trials (spec difftest/specs/00459690_PDGetJoystickButtonStates.json) | reason COM-vtable polling and DIJOYSTATE stack layout
 // FUNCTION: CARMA2_HW 0x00459690
 tU32 C2_HOOK_FASTCALL PDGetJoystickButtonStates(void) {
     IDirectInputDevice2 *device;
@@ -1617,10 +1613,8 @@ void C2_HOOK_FASTCALL PDReadJoysticks(void) {
     }
 }
 
-// C2PORT-NONMATCHING: best 27.37% | difftest PASS 2000 trials (spec difftest/specs/00459050_GetDirectInputJoy1X.json) | reason DirectInput COM and state-buffer codegen
 // FUNCTION: CARMA2_HW 0x00459050
 int C2_HOOK_FASTCALL GetDirectInputJoy1X(void) {
-    IDirectInputDevice2A* device;
     HRESULT res;
     DIJOYSTATE joy_state;
     int x;
@@ -1628,33 +1622,36 @@ int C2_HOOK_FASTCALL GetDirectInputJoy1X(void) {
     if (gJoystick_index == -1) {
         return -1;
     }
-    device = gDirectInputJoystickDevices[gJoystick_index];
-    if (device == NULL) {
+    if (gDirectInputJoystickDevices[gJoystick_index] == NULL) {
         return -1;
     }
     if (!gINT_00595f98) {
         return -1;
     }
-    res = IDirectInputDevice2_Poll(device);
+    res = IDirectInputDevice2_Poll(gDirectInputJoystickDevices[gJoystick_index]);
     if (res != DI_OK) {
-        if (res == DIERR_INPUTLOST || res == DIERR_NOTACQUIRED) {
+        if (res == DIERR_INPUTLOST) {
             if (AcquireDInputJoystickDevice(gJoystick_index) == 0) {
-                dr_dprintf("couldn't reacquire joystick %d ", gJoystick_index);
+                dr_dprintf("couldn't reacquire joystick %d\n", gJoystick_index);
+                return -1;
+            }
+        } else if (res == DIERR_NOTACQUIRED) {
+            if (AcquireDInputJoystickDevice(gJoystick_index) == 0) {
+                dr_dprintf("couldn't reacquire joystick %d\n", gJoystick_index);
+                return -1;
             }
         } else {
             dr_dprintf("Can't poll, unknown error\n");
+            return -1;
         }
         return -1;
     }
 
-    res = IDirectInputDevice_GetDeviceState(device, sizeof(joy_state), &joy_state);
+    res = IDirectInputDevice_GetDeviceState(gDirectInputJoystickDevices[gJoystick_index], sizeof(joy_state), &joy_state);
     if (res != DI_OK) {
+        dr_dprintf("attempting to reacquire\n");
         if (res == DIERR_INPUTLOST) {
-            if (AcquireDInputJoystickDevice(gJoystick_index) == 0) {
-                dr_dprintf("couldn't reacquire joystick %d ", gJoystick_index);
-            }
-        } else {
-            dr_dprintf("Can't poll, unknown error\n");
+            AcquireDInputJoystickDevice(gJoystick_index);
         }
         return -1;
     }
@@ -1668,10 +1665,8 @@ int C2_HOOK_FASTCALL GetDirectInputJoy1X(void) {
     return x;
 }
 
-// C2PORT-NONMATCHING: best 27.37% | difftest PASS 2000 trials (spec difftest/specs/00459370_GetDirectInputJoy1Y.json) | reason DirectInput COM and state-buffer codegen
 // FUNCTION: CARMA2_HW 0x00459370
 int C2_HOOK_FASTCALL GetDirectInputJoy1Y(void) {
-    IDirectInputDevice2A* device;
     HRESULT res;
     DIJOYSTATE joy_state;
     int y;
@@ -1679,33 +1674,36 @@ int C2_HOOK_FASTCALL GetDirectInputJoy1Y(void) {
     if (gJoystick_index == -1) {
         return -1;
     }
-    device = gDirectInputJoystickDevices[gJoystick_index];
-    if (device == NULL) {
+    if (gDirectInputJoystickDevices[gJoystick_index] == NULL) {
         return -1;
     }
     if (!gUNK_00595f9c) {
         return -1;
     }
-    res = IDirectInputDevice2_Poll(device);
+    res = IDirectInputDevice2_Poll(gDirectInputJoystickDevices[gJoystick_index]);
     if (res != DI_OK) {
-        if (res == DIERR_INPUTLOST || res == DIERR_NOTACQUIRED) {
+        if (res == DIERR_INPUTLOST) {
             if (AcquireDInputJoystickDevice(gJoystick_index) == 0) {
-                dr_dprintf("couldn't reacquire joystick %d ", gJoystick_index);
+                dr_dprintf("couldn't reacquire joystick %d\n", gJoystick_index);
+                return -1;
+            }
+        } else if (res == DIERR_NOTACQUIRED) {
+            if (AcquireDInputJoystickDevice(gJoystick_index) == 0) {
+                dr_dprintf("couldn't reacquire joystick %d\n", gJoystick_index);
+                return -1;
             }
         } else {
             dr_dprintf("Can't poll, unknown error\n");
+            return -1;
         }
         return -1;
     }
 
-    res = IDirectInputDevice_GetDeviceState(device, sizeof(joy_state), &joy_state);
+    res = IDirectInputDevice_GetDeviceState(gDirectInputJoystickDevices[gJoystick_index], sizeof(joy_state), &joy_state);
     if (res != DI_OK) {
+        dr_dprintf("attempting to reacquire\n");
         if (res == DIERR_INPUTLOST) {
-            if (AcquireDInputJoystickDevice(gJoystick_index) == 0) {
-                dr_dprintf("couldn't reacquire joystick %d ", gJoystick_index);
-            }
-        } else {
-            dr_dprintf("Can't poll, unknown error\n");
+            AcquireDInputJoystickDevice(gJoystick_index);
         }
         return -1;
     }

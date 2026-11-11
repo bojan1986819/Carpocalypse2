@@ -143,6 +143,9 @@ const char* carpocalypse2_fix_path_case(const char* pPath) {
     }
 #ifdef __vita__
     if (stat(pPath, &info) == 0) return pPath;
+    /* ux0: is case-insensitive (exFAT): a name it cannot find exists in no other casing either. The
+     * walk below cost ~13 ms per missing texture variant, ~3 s of every boot. */
+    if (strchr(pPath, ':') == NULL || strncmp(pPath, "ux0:", 4) == 0) return pPath;
     context = case_context();
     if (!context) return pPath;
     fixed = context->fixed;
@@ -242,7 +245,30 @@ FILE* __wrap_fopen(const char* pPath, const char* pMode) {
 #ifdef __vita__
     if (strpbrk(pMode, "wa+")) invalidate_case_cache();
 #endif
+#ifdef __vita__
+    Uint64 open_start = SDL_GetTicksNS();
+#endif
     f = __real_fopen(pPath, pMode);
+#ifdef __vita__
+    if (getenv("C2_TEST_OPENLOG") != NULL) {
+        /* test: what plain opens, misses and the case-fixing retries cost */
+        static unsigned opens, misses;
+        static Uint64 open_ns, fix_ns;
+        extern void C2VitaLog(const char* format, ...);
+        Uint64 t = SDL_GetTicksNS();
+        opens++;
+        open_ns += t - open_start;
+        if (f == NULL) {
+            const char* fixed = carpocalypse2_fix_path_case(pPath);
+            f = __real_fopen(fixed, pMode);
+            misses++;
+            fix_ns += SDL_GetTicksNS() - t;
+            if (misses <= 40) C2VitaLog("TEST OPEN miss %s -> %s\n", pPath, f != NULL ? "fixed" : "absent");
+        }
+        if (opens % 50 == 0) C2VitaLog("TEST OPEN opens=%u open_ms=%llu misses=%u fix_ms=%llu\n", opens,
+            (unsigned long long)(open_ns / 1000000), misses, (unsigned long long)(fix_ns / 1000000));
+    }
+#endif
     if (f == NULL) {
         const char* fixed = carpocalypse2_fix_path_case(pPath);
         f = __real_fopen(fixed, pMode);
@@ -306,5 +332,130 @@ int __wrap_open64(const char* pPath, int pFlags, ...) {
         va_end(ap);
     }
     return case_fix_open(pPath, pFlags, mode);
+}
+#endif
+
+#ifdef __vita__
+#include <psp2/io/stat.h>
+
+/* Texture probing (IsValidFile, GetLastModificationTime) stats several candidate names per texture
+ * in directories of up to ~500 files; exFAT finds a name by scanning the directory, ~7 ms a stat on
+ * the card, ~3 s of every boot. Each ux0: directory is listed once instead (names and modification
+ * times); the game's texture saving drops the listings (C2VitaStatCacheInvalidate). */
+typedef struct {
+    char* name;
+    unsigned mtime, size;
+} StatEntry;
+typedef struct {
+    char dir[512];
+    StatEntry* entries;
+    int count, listed;
+    unsigned stamp;
+} StatDirectory;
+static StatDirectory stat_dirs[16];
+static unsigned stat_clock;
+
+static unsigned stat_time(const SceDateTime* t) {
+    /* seconds since 1970 (days from civil date), as stat's st_mtime orders them */
+    int y = t->year - (t->month <= 2);
+    unsigned era = (unsigned)(y >= 0 ? y : y - 399) / 400;
+    unsigned yoe = (unsigned)(y - (int)era * 400);
+    unsigned doy = (153u * (t->month + (t->month > 2 ? -3 : 9)) + 2) / 5 + t->day - 1;
+    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    unsigned days = era * 146097u + doe - 719468u;
+    return days * 86400u + t->hour * 3600u + t->minute * 60u + t->second;
+}
+
+void C2VitaStatCacheInvalidate(void) {
+    int i, j;
+    for (i = 0; i < 16; i++) {
+        for (j = 0; j < stat_dirs[i].count; j++) free(stat_dirs[i].entries[j].name);
+        free(stat_dirs[i].entries);
+        memset(&stat_dirs[i], 0, sizeof(stat_dirs[i]));
+    }
+}
+
+static StatDirectory* stat_directory(const char* dir) {
+    int i, slot = 0, capacity = 0;
+    DIR* d;
+    struct dirent* entry;
+    StatDirectory* sd;
+    for (i = 0; i < 16; i++) {
+        if (stat_dirs[i].stamp != 0 && strcasecmp(stat_dirs[i].dir, dir) == 0) {
+            stat_dirs[i].stamp = ++stat_clock;
+            return &stat_dirs[i];
+        }
+        if (stat_dirs[i].stamp < stat_dirs[slot].stamp) slot = i;
+    }
+    sd = &stat_dirs[slot];
+    for (i = 0; i < sd->count; i++) free(sd->entries[i].name);
+    free(sd->entries);
+    memset(sd, 0, sizeof(*sd));
+    strcpy(sd->dir, dir);
+    sd->stamp = ++stat_clock;
+    unsigned long long list_start = SDL_GetTicksNS();
+    d = opendir(dir);
+    if (d == NULL) {
+        SceIoStat st;
+        /* no such directory: nothing in it exists (other failures stat each name) */
+        sd->listed = sceIoGetstat(dir, &st) < 0;
+        return sd;
+    }
+    while ((entry = readdir(d)) != NULL) {
+        if (sd->count == capacity) {
+            StatEntry* grown;
+            capacity = capacity ? capacity * 2 : 64;
+            grown = realloc(sd->entries, capacity * sizeof(StatEntry));
+            if (grown == NULL) break;
+            sd->entries = grown;
+        }
+        sd->entries[sd->count].name = strdup(entry->d_name);
+        if (sd->entries[sd->count].name == NULL) break;
+        sd->entries[sd->count].mtime = stat_time(&entry->d_stat.st_mtime);
+        sd->entries[sd->count].size = entry->d_stat.st_size > 0xffffffffu ? 0xffffffffu : (unsigned)entry->d_stat.st_size;
+        sd->count++;
+    }
+    closedir(d);
+    sd->listed = 1;
+    if (getenv("C2_TEST_LOADDETAIL") != NULL) {
+        extern void C2VitaLog(const char* format, ...);
+        C2VitaLog("TEST STATDIR %s entries=%d %llu us\n", dir, sd->count, (unsigned long long)((SDL_GetTicksNS() - list_start) / 1000));
+    }
+    return sd;
+}
+
+/* 1 = exists (*pMtime, *pSize set), 0 = absent, -1 = not a ux0: path (the caller stats it). */
+int C2VitaStatCached(const char* pPath, unsigned* pMtime, unsigned* pSize) {
+    char dir[512];
+    const char* slash;
+    const char* name;
+    StatDirectory* sd;
+    size_t length;
+    int i;
+    if (pPath == NULL || strncmp(pPath, "ux0:", 4) != 0) return -1;
+    slash = strrchr(pPath, '/');
+    if (slash == NULL || slash[1] == '\0') return -1;
+    length = (size_t)(slash - pPath);
+    if (length >= sizeof(dir)) return -1;
+    memcpy(dir, pPath, length);
+    dir[length] = '\0';
+    name = slash + 1;
+    sd = stat_directory(dir);
+    for (i = 0; i < sd->count; i++) {
+        if (strcasecmp(sd->entries[i].name, name) == 0) {
+            if (pMtime != NULL) *pMtime = sd->entries[i].mtime;
+            if (pSize != NULL) *pSize = sd->entries[i].size;
+            return 1;
+        }
+    }
+    if (!sd->listed) {
+        /* a directory that could not be listed: ask the file system */
+        SceIoStat st;
+        if (sceIoGetstat(pPath, &st) < 0) return 0;
+        if (pMtime != NULL) *pMtime = stat_time(&st.st_mtime);
+        if (pSize != NULL) *pSize = st.st_size > 0xffffffffu ? 0xffffffffu : (unsigned)st.st_size;
+        return 1;
+    }
+    return 0;
 }
 #endif
